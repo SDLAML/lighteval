@@ -92,10 +92,15 @@ hellaswag_harness = LightevalTaskConfig(
     # trust_dataset=True,
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation",],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=1,
     metrics=[
         LogLikelihoodAccMetric(),
         LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
         ],
+    stop_sequence=["\n"],
+    version=0,
 )
 
 TASKS_TABLE = [
