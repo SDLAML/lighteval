@@ -27,6 +27,8 @@ from inspect_ai.scorer import choice
 from inspect_ai.solver import multiple_choice
 
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
+from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
@@ -59,13 +61,15 @@ arc_challenge = LightevalTaskConfig(
     few_shots_select="random_sampling_from_train",
     generation_size=1,
     metrics=[
-        Metrics.loglikelihood_acc,
+        # Metrics.loglikelihood_acc,
+        LogLikelihoodAccMetric(),
+        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
     ],
     stop_sequence=["\n"],
     version=0,
-    sample_fields=record_to_sample,
-    solver=[multiple_choice(cache=True)],
-    scorer=choice(),
+    # sample_fields=record_to_sample,
+    # solver=[multiple_choice(cache=True)],
+    # scorer=choice(),
 )
 
 arc_easy = LightevalTaskConfig(
@@ -79,13 +83,15 @@ arc_easy = LightevalTaskConfig(
     few_shots_select="random_sampling_from_train",
     generation_size=1,
     metrics=[
-        Metrics.loglikelihood_acc,
+        # Metrics.loglikelihood_acc,
+        LogLikelihoodAccMetric(),
+        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
     ],
     stop_sequence=["\n"],
     version=0,
-    sample_fields=record_to_sample,
-    solver=[multiple_choice(cache=True)],
-    scorer=choice(),
+    # sample_fields=record_to_sample,
+    # solver=[multiple_choice(cache=True)],
+    # scorer=choice(),
 )
 
 TASKS_TABLE = [arc_challenge, arc_easy]
