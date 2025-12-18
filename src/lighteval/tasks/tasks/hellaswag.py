@@ -56,7 +56,7 @@ def hellaswag_harness_prompt(line, task_name: str = None):
     ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
     query = harness_preprocess(line["activity_label"] + ": " + ctx)
     choices = [harness_preprocess(ending) for ending in line["endings"]]
-    choices = [c if c[:1].isspace() else " " + c for c in choices]
+    choices = [c if c and c[0].isspace() else " " + c for c in choices]
     gold_ix = int(line["label"]) if str(line.get("label", "")).strip() != "" else -1
     return Doc(
         task_name=task_name,

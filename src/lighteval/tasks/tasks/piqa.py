@@ -22,6 +22,8 @@ https://arxiv.org/abs/1911.11641
 from string import ascii_uppercase
 
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
+from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
@@ -43,11 +45,23 @@ def piqa_prompt(line, task_name: str = None):
         instruction="The following are multiple choice questions (with answers) about common sense.\n",
     )
 
+def piqa_harness_prompt(line, task_name: str = None):
+    query = f"Question: {line["goal"]}\nAnswer:"
+    choices = [line["sol1"], line["sol2"]]
+    choices = [c if c and c[0].isspace() else " " + c for c in choices]
+    gold_ix = int(line["label"])
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=choices,
+        gold_index=gold_ix,
+    )
+
 
 piqa = LightevalTaskConfig(
     name="piqa",
     prompt_function=piqa_prompt,
-    hf_repo="ybisk/piqa",
+    hf_repo="lighteval/piqa",
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation", "test"],
@@ -61,6 +75,25 @@ piqa = LightevalTaskConfig(
     version=0,
 )
 
+piqa_harness = LightevalTaskConfig(
+    name="piqa_harness",
+    prompt_function=piqa_harness_prompt,
+    hf_repo="lighteval/piqa",
+    hf_subset="plain_text",
+    hf_avail_splits=["train", "test", "validation"],
+    evaluation_splits=["validation"],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=1,
+    metrics=[
+        LogLikelihoodAccMetric(),
+        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    ],
+    stop_sequence=["\n"],
+    version=0,
+)
+
 TASKS_TABLE = [
     piqa,
+    piqa_harness,
 ]
