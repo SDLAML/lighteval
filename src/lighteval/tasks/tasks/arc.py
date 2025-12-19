@@ -59,7 +59,7 @@ arc_challenge = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select="random_sampling_from_train",
-    generation_size=1,
+    # generation_size=1,
     metrics=[
         # Metrics.loglikelihood_acc,
         LogLikelihoodAccMetric(),
@@ -81,7 +81,7 @@ arc_easy = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select="random_sampling_from_train",
-    generation_size=1,
+    # generation_size=1,
     metrics=[
         # Metrics.loglikelihood_acc,
         LogLikelihoodAccMetric(),
