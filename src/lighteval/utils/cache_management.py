@@ -42,6 +42,7 @@ from lighteval.utils.utils import as_list
 
 logger = logging.getLogger(__name__)
 
+DISABLE_CACHING = os.getenv("LIGHTEVAL_DISABLE_PREDICTION_CACHE", "0").lower() in ("1", "true", "yes")
 
 @dataclass
 class TaskID:
@@ -378,6 +379,10 @@ def cached(sampling_method: SamplingMethod = None):  # noqa C901
     """
 
     def decorator(func: Callable):  # noqa C901
+        if DISABLE_CACHING:
+            logger.info("Prediction caching is disabled.")
+            return func
+
         @functools.wraps(func)
         def wrapper(self, docs: Union[Doc, List[Doc]], *args, **kwargs):  # noqa C901
             docs = as_list(docs)
