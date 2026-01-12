@@ -22,6 +22,7 @@ paper:
 https://arxiv.org/abs/1803.05457
 """
 
+from string import ascii_uppercase
 from inspect_ai.dataset import Sample
 from inspect_ai.scorer import choice
 from inspect_ai.solver import multiple_choice
@@ -39,6 +40,19 @@ def arc_prompt(line, task_name: str = None):
         query=f"Question: {line['question']}\nAnswer:",
         choices=[f" {c}" for c in line["choices"]["text"]],
         gold_index=line["choices"]["label"].index(line["answerKey"]),
+    )
+
+def arc_mcf_prompt(line, task_name: str = None):
+    query = f"Question: {line['question']}\n"
+    query += "".join([f"{key}. {choice}\n" for key, choice in zip(ascii_uppercase, line["choices"]["text"])])
+    query += "Answer:"
+
+    gold_ix = line["choices"]["label"].index(line["answerKey"])
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[" " + i for i in ascii_uppercase[: len(line["choices"]["text"])]],
+        gold_index=gold_ix,
     )
 
 
@@ -94,4 +108,41 @@ arc_easy = LightevalTaskConfig(
     # scorer=choice(),
 )
 
-TASKS_TABLE = [arc_challenge, arc_easy]
+arc_challenge_mcf = LightevalTaskConfig(
+    name="arc:challenge:mcf",
+    prompt_function=arc_mcf_prompt,
+    hf_repo="allenai/ai2_arc",
+    hf_subset="ARC-Challenge",
+    hf_avail_splits=["train", "validation", "test"],
+    evaluation_splits=["test"],
+    few_shots_split=None,
+    few_shots_select="random_sampling_from_train",
+    generation_size=1,
+    metrics=[
+        Metrics.exact_match,
+    ],
+    stop_sequence=["\n"],
+    version=0,
+)
+
+arc_easy_mcf = LightevalTaskConfig(
+    name="arc:easy:mcf",
+    prompt_function=arc_mcf_prompt,
+    hf_repo="allenai/ai2_arc",
+    hf_subset="ARC-Easy",
+    hf_avail_splits=["train", "validation", "test"],
+    evaluation_splits=["test"],
+    few_shots_split=None,
+    few_shots_select="random_sampling_from_train",
+    generation_size=1,
+    metrics=[
+        Metrics.exact_match,
+    ],
+    stop_sequence=["\n"],
+    version=0,
+)
+
+TASKS_TABLE = [
+    arc_challenge, arc_easy,
+    arc_challenge_mcf, arc_easy_mcf,
+]
