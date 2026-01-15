@@ -55,11 +55,11 @@ TASKS_TABLE = [
             },
             formulation=formulation,
         ),
-        hf_repo="alexandrainst/m_hellaswag",
+        hf_repo="alexandrainst/m_hellaswag" if lang != Language.CHINESE else "jon-tow/okapi_hellaswag",
         hf_subset=standardize_tag(lang.value),
         # hf_revision="96ed8e0dfc6172dad1d3df338d7b8ba6c1ff9d83",
-        evaluation_splits=["val"],
-        hf_avail_splits=["val"],
+        evaluation_splits=["val" if lang != Language.CHINESE else "validation"],
+        hf_avail_splits=["val" if lang != Language.CHINESE else "validation"],
         metrics=get_metrics_for_formulation(
             formulation,
             [
