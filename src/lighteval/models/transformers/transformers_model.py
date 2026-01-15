@@ -395,16 +395,25 @@ class TransformersModel(LightevalModel):
         if "quantization_config" not in pretrained_config.to_dict():
             kwargs["quantization_config"] = quantization_config
 
-        model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            revision=revision,
-            max_memory=max_memory,
-            device_map=device_map,
-            # tp_plan="auto",
-            torch_dtype=torch_dtype,
-            trust_remote_code=self.config.trust_remote_code,
-            **kwargs,
-        )
+        ### to run it, upgrade to huggingface_hub==1.3.2 (from 0.36.0) and transformers v5.0.0rc2 (from v4.57.3)
+        if self.config.model_name.endswith("Ministral-3-3B-Base-2512"):
+            from transformers import Mistral3ForConditionalGeneration
+
+            model = Mistral3ForConditionalGeneration.from_pretrained(
+                self.config.model_name,
+                device_map=device_map,
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name,
+                revision=revision,
+                max_memory=max_memory,
+                device_map=device_map,
+                # tp_plan="auto",
+                torch_dtype=torch_dtype,
+                trust_remote_code=self.config.trust_remote_code,
+                **kwargs,
+            )
         # model.to(self.device)
         model.eval()
 
@@ -435,15 +444,19 @@ class TransformersModel(LightevalModel):
         subfolder = self.config.subfolder
         revision = self.config.revision + (f"/{subfolder}" if subfolder is not None else "")
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name,
-            revision=revision,
-            trust_remote_code=self.config.trust_remote_code,
-            padding_side="left",
-            truncation_side="left",
-        )
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.model_max_length = self.max_length
+        if self.config.model_name.endswith("Ministral-3-3B-Base-2512"):
+            from transformers import MistralCommonBackend
+            tokenizer = MistralCommonBackend.from_pretrained(self.config.model_name)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_name,
+                revision=revision,
+                trust_remote_code=self.config.trust_remote_code,
+                padding_side="left",
+                truncation_side="left",
+            )
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.model_max_length = self.max_length
         logger.info("Tokenizer truncation and padding size set to the left side.")
 
         return tokenizer
