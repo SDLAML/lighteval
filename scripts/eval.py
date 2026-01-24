@@ -67,7 +67,7 @@ TASKS = [
 # TASKS += [
 #             f"mlmm_hellaswag_{lang}_cf|0" for lang in [
 #                 "dan", "deu", "fra", "hrv", "hun", "spa",  
-#                 "ara", "hin", "hye", "rus", "vie", "zho",
+#                 "ara", "hin", "isl", "rus", "vie", "zho",
 #             ]
 #         ] 
 # # BATCH_SIZE = 8
