@@ -33,17 +33,12 @@ from lighteval.tasks.requests import Doc
 
 # setup for problem + instructions for providing answer
 MATH_PROMPT_TEMPLATE = """
-Solve the following math problem step by step. The last line of your
-response should be of the form "ANSWER: $ANSWER" (without quotes)
-where $ANSWER is the answer to the problem.
+Solve the following math problem. Think step by step before giving the final answer.
 
+Problem:
 {prompt}
 
-Remember to put your answer on its own line at the end in the form
-"ANSWER: $ANSWER" (without quotes) where $ANSWER is the answer to
-the problem, and you do not need to use a \\boxed command.
-
-Reasoning:
+Solution:
 """.strip()
 
 
@@ -64,7 +59,7 @@ def gsm_plus_prompt(line, task_name: str = None):
         return None
     return Doc(
         task_name=task_name,
-        query=f"Question: {line['question']}\n\nAnswer:",
+        query=MATH_PROMPT_TEMPLATE.format(prompt=line["question"]),
         choices=[line["answer"]],
         gold_index=0,
     )
@@ -83,9 +78,9 @@ gsm_plus = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=None,
+    generation_size=512,
     metrics=[Metrics.expr_gold_metric],
-    stop_sequence=None,
+    stop_sequence=["Question:", "\n####", "####"],
     version=0,
 )
 
