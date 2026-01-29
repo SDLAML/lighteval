@@ -32,10 +32,12 @@ from lighteval.tasks.requests import Doc
 
 
 MATH_QUERY_TEMPLATE = """
-Solve the following problem. The final line of your response MUST be of the following format:
-"ANSWER: $ANSWER" (without quotes) where $ANSWER is the final answer. Think step by step before answering.
+Solve the following math problem. Think step by step before giving the final answer.
 
+Problem:
 {prompt}
+
+Solution:
 """.strip()
 
 
@@ -44,7 +46,7 @@ def math_500_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=query,
-        choices=[f"ANSWER: {line['solution']}"],
+        choices=[line['solution']],
         gold_index=0,
     )
 
@@ -64,9 +66,10 @@ math_500 = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=32768,
+    generation_size=1024,
     metrics=[
-        Metrics.pass_at_k_math(sample_params={"k": 1, "n": 1}),
+        # Metrics.pass_at_k_math(sample_params={"k": 1, "n": 1}),
+        Metrics.expr_gold_metric,
     ],
     version=2,
     sample_fields=record_to_sample,
