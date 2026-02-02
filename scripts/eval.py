@@ -9,7 +9,7 @@ from pathlib import Path
 
 from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.models.abstract_model import GenerationParameters
-from lighteval.models.transformers.transformers_model import TransformersModelConfig
+from lighteval.models.vllm.vllm_model import VLLMModelConfig
 from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ### for hybrid models:
@@ -20,12 +20,21 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ######## EVALUATION CONFIGURATION  ########
 
-OVERRIDE_CHAT_TEMPLATE = False # False for base, don't forget to change for instruction-tuned models!
-TEMPERATURE = 0 # 0.6
-TOP_P = None # 0.6
-MAX_NEW_TOKENS = None # 1024
+ENFORCE_EAGER = False # True for opt-g, False for the rest 
+SEED = 1234
 MAX_SAMPLES = None
-BATCH_SIZE = 32
+
+OVERRIDE_CHAT_TEMPLATE = False # False for base, don't forget to change for instruction-tuned models!
+TEMPERATURE = 0
+TOP_P = None
+MAX_MODEL_LENGTH = 4096
+MAX_NEW_TOKENS = None
+
+# OVERRIDE_CHAT_TEMPLATE = True # False for base, don't forget to change for instruction-tuned models!
+# TEMPERATURE = 0.6
+# TOP_P = 0.95
+# MAX_MODEL_LENGTH = 32768
+# MAX_NEW_TOKENS = 1024
 
 ######## MODEL NAMES  ########
 
@@ -42,17 +51,12 @@ MODEL_NAMES = [
             ]
 
 TASKS = [
-            "hellaswag|5", "piqa|5", "siqa|5", "commonsenseqa|5", "openbookqa|5", 
-            "squad_v2|5", "drop|5", 
-            "mmlu|5", "sciq:mc|5", "sciq:mc|0", 
-            "arc:easy:mcf|5", "arc:challenge:mcf|5", 
-            "gsm8k|8",
-            # "math_500|0",
-            # "lambada:standard:em|0", "truthfulqa:gen|5",
-            # "arc:easy|0", "arc:challenge|0", 
-            #  "winogrande|0", "race:high|0", "hellaswag_harness|0", "piqa_harness|0",
-            #  "gpqa:diamond|5", "gpqa:extended|5", "gpqa:main|5", # "mmlu_pro|5",
-            #  "hellaswag|0",  "piqa|0", "siqa|0", "commonsenseqa|0", "openbookqa|0", 
+            # "hellaswag|5", "siqa|5", "commonsenseqa|5", "openbookqa|5", 
+            # "squad_v2|5", "drop|5", 
+            # "triviaqa|5", "wikifact|5", "truthfulqa:mc|0", "popqa|5",
+            # "mmlu|5", "sciq:mc|5",
+            # "arc:easy:mcf|5", "arc:challenge:mcf|5", 
+            # "gsm8k|0", "gsm_plus|0", "math_500|0", "math|0",
 ]
 
 # TASKS += [
@@ -62,15 +66,13 @@ TASKS = [
 #             #    "srp",
 #             ]
 #         ] 
-# # BATCH_SIZE = 8
 
 # TASKS += [
 #             f"mlmm_hellaswag_{lang}_cf|0" for lang in [
-#                 "dan", "deu", "fra", "hrv", "hun", "spa",  
-#                 "ara", "hin", "isl", "rus", "vie", "zho",
+#                 "dan", "deu", "fra", "hrv", "hun", "spa", "isl",
+#                 "ara", "hin", "rus", "vie", "zho",
 #             ]
 #         ] 
-# # BATCH_SIZE = 8
 
 # TASKS = [
 #           "bbq|0", "toxigen|0", "bold|0", "civil_comments|0", "real_toxicity_prompts|0", "ethics|0",
@@ -112,17 +114,21 @@ def eval_one(model_name: str, task: str):
     eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
 
     pipeline_params = PipelineParameters(
-        launcher_type=ParallelismManager.ACCELERATE,
+        launcher_type=ParallelismManager.VLLM,
         load_tasks_multilingual=True,
         max_samples=MAX_SAMPLES,
     )
 
-    model_cfg = TransformersModelConfig(
+    model_cfg = VLLMModelConfig(
         model_name=model_name,
         dtype="bfloat16",
         trust_remote_code=True,
-        batch_size=BATCH_SIZE,
+        max_model_length=MAX_MODEL_LENGTH,
+        seed=SEED,
         override_chat_template=OVERRIDE_CHAT_TEMPLATE,
+        enforce_eager=ENFORCE_EAGER,
+        distributed_backend="mp",
+        data_parallel_size=4,
         generation_parameters=GenerationParameters(
         temperature=TEMPERATURE,
         top_p=TOP_P,
