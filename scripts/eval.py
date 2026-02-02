@@ -5,6 +5,7 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 
 import gc
 import re
+import subprocess
 from pathlib import Path
 
 from lighteval.logging.evaluation_tracker import EvaluationTracker
@@ -19,6 +20,8 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 # module load git 
 
 ######## EVALUATION CONFIGURATION  ########
+
+IS_TEST = True
 
 ENFORCE_EAGER = False # True for opt-g, False for the rest 
 SEED = 1234
@@ -81,6 +84,21 @@ TASKS = [
 if isinstance(TASKS, list):
     TASKS = ','.join(TASKS)
 
+def _get_git_commit_short() -> str:
+    """Get the first 7 characters of the current git commit hash."""
+    try:
+        repo_dir = Path(__file__).parent.parent  # lighteval repo root
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()[:7]
+    except Exception:
+        return "unknown"
+
 def _safe_name(s: str, max_len: int = 180) -> str:
     """Filesystem-safe name for model paths / task strings (handles / : | etc.)."""
     s = s.strip().strip("/")
@@ -108,7 +126,7 @@ def eval_one(model_name: str, task: str):
         print(f"{'='*100}\n")
 
     # Output directory per (model, task)
-    out_dir = Path("results") / _safe_name(model_name) / datetime.now().strftime("%d/%m/%y %H:%M")
+    out_dir = Path("results") / _safe_name(model_name) / f'{"test_" if IS_TEST else ""}{_get_git_commit_short()}'
     out_dir.mkdir(parents=True, exist_ok=True)
 
     eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
