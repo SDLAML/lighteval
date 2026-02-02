@@ -137,6 +137,7 @@ class VLLMModelConfig(ModelConfig):
         system_prompt (str | None, optional, defaults to None): Optional system prompt to be used with chat models.
             This prompt sets the behavior and context for the model during evaluation.
         cache_dir (str, optional, defaults to "~/.cache/huggingface/lighteval"): Directory to cache the model.
+        enforce_eager (bool, optional, defaults to False): Whether to enforce eager execution mode in vllm.
 
     Example:
         ```python
@@ -180,6 +181,7 @@ class VLLMModelConfig(ModelConfig):
     subfolder: str | None = None
     is_async: bool = False  # Whether to use the async version or sync version of the model
     override_chat_template: bool = None
+    enforce_eager: bool = False  # Whether to enforce eager execution mode in vllm
 
 
 @requires("vllm")
@@ -263,7 +265,7 @@ class VLLMModel(LightevalModel):
             "seed": int(config.seed),
             "max_num_seqs": int(config.max_num_seqs),
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
-            "enforce_eager": True,
+            "enforce_eager": config.enforce_eager,
         }
 
         if config.quantization is not None:
@@ -568,7 +570,7 @@ class AsyncVLLMModel(VLLMModel):
             "seed": int(config.seed),
             "max_num_seqs": int(config.max_num_seqs),
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
-            "enforce_eager": True,
+            "enforce_eager": config.enforce_eager,
         }
 
         if config.data_parallel_size > 1:
