@@ -23,10 +23,20 @@ from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
 
+MATH_PROMPT_TEMPLATE = """
+Solve the following math problem. Think step by step before giving the final answer.
+
+Problem:
+{prompt}
+
+Solution:
+""".strip()
+
 def math_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
-        query=f"Question: {line['problem']}\nAnswer:",
+        query=MATH_PROMPT_TEMPLATE.format(prompt=line["problem"]),
+        # query=f"Question: {line['problem']}\nAnswer:",
         choices=[f" {line['solution']}"],
         gold_index=0,
     )
@@ -41,18 +51,19 @@ math_algebra = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
@@ -65,18 +76,19 @@ math_counting_and_probability = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
@@ -89,18 +101,19 @@ math_geometry = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
@@ -113,18 +126,19 @@ math_intermediate_algebra = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
@@ -137,18 +151,19 @@ math_number_theory = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
@@ -161,18 +176,19 @@ math_prealgebra = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
@@ -185,18 +201,19 @@ math_precalculus = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=2048,
+    generation_size=1024,
     metrics=[
-        Metrics.maj_at_n(
-            sample_params={
-                "n": 4,
-                "strip_strings": True,
-                "normalize_pred": math_normalizer,
-                "normalize_gold": math_normalizer,
-            }
-        ),
+        # Metrics.maj_at_n(
+        #     sample_params={
+        #         "n": 4,
+        #         "strip_strings": True,
+        #         "normalize_pred": math_normalizer,
+        #         "normalize_gold": math_normalizer,
+        #     }
+        # ),
+        Metrics.expr_gold_metric,
     ],
-    stop_sequence=["\n"],
+    stop_sequence=["Question:", "Problem:"],
     version=1,
 )
 
