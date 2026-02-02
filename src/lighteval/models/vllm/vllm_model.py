@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 if is_package_available("vllm"):
+    import multiprocessing as mp
     import ray
     from more_itertools import distribute
     from vllm import LLM, RequestOutput, SamplingParams
@@ -62,15 +63,30 @@ if is_package_available("vllm"):
     logging.getLogger("ray").handlers.clear()
 else:
     from unittest.mock import Mock
+    import multiprocessing as mp
 
-    LLM = SamplingParams = get_tokenizer = ray = distribute = destroy_distributed_environment = (
+    LLM = SamplingParams = get_tokenizer = distribute = destroy_distributed_environment = (
         destroy_model_parallel
     ) = Mock()
-    AsyncLLM = AsyncEngineArgs = RequestOutput = Mock()
+    AsyncLLM = AsyncEngineArgs = RequestOutput = ray = Mock()
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 STARTING_BATCH_SIZE = 512
+
+
+def _run_inference_worker(gpu_id: int, model_args: dict, sampling_params_dict: dict, requests: list, result_queue):
+    """Worker function to run inference on a single GPU. Must be at module level for pickling."""
+    try:
+        # Set CUDA device for this worker
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        from vllm import LLM, SamplingParams
+        sampling_params = SamplingParams(**sampling_params_dict)
+        llm = LLM(**model_args)
+        results = llm.generate(prompt_token_ids=requests, sampling_params=sampling_params)
+        result_queue.put((gpu_id, results))
+    except Exception as e:
+        result_queue.put((gpu_id, e))
 
 
 class VLLMModelConfig(ModelConfig):
@@ -138,6 +154,7 @@ class VLLMModelConfig(ModelConfig):
             This prompt sets the behavior and context for the model during evaluation.
         cache_dir (str, optional, defaults to "~/.cache/huggingface/lighteval"): Directory to cache the model.
         enforce_eager (bool, optional, defaults to False): Whether to enforce eager execution mode in vllm.
+        distributed_backend (str, optional, defaults to "ray"): Backend for data parallelism: "ray" or "mp" (multiprocessing).
 
     Example:
         ```python
@@ -182,6 +199,7 @@ class VLLMModelConfig(ModelConfig):
     is_async: bool = False  # Whether to use the async version or sync version of the model
     override_chat_template: bool = None
     enforce_eager: bool = False  # Whether to enforce eager execution mode in vllm
+    distributed_backend: str = "ray"  # Backend for data parallelism: "ray" or "mp" (multiprocessing)
 
 
 @requires("vllm")
@@ -197,6 +215,7 @@ class VLLMModel(LightevalModel):
         )
         self.data_parallel_size = config.data_parallel_size
         self.tensor_parallel_size = config.tensor_parallel_size
+        self.distributed_backend = config.distributed_backend
         self._add_special_tokens = config.add_special_tokens if config.add_special_tokens is not None else False
         self._tokenizer = self._create_auto_tokenizer(config)
 
@@ -230,7 +249,8 @@ class VLLMModel(LightevalModel):
         if self.model is not None:
             del self.model
         gc.collect()
-        ray.shutdown()
+        if self.distributed_backend == "ray" and self.data_parallel_size > 1:
+            ray.shutdown()
         destroy_distributed_environment()
         torch.cuda.empty_cache()
 
@@ -274,7 +294,7 @@ class VLLMModel(LightevalModel):
             self.model_args["load_format"] = config.load_format
 
         if config.data_parallel_size > 1:
-            self.model_args["distributed_executor_backend"] = "ray"
+            self.model_args["distributed_executor_backend"] = config.distributed_backend
             self._batch_size = "auto"
 
             if self._max_length is None:
@@ -282,7 +302,7 @@ class VLLMModel(LightevalModel):
                 # vllm models, which is an issue.
                 logger.warning(
                     "The model max_length was not set in the model arguments. Since the model is using data parallelism, it is created later "
-                    " with `ray`, so we can't infer the max_length automatically atm. It might raise issues later on: if it does, relaunch your "
+                    f" with {config.distributed_backend}, so we can't infer the max_length automatically atm. It might raise issues later on: if it does, relaunch your "
                     "run, but set `max_model_length` explicitely in the model args."
                 )
             return None
@@ -435,26 +455,75 @@ class VLLMModel(LightevalModel):
             sampling_params.detokenize = False
 
         if self.data_parallel_size > 1:
-
-            @ray.remote(num_gpus=self.tensor_parallel_size)
-            def run_inference_one_model(model_args: dict, sampling_params: SamplingParams, requests):
-                llm = LLM(**model_args)
-                return llm.generate(prompt_token_ids=requests, sampling_params=sampling_params)
-
             # dispatch requests to all self.data_parallel_size workers, in interleaved fashion
             # interleaved important to balance context lengths across workers
             requests = [list(x) for x in distribute(self.data_parallel_size, inputs)]
-            inputs = ((self.model_args, sampling_params, req) for req in requests)
-            object_refs = [run_inference_one_model.remote(*x) for x in inputs]
-            results = ray.get(object_refs)
-            # Invoke ray.shutdown() to prevent hang-ups if subsequent calls required.
-            ray.shutdown()
-            # flatten results
-            outputs = [
-                x
-                for x in itertools.chain.from_iterable(itertools.zip_longest(*[list(x) for x in results]))
-                if x is not None
-            ]
+
+            if self.distributed_backend == "ray":
+                # Ray-based data parallelism
+                @ray.remote(num_gpus=self.tensor_parallel_size)
+                def run_inference_one_model(model_args: dict, sampling_params: SamplingParams, requests):
+                    llm = LLM(**model_args)
+                    return llm.generate(prompt_token_ids=requests, sampling_params=sampling_params)
+
+                inputs = ((self.model_args, sampling_params, req) for req in requests)
+                object_refs = [run_inference_one_model.remote(*x) for x in inputs]
+                results = ray.get(object_refs)
+                # Invoke ray.shutdown() to prevent hang-ups if subsequent calls required.
+                ray.shutdown()
+                # flatten results
+                outputs = [
+                    x
+                    for x in itertools.chain.from_iterable(itertools.zip_longest(*[list(x) for x in results]))
+                    if x is not None
+                ]
+            else:
+                # Multiprocessing-based data parallelism
+                # Convert sampling_params to dict for pickling
+                sampling_params_dict = {
+                    k: getattr(sampling_params, k)
+                    for k in ['n', 'best_of', 'presence_penalty', 'frequency_penalty',
+                              'repetition_penalty', 'temperature', 'top_p', 'top_k',
+                              'min_p', 'seed', 'stop', 'stop_token_ids', 'max_tokens',
+                              'min_tokens', 'logprobs', 'prompt_logprobs', 'detokenize',
+                              'skip_special_tokens', 'spaces_between_special_tokens',
+                              'truncate_prompt_tokens']
+                    if hasattr(sampling_params, k)
+                }
+
+                # Use multiprocessing spawn context for CUDA compatibility
+                ctx = mp.get_context("spawn")
+                result_queue = ctx.Queue()
+                processes = []
+
+                for gpu_id, req in enumerate(requests):
+                    p = ctx.Process(
+                        target=_run_inference_worker,
+                        args=(gpu_id, self.model_args, sampling_params_dict, req, result_queue)
+                    )
+                    p.start()
+                    processes.append(p)
+
+                # Collect results from all workers
+                results_dict = {}
+                for _ in range(len(processes)):
+                    gpu_id, result = result_queue.get()
+                    if isinstance(result, Exception):
+                        raise result
+                    results_dict[gpu_id] = result
+
+                # Wait for all processes to complete
+                for p in processes:
+                    p.join()
+
+                # Order results by GPU ID and flatten
+                results = [results_dict[i] for i in range(len(requests))]
+                # flatten results
+                outputs = [
+                    x
+                    for x in itertools.chain.from_iterable(itertools.zip_longest(*[list(x) for x in results]))
+                    if x is not None
+                ]
         else:
             outputs = self.model.generate(
                 prompt_token_ids=inputs,
