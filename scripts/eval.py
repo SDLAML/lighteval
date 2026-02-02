@@ -78,8 +78,8 @@ TASKS = [
 #           "bbq|0", "toxigen|0", "bold|0", "civil_comments|0", "real_toxicity_prompts|0", "ethics|0",
 #          ]
 
-# if isinstance(TASKS, list):
-#     TASKS = ','.join(TASKS)
+if isinstance(TASKS, list):
+    TASKS = ','.join(TASKS)
 
 def _safe_name(s: str, max_len: int = 180) -> str:
     """Filesystem-safe name for model paths / task strings (handles / : | etc.)."""
@@ -108,7 +108,7 @@ def eval_one(model_name: str, task: str):
         print(f"{'='*100}\n")
 
     # Output directory per (model, task)
-    out_dir = Path("results") / _safe_name(model_name) / _safe_name(task)
+    out_dir = Path("results") / _safe_name(model_name) / datetime.now().strftime("%d/%m/%y %H:%M")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
@@ -172,8 +172,7 @@ def eval_one(model_name: str, task: str):
 
 def main():
     for model_name in MODEL_NAMES:
-        for task in TASKS:
-            eval_one(model_name, task)
+        eval_one(model_name, TASKS)
 
 if __name__ == "__main__":
     try:
