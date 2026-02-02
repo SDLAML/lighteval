@@ -21,7 +21,7 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ######## EVALUATION CONFIGURATION  ########
 
-IS_TEST = True
+SUBDIR_PREFIX = ""
 
 ENFORCE_EAGER = False # True for opt-g, False for the rest 
 SEED = 1234
@@ -126,7 +126,7 @@ def eval_one(model_name: str, task: str):
         print(f"{'='*100}\n")
 
     # Output directory per (model, task)
-    out_dir = Path("results") / _safe_name(model_name) / f'{"test_" if IS_TEST else ""}{_get_git_commit_short()}'
+    out_dir = Path("results") / _safe_name(model_name) / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
     out_dir.mkdir(parents=True, exist_ok=True)
 
     eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
