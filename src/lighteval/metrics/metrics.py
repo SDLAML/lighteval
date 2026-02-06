@@ -596,7 +596,8 @@ class Metrics(Enum):
                 IndicesExtractionConfig(prefix_for_extraction="NativeLetters", try_extract_without_anchor=True)
             ],
             pred_extraction_target=[
-                IndicesExtractionConfig(prefix_for_extraction="NativeLetters", try_extract_without_anchor=True)
+                IndicesExtractionConfig(prefix_for_extraction="NativeLetters", try_extract_without_anchor=True),
+                # LatexExtractionConfig(boxed_match_priority=0),
             ],
             precision=6,
         ),
@@ -613,7 +614,8 @@ class Metrics(Enum):
                     IndicesExtractionConfig(prefix_for_extraction="NativeLetters", try_extract_without_anchor=True)
                 ],
                 pred_extraction_target=[
-                    IndicesExtractionConfig(prefix_for_extraction="NativeLetters", try_extract_without_anchor=True)
+                    IndicesExtractionConfig(prefix_for_extraction="NativeLetters", try_extract_without_anchor=True),
+                    # LatexExtractionConfig(boxed_match_priority=0),
                 ],
                 precision=6,
             ),
