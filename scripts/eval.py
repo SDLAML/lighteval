@@ -11,9 +11,11 @@ from pathlib import Path
 from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.models.abstract_model import GenerationParameters
 from lighteval.models.vllm.vllm_model import VLLMModelConfig
+from lighteval.models.transformers.transformers_model import TransformersModelConfig
 from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ### for hybrid models:
+# pip uninstall -y mamba-ssm selective-scan causal-conv1d
 # pip install --no-cache-dir --no-binary :all: --no-build-isolation "mamba-ssm[causal-conv1d]"
 
 ### also don't forget before running:
@@ -22,8 +24,6 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 ######## EVALUATION CONFIGURATION  ########
 
 SUBDIR_PREFIX = ""
-
-ENFORCE_EAGER = False # True for opt-g, False for the rest 
 SEED = 1234
 MAX_SAMPLES = None
 
@@ -131,28 +131,45 @@ def eval_one(model_name: str, task: str):
 
     eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
 
+    backend = "hf" if any(n in model_name for n in ['granite', 'Falcon', 'Trinity', 'Apertus']) else "vllm"
+    if backend == "hf":
+        assert not ',' in task, "comma-separated tasks are broken for the HF backend, please run them one at a time"
+        BATCH_SIZE = 32
+
     pipeline_params = PipelineParameters(
-        launcher_type=ParallelismManager.VLLM,
+        launcher_type= ParallelismManager.VLLM if backend == "vllm" else ParallelismManager.ACCELERATE,
         load_tasks_multilingual=True,
         max_samples=MAX_SAMPLES,
     )
 
-    model_cfg = VLLMModelConfig(
+    model_cfg_kwargs = dict(
         model_name=model_name,
         dtype="bfloat16",
         trust_remote_code=True,
-        max_model_length=MAX_MODEL_LENGTH,
-        seed=SEED,
         override_chat_template=OVERRIDE_CHAT_TEMPLATE,
-        enforce_eager=ENFORCE_EAGER,
-        distributed_backend="mp",
-        data_parallel_size=4,
         generation_parameters=GenerationParameters(
         temperature=TEMPERATURE,
         top_p=TOP_P,
         max_new_tokens=MAX_NEW_TOKENS,
         ),
     )
+    
+    if backend == "vllm":
+        model_cfg = VLLMModelConfig(
+            **model_cfg_kwargs,
+            max_model_length=MAX_MODEL_LENGTH,
+            seed=SEED,
+            enforce_eager=True if 'opt-g_5T' in model_name else False,
+            distributed_backend="mp",
+            data_parallel_size=4,
+        )
+    elif backend == "hf":
+        model_cfg = TransformersModelConfig(
+            **model_cfg_kwargs,
+            batch_size=BATCH_SIZE,
+        )
+    else:
+        raise ValueError(f"Unsupported backend: {backend}")
 
     pipeline = Pipeline(
         tasks=task,
