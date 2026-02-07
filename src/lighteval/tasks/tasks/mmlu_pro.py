@@ -30,7 +30,9 @@ from inspect_ai.dataset import Sample
 from inspect_ai.scorer import choice
 from inspect_ai.solver import multiple_choice
 
+from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
@@ -44,6 +46,26 @@ Answer the following multiple choice question. The last line of your response sh
 
 Answer:""".strip()
 
+
+def mmlu_pro_mcf_prompt_function(line, task_name: str = None):
+    query = f"Answer the following multiple choice question.\n\nQuestion: {line['question'].strip()}"
+    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["options"])])
+    query += "\nAnswer: "
+
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=ascii_uppercase[: len(line["options"])],
+        gold_index=line["answer_index"],
+    )
+
+def mmlu_pro_cf_prompt_function(line, task_name: str = None):
+    return Doc(
+        task_name=task_name,
+        query="Question: " + line["question"].strip() + "\nAnswer:",
+        choices= [c if c and c[0].isspace() else " " + c for c in line["options"]],
+        gold_index=line["answer_index"],
+    )
 
 def mmlu_pro_prompt_function(line, task_name: str = None):
     choices = "\n".join([f"{letter}: {choice}" for letter, choice in zip(ascii_uppercase, line["options"])])
@@ -80,4 +102,40 @@ mmlu_pro = LightevalTaskConfig(
     metrics=[Metrics.gpqa_instruct_metric],
 )
 
-TASKS_TABLE = [mmlu_pro]
+mmlu_pro_mcf = LightevalTaskConfig(
+    name="mmlu_pro_mcf",
+    prompt_function=mmlu_pro_mcf_prompt_function,
+    sample_fields=record_to_sample,
+    solver=[multiple_choice(cache=True)],
+    scorer=choice(),
+    hf_repo="TIGER-Lab/MMLU-Pro",
+    hf_subset="default",
+    hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
+    evaluation_splits=("test",),
+    few_shots_split="validation",
+    metrics=[
+        Metrics.exact_match,
+        # Metrics.gpqa_instruct_metric
+        ],
+    generation_size=1,
+    stop_sequence=["\n", "\n\n"],
+)
+
+mmlu_pro_cf = LightevalTaskConfig(
+    name="mmlu_pro_cf",
+    prompt_function=mmlu_pro_cf_prompt_function,
+    sample_fields=record_to_sample,
+    solver=[multiple_choice(cache=True)],
+    scorer=choice(),
+    hf_repo="TIGER-Lab/MMLU-Pro",
+    hf_subset="default",
+    hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
+    evaluation_splits=("test",),
+    few_shots_split="validation",
+    metrics=[
+        LogLikelihoodAccMetric(),
+        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+        ],
+)
+
+TASKS_TABLE = [mmlu_pro, mmlu_pro_mcf, mmlu_pro_cf]
