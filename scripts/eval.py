@@ -60,6 +60,7 @@ TASKS = [
             # "mmlu|5", "sciq:mc|5",
             # "arc:easy:mcf|5", "arc:challenge:mcf|5", 
             # "gsm8k|0", "gsm_plus|0", "math_500|0", "math|0",
+            # "agieval_eng_em|0",
 ]
 
 # TASKS += [
@@ -131,7 +132,7 @@ def eval_one(model_name: str, task: str):
 
     eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
 
-    backend = "hf" if any(n in model_name for n in ['granite', 'Falcon', 'Trinity', 'Apertus']) else "vllm"
+    backend = "hf" if any(n in model_name for n in ['granite', 'Ministral', 'Falcon', 'Apertus']) else "vllm"
     if backend == "hf":
         assert not ',' in task, "comma-separated tasks are broken for the HF backend, please run them one at a time"
         BATCH_SIZE = 32
@@ -159,7 +160,7 @@ def eval_one(model_name: str, task: str):
             **model_cfg_kwargs,
             max_model_length=MAX_MODEL_LENGTH,
             seed=SEED,
-            enforce_eager=True if 'opt-g_5T' in model_name else False,
+            enforce_eager=True if any(x in model_name for x in ['opt-g_5T', 'Trinity']) else False,
             distributed_backend="mp",
             data_parallel_size=4,
         )
