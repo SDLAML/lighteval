@@ -121,8 +121,6 @@ def _dist_info():
 
 def eval_one(model_name: str, tasks: str):
     rank, world, dist = _dist_info()
-    out_dir = Path("results") / _safe_name(model_name) / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     backend = "hf" if any(n in model_name for n in HF_BACKEND_MODELS) else "vllm"
     if backend == "hf":
@@ -180,7 +178,13 @@ def eval_one(model_name: str, tasks: str):
             print(f"World size: {world}")
             print(f"{'='*100}\n")
         
-        eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
+        out_dir = Path("results") / _safe_name(model_name) / task / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        eval_tracker = EvaluationTracker(
+            output_dir=str(out_dir), 
+            save_details=True, 
+            results_path_template="{output_dir}/results",
+        )
 
         pipeline = Pipeline(
             tasks=task,
