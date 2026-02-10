@@ -21,17 +21,23 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 ### also don't forget before running:
 # module load git 
 
+######## GENERAL CONFIGURATION  ########
+
+SUBDIR_PREFIX = "test_"
+ENFORCE_EAGER_MODELS = ['opt-g', 'Trinity']
+HF_BACKEND_MODELS = ['granite', 'Ministral', 'Falcon', 'Apertus']
+BATCH_SIZE = 32 # only used for HF backend
+DP_SIZE = 4 # only used for vLLM backend
+
 ######## EVALUATION CONFIGURATION  ########
 
-SUBDIR_PREFIX = ""
-SEED = 1234
-MAX_SAMPLES = None
-
 OVERRIDE_CHAT_TEMPLATE = False # False for base, don't forget to change for instruction-tuned models!
+SEED = 1234
 TEMPERATURE = 0
 TOP_P = None
 MAX_MODEL_LENGTH = 4096
 MAX_NEW_TOKENS = None
+MAX_SAMPLES = None
 
 # OVERRIDE_CHAT_TEMPLATE = True # False for base, don't forget to change for instruction-tuned models!
 # TEMPERATURE = 0.6
@@ -82,9 +88,6 @@ TASKS = [
 #           "bbq|0", "toxigen|0", "bold|0", "civil_comments|0", "real_toxicity_prompts|0", "ethics|0",
 #          ]
 
-if isinstance(TASKS, list):
-    TASKS = ','.join(TASKS)
-
 def _get_git_commit_short() -> str:
     """Get the first 7 characters of the current git commit hash."""
     try:
@@ -116,26 +119,16 @@ def _dist_info():
         pass
     return 0, 1, None
 
-def eval_one(model_name: str, task: str):
+def eval_one(model_name: str, tasks: str):
     rank, world, dist = _dist_info()
-
-    if rank == 0:
-        print(f"\n{'='*100}")
-        print(f"Evaluating model: {model_name}")
-        print(f"Task: {task}")
-        print(f"World size: {world}")
-        print(f"{'='*100}\n")
-
-    # Output directory per (model, task)
     out_dir = Path("results") / _safe_name(model_name) / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
-
-    backend = "hf" if any(n in model_name for n in ['granite', 'Ministral', 'Falcon', 'Apertus']) else "vllm"
+    backend = "hf" if any(n in model_name for n in HF_BACKEND_MODELS) else "vllm"
     if backend == "hf":
-        assert not ',' in task, "comma-separated tasks are broken for the HF backend, please run them one at a time"
-        BATCH_SIZE = 32
+        assert not ',' in tasks, "comma-separated tasks are broken for the HF backend, please run them one at a time"
+
+    #### Configure pipeline and model ####
 
     pipeline_params = PipelineParameters(
         launcher_type= ParallelismManager.VLLM if backend == "vllm" else ParallelismManager.ACCELERATE,
@@ -160,9 +153,10 @@ def eval_one(model_name: str, task: str):
             **model_cfg_kwargs,
             max_model_length=MAX_MODEL_LENGTH,
             seed=SEED,
-            enforce_eager=True if any(x in model_name for x in ['opt-g_5T', 'Trinity']) else False,
+            enforce_eager=True if any(x in model_name for x in ENFORCE_EAGER_MODELS) else False,
             distributed_backend="mp",
-            data_parallel_size=4,
+            data_parallel_size=DP_SIZE,
+            # enable_prefix_caching=False,
         )
     elif backend == "hf":
         model_cfg = TransformersModelConfig(
@@ -172,38 +166,52 @@ def eval_one(model_name: str, task: str):
     else:
         raise ValueError(f"Unsupported backend: {backend}")
 
-    pipeline = Pipeline(
-        tasks=task,
-        pipeline_parameters=pipeline_params,
-        evaluation_tracker=eval_tracker,
-        model_config=model_cfg,
-    )
+    #### Loop over tasks ####
+
+    if isinstance(tasks, list) and backend == "vllm":
+        tasks = ','.join(tasks)
     
-    pipeline.evaluate()
-    pipeline.save_and_push_results()
+    for task in tasks if isinstance(tasks, list) else [tasks]:
+        
+        if rank == 0:
+            print(f"\n{'='*100}")
+            print(f"Evaluating model: {model_name}")
+            print(f"Task: {task}")
+            print(f"World size: {world}")
+            print(f"{'='*100}\n")
+        
+        eval_tracker = EvaluationTracker(output_dir=str(out_dir), save_details=True)
 
-    if rank == 0:
-        pipeline.show_results()
+        pipeline = Pipeline(
+            tasks=task,
+            pipeline_parameters=pipeline_params,
+            evaluation_tracker=eval_tracker,
+            model_config=model_cfg,
+        )
+        pipeline.evaluate()
+        pipeline.save_and_push_results()
 
-    # Make sure all ranks finish this task before moving on
-    if dist is not None:
-        dist.barrier()
+        if rank == 0:
+            pipeline.show_results()
 
-    # Try hard to free memory between runs
-    try:
-        import torch
+        # Make sure all ranks finish this task before moving on
+        if dist is not None:
+            dist.barrier()
 
-        del pipeline
-        del eval_tracker
-        del model_cfg
-        torch.cuda.empty_cache()
-    except Exception:
-        pass
+        # Try hard to free memory between runs
+        try:
+            import torch
 
-    gc.collect()
+            del pipeline
+            del eval_tracker
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
-    if dist is not None:
-        dist.barrier()
+        gc.collect()
+
+        if dist is not None:
+            dist.barrier()
 
 
 def main():
