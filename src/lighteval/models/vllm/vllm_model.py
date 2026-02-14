@@ -40,6 +40,7 @@ from lighteval.tasks.requests import Doc, SamplingMethod
 from lighteval.utils.cache_management import SampleCache, cached
 from lighteval.utils.imports import is_package_available, requires
 
+from vllm.inputs.data import TokensPrompt
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _run_inference_worker(gpu_id: int, model_args: dict, sampling_params_dict: d
         from vllm import LLM, SamplingParams
         sampling_params = SamplingParams(**sampling_params_dict)
         llm = LLM(**model_args)
-        results = llm.generate(prompt_token_ids=requests, sampling_params=sampling_params)
+        results = llm.generate(requests, sampling_params=sampling_params)
         result_queue.put((gpu_id, results))
     except Exception as e:
         result_queue.put((gpu_id, e))
@@ -437,6 +438,8 @@ class VLLMModel(LightevalModel):
         generate: bool = True,
     ) -> list:
         """Contains the actual logic of the generation."""
+        # Wrap inputs with TokensPrompt to make compatible with VLLM >= 0.10.2
+        inputs = [TokensPrompt(prompt_token_ids=token_ids) for token_ids in inputs]
         sampling_params = SamplingParams(**self.config.generation_parameters.to_vllm_dict())
 
         if generate:
@@ -464,7 +467,7 @@ class VLLMModel(LightevalModel):
                 @ray.remote(num_gpus=self.tensor_parallel_size)
                 def run_inference_one_model(model_args: dict, sampling_params: SamplingParams, requests):
                     llm = LLM(**model_args)
-                    return llm.generate(prompt_token_ids=requests, sampling_params=sampling_params)
+                    return llm.generate(requests, sampling_params=sampling_params)
 
                 inputs = ((self.model_args, sampling_params, req) for req in requests)
                 object_refs = [run_inference_one_model.remote(*x) for x in inputs]
@@ -526,7 +529,7 @@ class VLLMModel(LightevalModel):
                 ]
         else:
             outputs = self.model.generate(
-                prompt_token_ids=inputs,
+                inputs,
                 sampling_params=sampling_params,
                 use_tqdm=True,
             )

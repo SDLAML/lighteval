@@ -2,6 +2,7 @@ import os
 os.environ["LIGHTEVAL_DISABLE_PREDICTION_CACHE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
 # os.environ["GIT_PYTHON_GIT_EXECUTABLE"] = "" # set wherever module load git points to
+os.environ["VLLM_PLUGINS"] = "register_staging_moellama"
 
 import gc
 import re
@@ -23,8 +24,8 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ######## GENERAL CONFIGURATION  ########
 
-SUBDIR_PREFIX = "test_"
-ENFORCE_EAGER_MODELS = ['opt-g', 'Trinity']
+SUBDIR_PREFIX = "test-"
+ENFORCE_EAGER_MODELS = ['Trinity']
 HF_BACKEND_MODELS = ['granite', 'Ministral', 'Falcon', 'Apertus']
 BATCH_SIZE = 32 # only used for HF backend
 DP_SIZE = 4 # only used for vLLM backend
