@@ -104,6 +104,59 @@ def mmlu_prompt(line, task_name: str = None):
         instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
     )
 
+def mmlu_chat_prompt(line, task_name: str = None):
+    subject = line["subject"]
+    query = line['question']
+    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+    query += "\nThink step by step before answering."
+
+    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[" A", " B", " C", " D"],
+        gold_index=gold_ix,
+        fewshot_sorting_class=line["choices"][gold_ix],
+        instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
+    )
+
+def mmlu_redux_prompt(line, task_name: str = None):
+    if line['error_type'] != "ok":
+        return None
+    
+    query = f"Question: {line['question']}"
+    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+    query += "\n\nAnswer:"
+
+    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[" A", " B", " C", " D"],
+        gold_index=gold_ix,
+        fewshot_sorting_class=line["choices"][gold_ix],
+    )
+
+def mmlu_redux_chat_prompt(line, task_name: str = None):
+    if line['error_type'] != "ok":
+        return None
+    
+    query = line['question']
+    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+    query += "\n\nThink step by step before answering."
+
+    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[" A", " B", " C", " D"],
+        gold_index=gold_ix,
+        # fewshot_sorting_class=line["choices"][gold_ix],
+    )
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"mmlu:{subset}",
@@ -117,6 +170,60 @@ TASKS_TABLE = [
         generation_size=5,
         metrics=[Metrics.exact_match],
         stop_sequence=["\n"],
+        version=0,
+    )
+    for subset in _MMLU_SUBSETS
+]
+
+TASKS_TABLE += [
+    LightevalTaskConfig(
+        name=f"mmlu_chat:{subset}",
+        prompt_function=mmlu_chat_prompt,
+        hf_repo="lighteval/mmlu",
+        hf_subset=subset,
+        hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
+        evaluation_splits=["test"],
+        few_shots_split="dev",
+        few_shots_select=None,
+        generation_size=1024,
+        metrics=[Metrics.gpqa_instruct_metric],
+        stop_sequence=["Question:"],
+        version=0,
+    )
+    for subset in _MMLU_SUBSETS
+]
+
+TASKS_TABLE += [
+    LightevalTaskConfig(
+        name=f"mmlu_redux:{subset}",
+        prompt_function=mmlu_redux_prompt,
+        hf_repo="edinburgh-dawg/mmlu-redux-2.0",
+        hf_subset=subset,
+        hf_avail_splits=["test"],
+        evaluation_splits=["test"],
+        few_shots_split=None,
+        few_shots_select=None,
+        generation_size=5,
+        metrics=[Metrics.exact_match],
+        stop_sequence=["\n"],
+        version=0,
+    )
+    for subset in _MMLU_SUBSETS
+]
+
+TASKS_TABLE += [
+    LightevalTaskConfig(
+        name=f"mmlu_redux_chat:{subset}",
+        prompt_function=mmlu_redux_chat_prompt,
+        hf_repo="edinburgh-dawg/mmlu-redux-2.0",
+        hf_subset=subset,
+        hf_avail_splits=["test"],
+        evaluation_splits=["test"],
+        few_shots_split=None,
+        few_shots_select=None,
+        generation_size=4096,
+        metrics=[Metrics.gpqa_instruct_metric],
+        stop_sequence=["Question:"],
         version=0,
     )
     for subset in _MMLU_SUBSETS
