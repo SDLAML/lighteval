@@ -40,12 +40,28 @@ from lighteval.models.endpoints.tgi_model import ModelClient, TGIModelConfig
 from lighteval.models.sglang.sglang_model import SGLangModel, SGLangModelConfig
 from lighteval.models.transformers.adapter_model import AdapterModel, AdapterModelConfig
 from lighteval.models.transformers.delta_model import DeltaModel, DeltaModelConfig
-from lighteval.models.transformers.transformers_model import TransformersModel, TransformersModelConfig
-from lighteval.models.transformers.vlm_transformers_model import VLMTransformersModel, VLMTransformersModelConfig
-from lighteval.models.vllm.vllm_model import AsyncVLLMModel, VLLMModel, VLLMModelConfig
+from lighteval.models.transformers.transformers_model import (
+    TransformersModel,
+    TransformersModelConfig,
+)
+from lighteval.models.transformers.vlm_transformers_model import (
+    VLMTransformersModel,
+    VLMTransformersModelConfig,
+)
+
+try:
+    from lighteval.models.vllm.vllm_model import (
+        AsyncVLLMModel,
+        VLLMModel,
+        VLLMModelConfig,
+    )
+except ImportError:
+    AsyncVLLMModel = VLLMModel = VLLMModelConfig = None
 
 
 logger = logging.getLogger(__name__)
+
+HAS_VLLM_LOCAL = VLLMModelConfig is not None
 
 
 def load_model(  # noqa: C901
@@ -63,7 +79,9 @@ def load_model(  # noqa: C901
     if isinstance(config, TGIModelConfig):
         return load_model_with_tgi(config)
 
-    if isinstance(config, InferenceEndpointModelConfig) or isinstance(config, ServerlessEndpointModelConfig):
+    if isinstance(config, InferenceEndpointModelConfig) or isinstance(
+        config, ServerlessEndpointModelConfig
+    ):
         return load_model_with_inference_endpoints(config)
 
     if isinstance(config, TransformersModelConfig):
@@ -75,7 +93,7 @@ def load_model(  # noqa: C901
     if isinstance(config, DummyModelConfig):
         return load_dummy_model(config)
 
-    if isinstance(config, VLLMModelConfig):
+    if HAS_VLLM_LOCAL and isinstance(config, VLLMModelConfig):
         return load_model_with_accelerate_or_default(config)
 
     if isinstance(config, CustomModelConfig):
@@ -103,12 +121,16 @@ def load_litellm_model(config: LiteLLMModelConfig):
 
 
 def load_custom_model(config: CustomModelConfig):
-    logger.warning(f"Executing custom model code loaded from {config.model_definition_file_path}.")
+    logger.warning(
+        f"Executing custom model code loaded from {config.model_definition_file_path}."
+    )
 
     import importlib.util
 
     # Load the Python file
-    spec = importlib.util.spec_from_file_location("custom_model_module", config.model_definition_file_path)
+    spec = importlib.util.spec_from_file_location(
+        "custom_model_module", config.model_definition_file_path
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load file: {config.model_definition_file_path}")
 
@@ -119,19 +141,27 @@ def load_custom_model(config: CustomModelConfig):
     model_class = None
     for attr_name in dir(module):
         attr = getattr(module, attr_name)
-        if isinstance(attr, type) and issubclass(attr, LightevalModel) and attr != LightevalModel:
+        if (
+            isinstance(attr, type)
+            and issubclass(attr, LightevalModel)
+            and attr != LightevalModel
+        ):
             model_class = attr
             break
 
     if model_class is None:
-        raise ValueError(f"No class inheriting from LightevalModel found in {config.model_definition_file_path}")
+        raise ValueError(
+            f"No class inheriting from LightevalModel found in {config.model_definition_file_path}"
+        )
 
     model = model_class(config)
 
     return model
 
 
-def load_model_with_inference_endpoints(config: Union[InferenceEndpointModelConfig, ServerlessEndpointModelConfig]):
+def load_model_with_inference_endpoints(
+    config: Union[InferenceEndpointModelConfig, ServerlessEndpointModelConfig],
+):
     logger.info("Spin up model using inference endpoint.")
     model = InferenceEndpointModel(config=config)
     return model
@@ -139,14 +169,18 @@ def load_model_with_inference_endpoints(config: Union[InferenceEndpointModelConf
 
 def load_model_with_accelerate_or_default(
     config: Union[
-        AdapterModelConfig, TransformersModelConfig, DeltaModelConfig, VLLMModelConfig, VLMTransformersModelConfig
+        AdapterModelConfig,
+        TransformersModelConfig,
+        DeltaModelConfig,
+        VLLMModelConfig,
+        VLMTransformersModelConfig,
     ],
 ):
     if isinstance(config, AdapterModelConfig):
         model = AdapterModel(config=config)
     elif isinstance(config, DeltaModelConfig):
         model = DeltaModel(config=config)
-    elif isinstance(config, VLLMModelConfig):
+    elif HAS_VLLM_LOCAL and isinstance(config, VLLMModelConfig):
         if config.is_async:
             model = AsyncVLLMModel(config=config)
         else:

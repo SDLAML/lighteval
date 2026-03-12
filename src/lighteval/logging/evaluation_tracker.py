@@ -34,7 +34,13 @@ from pathlib import Path
 import torch
 from datasets import Dataset, load_dataset
 from datasets.utils.metadata import MetadataConfigs
-from huggingface_hub import DatasetCard, DatasetCardData, HfApi, HFSummaryWriter, hf_hub_url
+from huggingface_hub import (
+    DatasetCard,
+    DatasetCardData,
+    HfApi,
+    HFSummaryWriter,
+    hf_hub_url,
+)
 
 from lighteval.logging.info_loggers import (
     DetailsLogger,
@@ -184,7 +190,9 @@ class EvaluationTracker:
             try:
                 import trackio as wandb
 
-                logger.warning("Trackio was found available in your environment, using it instead of wandb")
+                logger.warning(
+                    "Trackio was found available in your environment, using it instead of wandb"
+                )
                 self.wandb_project = os.environ.get("WANDB_PROJECT", None)
                 self.space_id = os.environ.get("WANDB_SPACE_ID", None)
 
@@ -200,7 +208,9 @@ class EvaluationTracker:
                 wandb_kwargs = {}
 
             if self.wandb_project is None:
-                raise ValueError("You need to specify the project name using the WANDB_PROJECT environment variable")
+                raise ValueError(
+                    "You need to specify the project name using the WANDB_PROJECT environment variable"
+                )
 
             self.wandb_run = wandb.init(
                 project=self.wandb_project,
@@ -218,7 +228,9 @@ class EvaluationTracker:
             "versions": self.versions_logger.versions,
             "config_tasks": self.task_config_logger.tasks_configs,
             "summary_tasks": self.details_logger.compiled_details,
-            "summary_general": asdict(self.details_logger.compiled_details_over_all_tasks),
+            "summary_general": asdict(
+                self.details_logger.compiled_details_over_all_tasks
+            ),
         }
         return results
 
@@ -287,12 +299,15 @@ class EvaluationTracker:
 
         if self.should_push_results_to_tensorboard:
             self.push_to_tensorboard(
-                results=self.metrics_logger.metric_aggregated, details=self.details_logger.compiled_details
+                results=self.metrics_logger.metric_aggregated,
+                details=self.details_logger.compiled_details,
             )
 
     def push_to_wandb(self, results_dict: dict, details_datasets: dict) -> None:
         # reformat the results key to replace ':' with '/'
-        results_dict = {k.replace(":", "/"): v for k, v in results_dict["results"].items()}
+        results_dict = {
+            k.replace(":", "/"): v for k, v in results_dict["results"].items()
+        }
 
         self.wandb_run.log(
             {**results_dict},
@@ -303,49 +318,87 @@ class EvaluationTracker:
         if self.results_path_template is not None:
             org_model_parts = self.general_config_logger.model_name.split("/")
             org = org_model_parts[0] if len(org_model_parts) >= 2 else ""
-            model = org_model_parts[1] if len(org_model_parts) >= 2 else org_model_parts[0]
+            model = (
+                org_model_parts[1] if len(org_model_parts) >= 2 else org_model_parts[0]
+            )
             output_dir = self.output_dir
-            output_dir_results = Path(self.results_path_template.format(output_dir=output_dir, org=org, model=model))
+            output_dir_results = Path(
+                self.results_path_template.format(
+                    output_dir=output_dir, org=org, model=model
+                )
+            )
         else:
-            output_dir_results = Path(self.output_dir) / "results" / self.general_config_logger.model_name.strip("/")
+            output_dir_results = (
+                Path(self.output_dir)
+                / "results"
+                / self.general_config_logger.model_name.strip("/")
+            )
         self.fs.mkdirs(output_dir_results, exist_ok=True)
         output_results_file = output_dir_results / f"results_{date_id}.json"
         logger.info(f"Saving results to {output_results_file}")
         with self.fs.open(output_results_file, "w") as f:
-            f.write(json.dumps(results_dict, cls=EnhancedJSONEncoder, indent=2, ensure_ascii=False))
+            f.write(
+                json.dumps(
+                    results_dict, cls=EnhancedJSONEncoder, indent=2, ensure_ascii=False
+                )
+            )
 
     def _get_details_sub_folder(self, date_id: str):
-        output_dir_details = Path(self.output_dir) / "details" / self.general_config_logger.model_name.strip("/")
+        output_dir_details = (
+            Path(self.output_dir)
+            / "details"
+            / self.general_config_logger.model_name.strip("/")
+        )
         if date_id in ["first", "last"]:
             # Get all folders in output_dir_details
             if not self.fs.exists(output_dir_details):
-                raise FileNotFoundError(f"Details directory {output_dir_details} does not exist")
+                raise FileNotFoundError(
+                    f"Details directory {output_dir_details} does not exist"
+                )
 
             # List all folders and filter out files
-            folders = [f["name"] for f in self.fs.listdir(output_dir_details) if f["type"] == "directory"]
+            folders = [
+                f["name"]
+                for f in self.fs.listdir(output_dir_details)
+                if f["type"] == "directory"
+            ]
 
             if not folders:
-                raise FileNotFoundError(f"No timestamp folders found in {output_dir_details}")
+                raise FileNotFoundError(
+                    f"No timestamp folders found in {output_dir_details}"
+                )
 
             # Parse timestamps and get first or last
             date_id = max(folders) if date_id == "last" else min(folders)
         return output_dir_details / date_id
 
-    def load_details_datasets(self, date_id: str, task_names: list[str]) -> dict[str, Dataset]:
+    def load_details_datasets(
+        self, date_id: str, task_names: list[str]
+    ) -> dict[str, Dataset]:
         output_dir_details_sub_folder = self._get_details_sub_folder(date_id)
         logger.info(f"Loading details from {output_dir_details_sub_folder}")
-        date_id = output_dir_details_sub_folder.name  # Overwrite date_id in case of latest
+        date_id = (
+            output_dir_details_sub_folder.name
+        )  # Overwrite date_id in case of latest
         details_datasets = {}
-        for file in self.fs.glob(str(output_dir_details_sub_folder / f"details_*_{date_id}.parquet")):
-            task_name = Path(file).stem.replace("details_", "").replace(f"_{date_id}", "")
+        for file in self.fs.glob(
+            str(output_dir_details_sub_folder / f"details_*_{date_id}.parquet")
+        ):
+            task_name = (
+                Path(file).stem.replace("details_", "").replace(f"_{date_id}", "")
+            )
             if "|".join(task_name.split("|")[:-1]) not in task_names:
-                logger.info(f"Skipping {task_name} because it is not in the task_names list")
+                logger.info(
+                    f"Skipping {task_name} because it is not in the task_names list"
+                )
                 continue
             dataset = load_dataset("parquet", data_files=file, split="train")
             details_datasets[task_name] = dataset
 
         for task_name in task_names:
-            if not any(task_name.startswith(task_name) for task_name in details_datasets.keys()):
+            if not any(
+                task_name.startswith(task_name) for task_name in details_datasets.keys()
+            ):
                 raise ValueError(
                     f"Task {task_name} not found in details datasets. Check the tasks to be evaluated or the date_id used to load the details ({date_id})."
                 )
@@ -356,7 +409,9 @@ class EvaluationTracker:
         self.fs.mkdirs(output_dir_details_sub_folder, exist_ok=True)
         logger.info(f"Saving details to {output_dir_details_sub_folder}")
         for task_name, dataset in details_datasets.items():
-            output_file_details = output_dir_details_sub_folder / f"details_{task_name}_{date_id}.parquet"
+            output_file_details = (
+                output_dir_details_sub_folder / f"details_{task_name}_{date_id}.parquet"
+            )
             with self.fs.open(str(output_file_details), "wb") as f:
                 dataset.to_parquet(f)
 
@@ -374,11 +429,16 @@ class EvaluationTracker:
             "versions": self.versions_logger.versions,
             "config_tasks": self.task_config_logger.tasks_configs,
             "summary_tasks": self.details_logger.compiled_details,
-            "summary_general": asdict(self.details_logger.compiled_details_over_all_tasks),
+            "summary_general": asdict(
+                self.details_logger.compiled_details_over_all_tasks
+            ),
         }
 
         final_dict = {
-            k: {eval_name.replace("|", ":"): eval_score for eval_name, eval_score in v.items()}
+            k: {
+                eval_name.replace("|", ":"): eval_score
+                for eval_name, eval_score in v.items()
+            }
             for k, v in to_dump.items()
         }
 
@@ -401,12 +461,16 @@ class EvaluationTracker:
         fsspec_repo_uri = f"hf://datasets/{repo_id}"
 
         if not self.api.repo_exists(repo_id):
-            self.api.create_repo(repo_id, private=not (self.public), repo_type="dataset", exist_ok=True)
+            self.api.create_repo(
+                repo_id, private=not (self.public), repo_type="dataset", exist_ok=True
+            )
             logger.info(f"Repository {repo_id} not found, creating it.")
 
         # We upload it both as a json and a parquet file
         result_file_base_name = f"results_{date_id}"
-        results_json = json.dumps(results_dict, cls=EnhancedJSONEncoder, indent=2, ensure_ascii=False)
+        results_json = json.dumps(
+            results_dict, cls=EnhancedJSONEncoder, indent=2, ensure_ascii=False
+        )
         url = self.api.upload_file(
             repo_id=repo_id,
             path_or_fileobj=BytesIO(results_json.encode("utf-8")),
@@ -416,21 +480,32 @@ class EvaluationTracker:
         logger.info(f"Uploaded evaluation details to {url}")
 
         results_dataset = Dataset.from_dict(
-            {key: [json.dumps(v, cls=EnhancedJSONEncoder, indent=2)] for key, v in results_dict.items()}
+            {
+                key: [json.dumps(v, cls=EnhancedJSONEncoder, indent=2)]
+                for key, v in results_dict.items()
+            }
         )
         results_dataset.to_parquet(f"{fsspec_repo_uri}/{result_file_base_name}.parquet")
 
         for task_name, dataset in details.items():
-            output_file_details = Path(date_id) / f"details_{task_name}_{date_id}.parquet"
+            output_file_details = (
+                Path(date_id) / f"details_{task_name}_{date_id}.parquet"
+            )
             dataset.to_parquet(f"{fsspec_repo_uri}/{output_file_details}")
 
         self.recreate_metadata_card(repo_id)
 
-    def push_results_to_hub(self, repo_id: str, path_in_repo: str, private: bool | None = None):
+    def push_results_to_hub(
+        self, repo_id: str, path_in_repo: str, private: bool | None = None
+    ):
         repo_id = repo_id if "/" in repo_id else f"{self.hub_results_org}/{repo_id}"
         private = private if private is not None else not self.public
-        self.api.create_repo(repo_id, private=private, repo_type="dataset", exist_ok=True)
-        results_json = json.dumps(self.results, cls=EnhancedJSONEncoder, indent=2, ensure_ascii=False)
+        self.api.create_repo(
+            repo_id, private=private, repo_type="dataset", exist_ok=True
+        )
+        results_json = json.dumps(
+            self.results, cls=EnhancedJSONEncoder, indent=2, ensure_ascii=False
+        )
         self.api.upload_file(
             repo_id=repo_id,
             path_or_fileobj=results_json.encode(),
@@ -438,10 +513,14 @@ class EvaluationTracker:
             repo_type="dataset",
         )
 
-    def push_details_to_hub(self, repo_id: str, path_in_repo: str, private: bool | None = None):
+    def push_details_to_hub(
+        self, repo_id: str, path_in_repo: str, private: bool | None = None
+    ):
         repo_id = repo_id if "/" in repo_id else f"{self.hub_results_org}/{repo_id}"
         private = private if private is not None else not self.public
-        self.api.create_repo(repo_id, private=private, repo_type="dataset", exist_ok=True)
+        self.api.create_repo(
+            repo_id, private=private, repo_type="dataset", exist_ok=True
+        )
         for task_name, details in self.details:
             details_json = "\n".join([json.dumps(detail) for detail in details])
             self.api.upload_file(
@@ -462,7 +541,9 @@ class EvaluationTracker:
         results_files = [f for f in files_in_repo if ".json" in f]
         parquet_files = [f for f in files_in_repo if ".parquet" in f]
 
-        details_file_regex = re.compile(r"details_(?P<task_name>.*?)_(?P<date>\d+-\d+-\d+T.*)\.parquet$")
+        details_file_regex = re.compile(
+            r"details_(?P<task_name>.*?)_(?P<date>\d+-\d+-\d+T.*)\.parquet$"
+        )
         multiple_results = len(results_files) > 1
 
         # Get last eval results date for each task (evals might be non overlapping)
@@ -475,9 +556,9 @@ class EvaluationTracker:
             # subfile have this general format:
             # `2023-09-03T10-57-04.203304/details_harness|hendrycksTest-us_foreign_policy|5_2023-09-03T10-57-04.203304.parquet`
             # in the iso date, the `:` are replaced by `-` because windows does not allow `:` in their filenames
-            task_name = (
-                details_file_regex.match(os.path.basename(sub_file)).group("task_name")  # type: ignore
-            )
+            task_name = details_file_regex.match(os.path.basename(sub_file)).group(
+                "task_name"
+            )  # type: ignore
             # task_name is then equal to `leaderboard|mmlu:us_foreign_policy|5`
 
             # to be able to parse the filename as iso dates, we need to re-replace the `-` with `:`
@@ -487,7 +568,9 @@ class EvaluationTracker:
             eval_date = datetime.fromisoformat(iso_date)
 
             last_eval_date_results[task_name] = (
-                max(last_eval_date_results[task_name], eval_date) if task_name in last_eval_date_results else eval_date
+                max(last_eval_date_results[task_name], eval_date)
+                if task_name in last_eval_date_results
+                else eval_date
             )
 
         max_last_eval_date_results = list(last_eval_date_results.values())[0]
@@ -504,21 +587,31 @@ class EvaluationTracker:
         # Add the results config and add the result file as a parquet file
         for sub_file in parquet_files:
             if "results_" in sub_file:
-                eval_date = os.path.basename(sub_file).replace("results_", "").replace(".parquet", "")
+                eval_date = (
+                    os.path.basename(sub_file)
+                    .replace("results_", "")
+                    .replace(".parquet", "")
+                )
                 sanitized_task = "results"
-                sanitized_last_eval_date_results = re.sub(r"[^\w\.]", "_", max_last_eval_date_results)
+                sanitized_last_eval_date_results = re.sub(
+                    r"[^\w\.]", "_", max_last_eval_date_results
+                )
                 repo_file_name = os.path.basename(sub_file)
             else:
                 filename = os.path.basename(sub_file)
 
                 task_name_match = details_file_regex.match(filename)  # type: ignore
                 if not task_name_match:
-                    raise ValueError(f"Could not parse task name from filename: {filename}")
+                    raise ValueError(
+                        f"Could not parse task name from filename: {filename}"
+                    )
                 task_name = task_name_match.group("task_name")
                 eval_date = task_name_match.group("date")
 
                 sanitized_task = re.sub(r"\W", "_", task_name)
-                sanitized_last_eval_date_results = re.sub(r"[^\w\.]", "_", last_eval_date_results[task_name])
+                sanitized_last_eval_date_results = re.sub(
+                    r"[^\w\.]", "_", last_eval_date_results[task_name]
+                )
                 repo_file_name = os.path.join("**", os.path.basename(sub_file))
 
             sanitized_eval_date = re.sub(r"[^\w\.]", "_", eval_date)
@@ -526,7 +619,9 @@ class EvaluationTracker:
             if multiple_results:
                 if sanitized_task not in card_metadata:
                     card_metadata[sanitized_task] = {
-                        "data_files": [{"split": sanitized_eval_date, "path": [repo_file_name]}]
+                        "data_files": [
+                            {"split": sanitized_eval_date, "path": [repo_file_name]}
+                        ]
                     }
                 else:
                     former_entry = card_metadata[sanitized_task]
@@ -540,13 +635,16 @@ class EvaluationTracker:
                         f"Entry for {sanitized_task} already exists in {former_entry} for repo {repo_id} and file {sub_file}"
                     )
                 card_metadata[sanitized_task] = {
-                    "data_files": [{"split": sanitized_eval_date, "path": [repo_file_name]}]
+                    "data_files": [
+                        {"split": sanitized_eval_date, "path": [repo_file_name]}
+                    ]
                 }
 
             if sanitized_eval_date == sanitized_last_eval_date_results:
                 all_entry = card_metadata[sanitized_task]["data_files"]
                 card_metadata[sanitized_task] = {
-                    "data_files": all_entry + [{"split": "latest", "path": [repo_file_name]}]
+                    "data_files": all_entry
+                    + [{"split": "latest", "path": [repo_file_name]}]
                 }
 
             if "results_" in sub_file:
@@ -569,10 +667,14 @@ class EvaluationTracker:
                         sanitized_special_task += f"_{task_info[-2]}_{task_info[-1]}"
                     if sanitized_special_task not in card_metadata:
                         card_metadata[sanitized_special_task] = {
-                            "data_files": [{"split": sanitized_eval_date, "path": [repo_file_name]}]
+                            "data_files": [
+                                {"split": sanitized_eval_date, "path": [repo_file_name]}
+                            ]
                         }
                     else:
-                        former_entry = card_metadata[sanitized_special_task]["data_files"]
+                        former_entry = card_metadata[sanitized_special_task][
+                            "data_files"
+                        ]
                         # Any entry for this split already?
                         try:
                             split_index = next(
@@ -584,14 +686,24 @@ class EvaluationTracker:
                             split_index = None
                         if split_index is None:
                             card_metadata[sanitized_special_task] = {
-                                "data_files": former_entry + [{"split": sanitized_eval_date, "path": [repo_file_name]}]
+                                "data_files": former_entry
+                                + [
+                                    {
+                                        "split": sanitized_eval_date,
+                                        "path": [repo_file_name],
+                                    }
+                                ]
                             }
                         else:
                             former_entry[split_index]["path"] += [repo_file_name]
-                            card_metadata[sanitized_special_task] = {"data_files": former_entry}
+                            card_metadata[sanitized_special_task] = {
+                                "data_files": former_entry
+                            }
 
                     if sanitized_eval_date == sanitized_last_eval_date_results:
-                        former_entry = card_metadata[sanitized_special_task]["data_files"]
+                        former_entry = card_metadata[sanitized_special_task][
+                            "data_files"
+                        ]
                         try:
                             split_index = next(
                                 index
@@ -602,16 +714,25 @@ class EvaluationTracker:
                             split_index = None
                         if split_index is None:
                             card_metadata[sanitized_special_task] = {
-                                "data_files": former_entry + [{"split": "latest", "path": [repo_file_name]}]
+                                "data_files": former_entry
+                                + [{"split": "latest", "path": [repo_file_name]}]
                             }
                         else:
                             former_entry[split_index]["path"] += [repo_file_name]
-                            card_metadata[sanitized_special_task] = {"data_files": former_entry}
+                            card_metadata[sanitized_special_task] = {
+                                "data_files": former_entry
+                            }
 
         # Cleanup a little the dataset card
         # Get the top results
-        last_results_file = [f for f in results_files if max_last_eval_date_results.replace(":", "-") in f][0]
-        last_results_file_path = hf_hub_url(repo_id=repo_id, filename=last_results_file, repo_type="dataset")
+        last_results_file = [
+            f
+            for f in results_files
+            if max_last_eval_date_results.replace(":", "-") in f
+        ][0]
+        last_results_file_path = hf_hub_url(
+            repo_id=repo_id, filename=last_results_file, repo_type="dataset"
+        )
         f: Dataset = load_dataset("json", data_files=last_results_file_path, split="train")  # type: ignore
         results_dict = f["results"][0]
         new_dictionary = {"all": results_dict}
@@ -621,10 +742,10 @@ class EvaluationTracker:
         # If we are pushing to the Open LLM Leaderboard, we'll store specific data in the model card.
         is_open_llm_leaderboard = repo_id.split("/")[0] == "open-llm-leaderboard"
         if is_open_llm_leaderboard:
-            org_string = (
-                "on the [Open LLM Leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard)."
+            org_string = "on the [Open LLM Leaderboard](https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard)."
+            leaderboard_url = (
+                "https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard"
             )
-            leaderboard_url = "https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard"
             point_of_contact = "clementine@hf.co"
         else:
             org_string = ""
@@ -660,14 +781,18 @@ class EvaluationTracker:
         card.push_to_hub(repo_id, repo_type="dataset")
 
     def push_to_tensorboard(  # noqa: C901
-        self, results: dict[str, dict[str, float]], details: dict[str, DetailsLogger.CompiledDetail]
+        self,
+        results: dict[str, dict[str, float]],
+        details: dict[str, DetailsLogger.CompiledDetail],
     ):
         if not is_package_available("tensorboardX"):
             logger.warning(not_installed_error_message("tensorboardX"))
             return
 
         if not is_package_available("nanotron"):
-            logger.warning("You cannot push results to tensorboard without having nanotron installed. Skipping")
+            logger.warning(
+                "You cannot push results to tensorboard without having nanotron installed. Skipping"
+            )
             return
 
         prefix = self.tensorboard_metric_prefix
@@ -705,24 +830,42 @@ class EvaluationTracker:
                         continue
                     if bench_suite not in bench_averages:
                         bench_averages[bench_suite] = {}
-                    bench_averages[bench_suite][metric] = bench_averages[bench_suite].get(metric, []) + [float(value)]
+                    bench_averages[bench_suite][metric] = bench_averages[
+                        bench_suite
+                    ].get(metric, []) + [float(value)]
             logger.info(f"Pushing {task_name} {values} to tensorboard")
             for metric, value in values.items():
                 if "stderr" in metric:
-                    tb_context.add_scalar(f"stderr_{prefix}/{task_name}/{metric}", value, global_step=global_step)
+                    tb_context.add_scalar(
+                        f"stderr_{prefix}/{task_name}/{metric}",
+                        value,
+                        global_step=global_step,
+                    )
                 elif bench_suite is not None:
                     tb_context.add_scalar(
-                        f"{prefix}_{bench_suite}/{task_name}/{metric}", value, global_step=global_step
+                        f"{prefix}_{bench_suite}/{task_name}/{metric}",
+                        value,
+                        global_step=global_step,
                     )
                 else:
-                    tb_context.add_scalar(f"{prefix}/{task_name}/{metric}", value, global_step=global_step)
+                    tb_context.add_scalar(
+                        f"{prefix}/{task_name}/{metric}", value, global_step=global_step
+                    )
         # Tasks with subtasks
         for name, values in bench_averages.items():
             for metric, values in values.items():
-                logger.info(f"Pushing average {name} {metric} {sum(values) / len(values)} to tensorboard")
-                tb_context.add_scalar(f"{prefix}/{name}/{metric}", sum(values) / len(values), global_step=global_step)
+                logger.info(
+                    f"Pushing average {name} {metric} {sum(values) / len(values)} to tensorboard"
+                )
+                tb_context.add_scalar(
+                    f"{prefix}/{name}/{metric}",
+                    sum(values) / len(values),
+                    global_step=global_step,
+                )
 
-        tb_context.add_text("eval_config", obj_to_markdown(results), global_step=global_step)
+        tb_context.add_text(
+            "eval_config", obj_to_markdown(results), global_step=global_step
+        )
 
         for task_name, task_details in details.items():
             tb_context.add_text(
@@ -740,7 +883,10 @@ class EvaluationTracker:
         time.sleep(5)
         files = os.listdir(output_dir_tb)
         for file in files:
-            os.rename(os.path.join(output_dir_tb, file), os.path.join(output_dir_tb, f"{global_step:07d}_{file}"))
+            os.rename(
+                os.path.join(output_dir_tb, file),
+                os.path.join(output_dir_tb, f"{global_step:07d}_{file}"),
+            )
 
         # Now we can push to the hub
         tb_context.scheduler.trigger()

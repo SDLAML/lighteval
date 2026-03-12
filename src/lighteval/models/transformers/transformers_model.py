@@ -162,6 +162,7 @@ class TransformersModelConfig(ModelConfig):
     pairwise_tokenization: bool = False
     continuous_batching: bool = False
     override_chat_template: bool = None
+    chat_template_kwargs: dict = Field(default_factory=dict)
 
     def model_post_init(self, __context):
         if self.multichoice_continuations_start_space is True:
@@ -231,7 +232,10 @@ class TransformersModel(LightevalModel):
             model_size = -1
 
         self.prompt_manager = PromptManager(
-            use_chat_template=self.use_chat_template, tokenizer=self.tokenizer, system_prompt=config.system_prompt
+            use_chat_template=self.use_chat_template,
+            tokenizer=self.tokenizer,
+            system_prompt=config.system_prompt,
+            chat_template_kwargs=config.chat_template_kwargs,
         )
 
         # Initialize cache for tokenization and predictions
@@ -296,6 +300,7 @@ class TransformersModel(LightevalModel):
             use_chat_template=self.use_chat_template,
             tokenizer=self.tokenizer,
             system_prompt=config.system_prompt if config else None,
+            chat_template_kwargs=config.chat_template_kwargs if config else None,
         )
 
         # Initialize cache for tokenization and predictions

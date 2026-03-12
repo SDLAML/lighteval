@@ -90,10 +90,16 @@ _MMLU_SUBSETS = [
 def mmlu_prompt(line, task_name: str = None):
     subject = line["subject"]
     query = f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}"
-    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+    query += "".join(
+        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
+    )
     query += "\nAnswer:"
 
-    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+    gold_ix = (
+        ascii_uppercase.index(line["answer"])
+        if isinstance(line["answer"], str)
+        else line["answer"]
+    )
 
     return Doc(
         task_name=task_name,
@@ -103,14 +109,21 @@ def mmlu_prompt(line, task_name: str = None):
         fewshot_sorting_class=line["choices"][gold_ix],
         instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
     )
+
 
 def mmlu_chat_prompt(line, task_name: str = None):
     subject = line["subject"]
-    query = line['question']
-    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+    query = line["question"]
+    query += "".join(
+        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
+    )
     query += "\nThink step by step before answering."
 
-    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+    gold_ix = (
+        ascii_uppercase.index(line["answer"])
+        if isinstance(line["answer"], str)
+        else line["answer"]
+    )
 
     return Doc(
         task_name=task_name,
@@ -121,15 +134,22 @@ def mmlu_chat_prompt(line, task_name: str = None):
         instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
     )
 
+
 def mmlu_redux_prompt(line, task_name: str = None):
-    if line['error_type'] != "ok":
+    if line["error_type"] != "ok":
         return None
-    
+
     query = f"Question: {line['question']}"
-    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+    query += "".join(
+        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
+    )
     query += "\n\nAnswer:"
 
-    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+    gold_ix = (
+        ascii_uppercase.index(line["answer"])
+        if isinstance(line["answer"], str)
+        else line["answer"]
+    )
 
     return Doc(
         task_name=task_name,
@@ -139,15 +159,22 @@ def mmlu_redux_prompt(line, task_name: str = None):
         fewshot_sorting_class=line["choices"][gold_ix],
     )
 
+
 def mmlu_redux_chat_prompt(line, task_name: str = None):
-    if line['error_type'] != "ok":
+    if line["error_type"] != "ok":
         return None
-    
-    query = line['question']
-    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])])
+
+    query = line["question"]
+    query += "".join(
+        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
+    )
     query += "\n\nThink step by step before answering."
 
-    gold_ix = ascii_uppercase.index(line["answer"]) if isinstance(line["answer"], str) else line["answer"]
+    gold_ix = (
+        ascii_uppercase.index(line["answer"])
+        if isinstance(line["answer"], str)
+        else line["answer"]
+    )
 
     return Doc(
         task_name=task_name,
@@ -156,6 +183,7 @@ def mmlu_redux_chat_prompt(line, task_name: str = None):
         gold_index=gold_ix,
         # fewshot_sorting_class=line["choices"][gold_ix],
     )
+
 
 TASKS_TABLE = [
     LightevalTaskConfig(

@@ -124,7 +124,9 @@ class LightevalTaskConfig:
     # Additional hf dataset config
     hf_revision: str | None = None
     hf_filter: Callable[[dict], bool] | None = None
-    hf_avail_splits: ListLike[str] = field(default_factory=lambda: ["train", "validation", "test"])
+    hf_avail_splits: ListLike[str] = field(
+        default_factory=lambda: ["train", "validation", "test"]
+    )
 
     # Splits
     evaluation_splits: ListLike[str] = field(default_factory=lambda: ["validation"])
@@ -148,12 +150,17 @@ class LightevalTaskConfig:
 
     def __post_init__(self):
         # If we got a Metrics enums instead of a Metric, we convert
-        self.metrics = [metric.value if isinstance(metric, Metrics) else metric for metric in self.metrics]
+        self.metrics = [
+            metric.value if isinstance(metric, Metrics) else metric
+            for metric in self.metrics
+        ]
         # Convert list to tuple for hashing
         self.metrics = tuple(self.metrics)
         self.hf_avail_splits = tuple(self.hf_avail_splits)
         self.evaluation_splits = tuple(self.evaluation_splits)
-        self.stop_sequence = self.stop_sequence if self.stop_sequence is not None else ()
+        self.stop_sequence = (
+            self.stop_sequence if self.stop_sequence is not None else ()
+        )
         self.full_name = f"{self.name}|{self.num_fewshots}"  # todo clefourrier: this is likely incorrect
 
     def __str__(self, lite: bool = False):  # noqa: C901
@@ -172,11 +179,15 @@ class LightevalTaskConfig:
                 for ix, metrics in enumerate(v):
                     for metric_k, metric_v in metrics.items():
                         if isinstance(metric_v, functools.partial):
-                            func_name = getattr(metric_v.func, "__name__", str(metric_v.func))
+                            func_name = getattr(
+                                metric_v.func, "__name__", str(metric_v.func)
+                            )
                             repr_v = f"partial({func_name}, ...)"
                         elif isinstance(metric_v, Callable):
                             repr_v = getattr(metric_v, "__name__", repr(metric_v))
-                        elif isinstance(metric_v, Metric.get_allowed_types_for_metrics()):
+                        elif isinstance(
+                            metric_v, Metric.get_allowed_types_for_metrics()
+                        ):
                             repr_v = str(metric_v)
                         else:
                             repr_v = repr(metric_v)
@@ -227,8 +238,9 @@ class LightevalTask:
         self._docs = None
 
         self._fewshot_docs = None
-        self.fewshot_split: str | None = config.few_shots_split or self.get_first_possible_fewshot_splits(
-            config.hf_avail_splits or []
+        self.fewshot_split: str | None = (
+            config.few_shots_split
+            or self.get_first_possible_fewshot_splits(config.hf_avail_splits or [])
         )
         self.fewshot_selection = config.few_shots_select
         self.must_remove_duplicate_docs = config.must_remove_duplicate_docs
@@ -252,7 +264,9 @@ class LightevalTask:
                 # Update the number of samples to generate using the information in the metric name
                 self.num_samples.append(metric.sample_level_fn.num_samples())
 
-    def get_first_possible_fewshot_splits(self, available_splits: ListLike[str]) -> str | None:
+    def get_first_possible_fewshot_splits(
+        self, available_splits: ListLike[str]
+    ) -> str | None:
         """Parses the possible fewshot split keys in order: train, then validation
         keys and matches them with the available keys.  Returns the first
         available.
@@ -261,20 +275,26 @@ class LightevalTask:
             str: the first available fewshot splits or None if nothing is available
         """
         # Possible few shot splits are the available splits not used for evaluation
-        possible_fewshot_splits = [k for k in available_splits if k not in self.evaluation_split]
+        possible_fewshot_splits = [
+            k for k in available_splits if k not in self.evaluation_split
+        ]
         stored_splits = []
 
         # We look at these keys in order (first the training sets, then the validation sets)
         allowed_splits = ["train", "dev", "valid", "default"]
         for allowed_split in allowed_splits:
             # We do a partial match of the allowed splits
-            available_splits = [k for k in possible_fewshot_splits if allowed_split in k]
+            available_splits = [
+                k for k in possible_fewshot_splits if allowed_split in k
+            ]
             stored_splits.extend(available_splits)
 
         if len(stored_splits) > 0:
             return stored_splits[0]
 
-        logger.warning(f"Careful, the task {self.name} is using evaluation data to build the few shot examples.")
+        logger.warning(
+            f"Careful, the task {self.name} is using evaluation data to build the few shot examples."
+        )
         return None
 
     def _get_docs_from_split(self, splits: list[str], few_shots=False) -> list[Doc]:
@@ -339,9 +359,13 @@ class LightevalTask:
 
             # If we have no available few shot split, the few shot data is the eval data!
             if self.fewshot_split is None:
-                self._fewshot_docs = self._get_docs_from_split(self.evaluation_split, few_shots=True)
+                self._fewshot_docs = self._get_docs_from_split(
+                    self.evaluation_split, few_shots=True
+                )
             else:  # Normal case
-                self._fewshot_docs = self._get_docs_from_split([self.fewshot_split], few_shots=True)
+                self._fewshot_docs = self._get_docs_from_split(
+                    [self.fewshot_split], few_shots=True
+                )
 
         return self._fewshot_docs
 
@@ -412,7 +436,9 @@ class LightevalTask:
         return aggregations
 
     @staticmethod
-    def load_datasets(tasks: dict[str, "LightevalTask"], dataset_loading_processes: int = 1) -> None:
+    def load_datasets(
+        tasks: dict[str, "LightevalTask"], dataset_loading_processes: int = 1
+    ) -> None:
         """Load datasets from the HuggingFace Hub for the given tasks.
 
         Args:
@@ -450,6 +476,38 @@ class LightevalTask:
         Returns:
             DatasetDict: The loaded dataset dictionary containing all splits.
         """
+        # Support local datasets saved with DatasetDict.save_to_disk().
+        # For RULER tasks, generate the requested length on first use.
+        import os as _os
+        from pathlib import Path as _Path
+
+        _ruler_tok = _os.environ.get("RULER_TOKENIZER")
+        if _ruler_tok and not _os.path.isdir(task.dataset_path):
+            try:
+                from lighteval.tasks.tasks.ruler import (
+                    _get_cache_dir,
+                    ensure_ruler_cache,
+                )
+
+                _rel = _Path(task.dataset_path).relative_to(_get_cache_dir(_ruler_tok))
+                # Path structure: <length>/<subset>
+                if len(_rel.parts) >= 2 and _rel.parts[0].isdigit():
+                    ensure_ruler_cache(
+                        _ruler_tok, [int(_rel.parts[0])], [_rel.parts[1]]
+                    )
+            except (ImportError, ValueError):
+                pass
+
+        if _os.path.isdir(task.dataset_path) and _os.path.exists(
+            _os.path.join(task.dataset_path, "dataset_dict.json")
+        ):
+            from datasets import load_from_disk
+
+            dataset = load_from_disk(task.dataset_path)
+            if task.dataset_filter is not None:
+                dataset = dataset.filter(task.dataset_filter)
+            return dataset  # type: ignore
+
         dataset = load_dataset(
             path=task.dataset_path,
             name=task.dataset_config_name,

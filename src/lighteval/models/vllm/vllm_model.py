@@ -28,7 +28,7 @@ import os
 from typing import Coroutine, Optional
 
 import torch
-from pydantic import NonNegativeFloat, NonNegativeInt, PositiveInt
+from pydantic import Field, NonNegativeFloat, NonNegativeInt, PositiveInt
 from tqdm import tqdm
 
 from lighteval.data import GenerativeTaskDataset, LoglikelihoodDataset
@@ -199,6 +199,7 @@ class VLLMModelConfig(ModelConfig):
     subfolder: str | None = None
     is_async: bool = False  # Whether to use the async version or sync version of the model
     override_chat_template: bool = None
+    chat_template_kwargs: dict = Field(default_factory=dict)
     enforce_eager: bool = False  # Whether to enforce eager execution mode in vllm
     distributed_backend: str = "ray"  # Backend for data parallelism: "ray" or "mp" (multiprocessing)
 
@@ -236,7 +237,12 @@ class VLLMModel(LightevalModel):
 
         self.pairwise_tokenization = config.pairwise_tokenization
 
-        self.prompt_manager = PromptManager(self.use_chat_template, self.tokenizer, config.system_prompt)
+        self.prompt_manager = PromptManager(
+            self.use_chat_template,
+            self.tokenizer,
+            config.system_prompt,
+            chat_template_kwargs=config.chat_template_kwargs,
+        )
 
         # Initialize cache for tokenization and predictions
         self._cache = SampleCache(config)
