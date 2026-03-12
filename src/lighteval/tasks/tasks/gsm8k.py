@@ -51,6 +51,22 @@ def sample_to_fewshot(sample):
 
 
 def gsm8k_prompt(line, task_name: str = None):
+    if line.get("__few_shots"):
+        answer = line["answer"].split("####")
+        target = answer.pop().strip()
+        reasoning = "####".join(answer).strip()
+        exemplar = reasoning if reasoning else ""
+        if exemplar:
+            exemplar += f"\n\nANSWER: {target}"
+        else:
+            exemplar = target
+        return Doc(
+            task_name=task_name,
+            query=MATH_PROMPT_TEMPLATE.format(prompt=line["question"]),
+            choices=[exemplar],
+            gold_index=0,
+        )
+
     return Doc(
         task_name=task_name,
         query=MATH_PROMPT_TEMPLATE.format(prompt=line["question"]),

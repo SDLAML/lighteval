@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError
@@ -39,6 +40,13 @@ from lighteval.utils.imports import is_package_available, requires
 
 logger = logging.getLogger(__name__)
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 if is_package_available("litellm"):
     import litellm
     from litellm import encode, supports_reasoning
@@ -46,9 +54,12 @@ if is_package_available("litellm"):
     from litellm.utils import ModelResponse as LitellmModelResponse
     from litellm.utils import get_max_tokens
 
-    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+    logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+    logging.getLogger("litellm").setLevel(logging.ERROR)
     logging.getLogger("LiteLLM").handlers.clear()
 
+    # Silence provider hint prints emitted directly via print() in LiteLLM internals.
+    litellm.suppress_debug_info = True
     litellm.cache = Cache(type=LiteLLMCacheType.DISK)
 else:
     from unittest.mock import Mock
@@ -125,6 +136,9 @@ class LiteLLMModelConfig(ModelConfig):
     concurrent_requests: int = 10
     verbose: bool = False
     max_model_length: int | None = None
+    extra_body: dict | None = None
+    merge_reasoning_content_in_choices: bool = False
+    use_chat_template: bool = True
 
     api_max_retry: int = 8
     api_retry_sleep: float = 1.0
@@ -148,6 +162,10 @@ class LiteLLMClient(LightevalModel):
         self.generation_parameters = config.generation_parameters
         self.concurrent_requests = config.concurrent_requests
         self._max_length = config.max_model_length
+        self._enable_litellm_caching = _env_flag("LIGHTEVAL_LITELLM_CACHING", False)
+        self.extra_body = config.extra_body
+        self.merge_reasoning_content_in_choices = config.merge_reasoning_content_in_choices
+        self.use_chat_template = config.use_chat_template
 
         self.API_MAX_RETRY = config.api_max_retry
         self.API_RETRY_SLEEP = config.api_retry_sleep
@@ -159,8 +177,11 @@ class LiteLLMClient(LightevalModel):
         litellm.drop_params = True
         litellm.verbose = config.verbose
         self.prompt_manager = PromptManager(
-            use_chat_template=True, tokenizer=self.tokenizer, system_prompt=config.system_prompt
+            use_chat_template=self.use_chat_template,
+            tokenizer=self.tokenizer,
+            system_prompt=config.system_prompt,
         )
+        self._warned_empty_reasoning_only_response = False
 
         # Initialize cache for tokenization and predictions
         self._cache = SampleCache(config)
@@ -188,6 +209,31 @@ class LiteLLMClient(LightevalModel):
 
         return max_new_tokens
 
+    @staticmethod
+    def _get_choice_text(choice) -> str | None:
+        message = getattr(choice, "message", None)
+        if message is not None:
+            return getattr(message, "content", None)
+        if hasattr(choice, "text"):
+            return choice.text
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict):
+                return message.get("content")
+            return choice.get("text")
+        return None
+
+    @staticmethod
+    def _get_choice_reasoning(choice) -> str | None:
+        message = getattr(choice, "message", None)
+        if message is not None:
+            return getattr(message, "reasoning_content", None)
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict):
+                return message.get("reasoning_content")
+        return None
+
     def __call_api(self, prompt, return_logits, max_new_tokens, num_samples, stop_sequence):  # noqa: C901
         """Make API call with retries."""
         response = LitellmModelResponse()
@@ -200,37 +246,56 @@ class LiteLLMClient(LightevalModel):
         # Prepare kwargs for completion call
         kwargs = {
             "model": self.model,
-            "messages": prompt,
-            "response_format": {"type": "text"},
+            # Explicit provider routing avoids LiteLLM provider inference errors
+            # when model names are plain IDs or filesystem-like names.
+            "custom_llm_provider": self.provider,
             "max_tokens": max_new_tokens,
             "logprobs": return_logits if self.provider == "openai" else None,
             "stop": stop_sequence,
             "base_url": self.base_url,
             "api_key": self.api_key,
             "n": num_samples,
-            "caching": True,
+            "caching": self._enable_litellm_caching,
             "timeout": self.timeout,
+            "extra_body": self.extra_body,
         }
+        completion_call = litellm.completion
+        if self.use_chat_template:
+            kwargs["messages"] = prompt
+            kwargs["response_format"] = {"type": "text"}
+            kwargs["merge_reasoning_content_in_choices"] = self.merge_reasoning_content_in_choices
+        else:
+            kwargs["prompt"] = prompt
+            completion_call = litellm.text_completion
 
         if "o1" in self.model:
             logger.warning("O1 models do not support temperature, top_p, stop sequence. Disabling.")
         else:
             kwargs.update(self.generation_parameters.to_litellm_dict())
 
-        if kwargs.get("max_completion_tokens", None) is None:
+        if self.use_chat_template and kwargs.get("max_completion_tokens", None) is None:
             kwargs["max_completion_tokens"] = max_new_tokens
 
         for attempt in range(self.API_MAX_RETRY):
             try:
-                response = litellm.completion(**kwargs)
-                content = response.choices[0].message.content
+                response = completion_call(**kwargs)
+                content = self._get_choice_text(response.choices[0])
+                reasoning_content = self._get_choice_reasoning(response.choices[0])
+
+                if not content and reasoning_content and not self._warned_empty_reasoning_only_response:
+                    logger.warning(
+                        "Endpoint response contained reasoning_content but no final content. "
+                        "This usually means the model is still in thinking mode; disable thinking for evals "
+                        "(for example via extra_body.chat_template_kwargs.enable_thinking=false for Qwen3/vLLM)."
+                    )
+                    self._warned_empty_reasoning_only_response = True
 
                 # If response is empty, retry without caching (maybe the error is recoverable and solved with a retry)
                 if not content:
                     logger.info("Response is empty, retrying without caching")
                     kwargs["caching"] = False
-                    response = litellm.completion(**kwargs)
-                    content = response.choices[0].message.content
+                    response = completion_call(**kwargs)
+                    content = self._get_choice_text(response.choices[0])
 
                 return response
             except litellm.BadRequestError as e:
@@ -245,8 +310,12 @@ class LiteLLMClient(LightevalModel):
                 wait_time = min(
                     64, self.API_RETRY_SLEEP * (self.API_RETRY_MULTIPLIER**attempt)
                 )  # Exponential backoff with max 64s
+                # Keep retry logs single-line to avoid noisy provider help text spam.
+                err_text = str(e).strip()
+                err_text = err_text.splitlines()[0] if err_text else e.__class__.__name__
                 logger.warning(
-                    f"Error in API call: {e}, waiting {wait_time} seconds before retry {attempt + 1}/{self.API_MAX_RETRY}"
+                    f"Error in API call ({e.__class__.__name__}: {err_text}), "
+                    f"waiting {wait_time} seconds before retry {attempt + 1}/{self.API_MAX_RETRY}"
                 )
                 time.sleep(wait_time)
 
@@ -347,7 +416,10 @@ class LiteLLMClient(LightevalModel):
             position=0,
             disable=self.disable_tqdm,
         ):
-            contexts = [self.prompt_manager.prepare_prompt_api(doc) for doc in dataset]
+            if self.use_chat_template:
+                contexts = [self.prompt_manager.prepare_prompt_api(doc) for doc in split]
+            else:
+                contexts = [self.prompt_manager.prepare_prompt(doc) for doc in split]
             max_new_tokens = split[0].generation_size  # could be none
             return_logits = split[0].use_logits
             num_samples = split[0].num_samples
@@ -361,14 +433,12 @@ class LiteLLMClient(LightevalModel):
             responses = self.__call_api_parallel(contexts, return_logits, max_new_tokens, num_samples, stop_sequence)
 
             for response, context in zip(responses, contexts):
-                result: list[str] = [choice.message.content for choice in response.choices]
-                reasonings: list[str | None] = [
-                    getattr(choice.message, "reasoning_content", None) for choice in response.choices
-                ]
+                result: list[str] = [(self._get_choice_text(choice) or "") for choice in response.choices]
+                reasonings: list[str | None] = [self._get_choice_reasoning(choice) for choice in response.choices]
 
                 cur_response = ModelResponse(
                     # In empty responses, the model should return an empty string instead of None
-                    text=result if result[0] else [""],
+                    text=result if result and result[0] else [""],
                     reasonings=reasonings,
                     input=context,
                 )

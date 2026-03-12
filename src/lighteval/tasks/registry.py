@@ -28,6 +28,7 @@ import importlib.util
 import inspect
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -62,16 +63,22 @@ def load_community_tasks():
             sys.path.insert(0, parent_dir)
 
         # List all python files in community_tasks
-        community_files = [p.stem for p in community_path.glob("*.py") if not p.name.startswith("_")]
+        community_files = [
+            p.stem for p in community_path.glob("*.py") if not p.name.startswith("_")
+        ]
 
         for module_name in community_files:
             try:
                 module = importlib.import_module(f"community_tasks.{module_name}")
                 if hasattr(module, "TASKS_TABLE"):
                     modules.append(module)
-                    logger.info(f"Successfully loaded community tasks from {module_name}")
+                    logger.info(
+                        f"Successfully loaded community tasks from {module_name}"
+                    )
             except Exception as e:
-                logger.warning(f"Failed to load community tasks from {module_name}: {e}")
+                logger.warning(
+                    f"Failed to load community tasks from {module_name}: {e}"
+                )
     except Exception as e:
         logger.warning(f"Error loading community tasks directory: {e}")
 
@@ -163,7 +170,11 @@ class Registry:
         """Converts an input string (either a path to file with a list of tasks or a string of comma-separated tasks) into an actual list"""
         if os.path.exists(tasks):
             with open(tasks, "r") as f:
-                tasks_list = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+                tasks_list = [
+                    line.strip()
+                    for line in f
+                    if line.strip() and not line.startswith("#")
+                ]
         else:
             tasks_list = tasks.split(",")
 
@@ -173,7 +184,9 @@ class Registry:
             # We either expand the group (in case it's a group name), or we keep it as is (in case it's a task name or superset name)
             expanded_tasks = task_groups.get(maybe_task_group, [maybe_task_group])
             if len(expanded_tasks) > 1:
-                logger.info(f"Expanding task group {maybe_task_group} to {expanded_tasks}")
+                logger.info(
+                    f"Expanding task group {maybe_task_group} to {expanded_tasks}"
+                )
             expanded_tasks_list.extend(expanded_tasks)
 
         # We remove exact duplicates
@@ -209,12 +222,18 @@ class Registry:
                     split_task_name = task_name.split("@")
                     task_name, metric_params = split_task_name[0], split_task_name[1:]
                     # We convert k:v to {"k": "v"}, then to correct type
-                    metric_params_dict = dict(item.split("=") for item in metric_params if item)
-                    metric_params_dict = {k: ast.literal_eval(v) for k, v in metric_params_dict.items()}
+                    metric_params_dict = dict(
+                        item.split("=") for item in metric_params if item
+                    )
+                    metric_params_dict = {
+                        k: ast.literal_eval(v) for k, v in metric_params_dict.items()
+                    }
                 few_shot = int(few_shot)
 
             except ValueError:
-                raise ValueError(f"Cannot get task info from {task}. correct format is task|few_shot")
+                raise ValueError(
+                    f"Cannot get task info from {task}. correct format is task|few_shot"
+                )
 
             # This adds support for task supersets (eg: mmlu -> all the mmlu tasks)
             for expanded_task in self._expand_task_definition(task_name):
@@ -223,16 +242,22 @@ class Registry:
                 # We load each config
                 config = self._task_registry.get(expanded_task)
                 if config is None:
-                    raise ValueError(f"Cannot find task {expanded_task} in task list or in custom task registry")
+                    raise ValueError(
+                        f"Cannot find task {expanded_task} in task list or in custom task registry"
+                    )
 
                 config = copy.deepcopy(config)
                 config.num_fewshots = few_shot
                 config.full_name = f"{expanded_task}|{config.num_fewshots}"
                 # If some tasks are parametrizable and in cli, we set attributes here
-                for metric in [m for m in config.metrics if "@" in m.metric_name]:  # parametrizable metric
+                for metric in [
+                    m for m in config.metrics if "@" in m.metric_name
+                ]:  # parametrizable metric
                     for attribute, value in metric_params_dict.items():
                         setattr(metric.sample_level_fn, attribute, value)
-                    required = getattr(metric.sample_level_fn, "attribute_must_be_set", [])
+                    required = getattr(
+                        metric.sample_level_fn, "attribute_must_be_set", []
+                    )
                     for attribute in required:
                         if getattr(metric.sample_level_fn, attribute) is None:
                             raise ValueError(
@@ -245,8 +270,13 @@ class Registry:
         return task_to_configs
 
     def load_tasks(self) -> dict[str, LightevalTask]:
-        if len(self.task_to_configs) == 0:  # we're in cli to analyse tasks, we return all tasks
-            return {f"{config.full_name}": LightevalTask(config=config) for config in self._task_registry.values()}
+        if (
+            len(self.task_to_configs) == 0
+        ):  # we're in cli to analyse tasks, we return all tasks
+            return {
+                f"{config.full_name}": LightevalTask(config=config)
+                for config in self._task_registry.values()
+            }
 
         # We return only the tasks of interest
         return {
@@ -268,7 +298,12 @@ class Registry:
         """
         # Note: sorted before groupby is important as the python implementation of groupby does not
         # behave like sql groupby. For more info see the docs of itertools.groupby
-        superset_dict = {k: list(v) for k, v in groupby(sorted(self._task_registry.keys()), lambda x: x.split(":")[0])}
+        superset_dict = {
+            k: list(v)
+            for k, v in groupby(
+                sorted(self._task_registry.keys()), lambda x: x.split(":")[0]
+            )
+        }
         # Only consider supersets with more than one task
         return {k: v for k, v in superset_dict.items() if len(v) > 1}
 
@@ -278,6 +313,7 @@ class Registry:
             task_definition (str): Task definition to expand. In format:
                 - suite|task
                 - suite|task_superset (e.g lighteval|mmlu, which runs all the mmlu subtasks)
+                - task_prefix (e.g ruler_4096:niah, expands to all ruler_4096:niah_* tasks)
 
         Returns:
             list[str]: List of task names (suite|task)
@@ -286,6 +322,27 @@ class Registry:
         tasks = self._task_superset_dict.get(task_definition, None)
         if tasks is not None:
             return tasks
+
+        # Preserve the previous exact-match behavior for normal tasks.
+        if task_definition in self._task_registry:
+            return [task_definition]
+
+        # Only ruler NIAH prefixes use prefix expansion, e.g.:
+        #   ruler_4096:niah      -> ruler_4096:niah_*
+        #   ruler_4096:niah_1    -> ruler_4096:niah_1*
+        if re.fullmatch(r"ruler_\d+:niah(?:[_A-Za-z0-9-]+)?", task_definition):
+            prefix_colon = task_definition + ":"
+            prefix_under = task_definition + "_"
+            matching = [
+                k
+                for k in self._task_registry.keys()
+                if k.startswith(prefix_colon) or k.startswith(prefix_under)
+            ]
+            if matching:
+                logger.info(
+                    f"Expanding task prefix '{task_definition}' to {len(matching)} tasks"
+                )
+                return matching
 
         # Then it must be a single task
         return [task_definition]
@@ -324,7 +381,9 @@ class Registry:
         return configs
 
     @staticmethod
-    def _load_from_files(files: list[Path], module_prefix: str) -> dict[str, LightevalTaskConfig]:
+    def _load_from_files(
+        files: list[Path], module_prefix: str
+    ) -> dict[str, LightevalTaskConfig]:
         configs = {}
         for task_file in files:
             module_name = task_file.stem
@@ -337,7 +396,9 @@ class Registry:
         configs = {}
         for task_dir in subdirs:
             module_name = task_dir.name
-            module = importlib.import_module(f"lighteval.tasks.tasks.{module_name}.main")
+            module = importlib.import_module(
+                f"lighteval.tasks.tasks.{module_name}.main"
+            )
             configs.update(Registry._extract_configs(module))
         return configs
 
@@ -354,15 +415,23 @@ class Registry:
 
         # Get all Python files in the tasks directory (excluding __init__.py)
         task_files = [f for f in TASKS_DIR.glob("*.py") if f.name != "__init__.py"]
-        task_files_multilingual = [f for f in TASKS_DIR_MULTILINGUAL.glob("*.py") if f.name != "__init__.py"]
+        task_files_multilingual = [
+            f for f in TASKS_DIR_MULTILINGUAL.glob("*.py") if f.name != "__init__.py"
+        ]
 
         # Also get all subdirectories with main.py files
-        task_subdirs = [d for d in TASKS_DIR.iterdir() if d.is_dir() and (d / "main.py").exists()]
+        task_subdirs = [
+            d for d in TASKS_DIR.iterdir() if d.is_dir() and (d / "main.py").exists()
+        ]
 
-        loaded_configs.update(Registry._load_from_files(task_files, "lighteval.tasks.tasks"))
+        loaded_configs.update(
+            Registry._load_from_files(task_files, "lighteval.tasks.tasks")
+        )
         if load_multilingual:
             loaded_configs.update(
-                Registry._load_from_files(task_files_multilingual, "lighteval.tasks.multilingual.tasks")
+                Registry._load_from_files(
+                    task_files_multilingual, "lighteval.tasks.multilingual.tasks"
+                )
             )
         loaded_configs.update(Registry._load_from_subdirs(task_subdirs))
 
@@ -376,7 +445,9 @@ class Registry:
             loaded_configs.update(custom_tasks_configs)
 
         time_end = time.perf_counter()
-        logger.info(f"Loaded {len(loaded_configs)} task configs in {time_end - time_start:.1f} seconds")
+        logger.info(
+            f"Loaded {len(loaded_configs)} task configs in {time_end - time_start:.1f} seconds"
+        )
         return loaded_configs
 
     def print_all_tasks(self, suites: str | None = None):
@@ -410,7 +481,9 @@ class Registry:
 
         # Get all tasks and filter by requested suites
         all_tasks = list(self._task_registry.keys())
-        tasks_names = [task for task in all_tasks if task.split("|")[0] in requested_suites]
+        tasks_names = [
+            task for task in all_tasks if task.split("|")[0] in requested_suites
+        ]
 
         # Ensure all requested suites are present (even if empty)
         suites_in_registry = {name.split("|")[0] for name in tasks_names}
@@ -425,7 +498,9 @@ class Registry:
         print("=" * 60)
 
         for suite, g in groupby(tasks_names, lambda x: x.split("|")[0]):
-            tasks_in_suite = [name for name in g if name.split("|")[1]]  # Filter out dummy tasks
+            tasks_in_suite = [
+                name for name in g if name.split("|")[1]
+            ]  # Filter out dummy tasks
             tasks_in_suite.sort()
 
             print(f"\n- {suite}:")
@@ -454,8 +529,12 @@ class Registry:
         TASKS_DIR_MULTILINGUAL = Path(__file__).parent / "multilingual" / "tasks"
 
         task_files = [f for f in TASKS_DIR.glob("*.py") if f.name != "__init__.py"]
-        task_files_multilingual = [f for f in TASKS_DIR_MULTILINGUAL.glob("*.py") if f.name != "__init__.py"]
-        task_subdirs = [d for d in TASKS_DIR.iterdir() if d.is_dir() and (d / "main.py").exists()]
+        task_files_multilingual = [
+            f for f in TASKS_DIR_MULTILINGUAL.glob("*.py") if f.name != "__init__.py"
+        ]
+        task_subdirs = [
+            d for d in TASKS_DIR.iterdir() if d.is_dir() and (d / "main.py").exists()
+        ]
 
         module_to_docstring = {}
 
@@ -468,19 +547,27 @@ class Registry:
         if self._load_multilingual:
             for task_file in task_files_multilingual:
                 module_name = task_file.stem
-                module = importlib.import_module(f"lighteval.tasks.multilingual.tasks.{module_name}")
+                module = importlib.import_module(
+                    f"lighteval.tasks.multilingual.tasks.{module_name}"
+                )
                 docstring = (inspect.getdoc(module) or module.__doc__ or "").strip()
                 module_to_docstring[module] = docstring
 
         for task_dir in task_subdirs:
             module_name = task_dir.name
-            module = importlib.import_module(f"lighteval.tasks.tasks.{module_name}.main")
+            module = importlib.import_module(
+                f"lighteval.tasks.tasks.{module_name}.main"
+            )
             docstring = (inspect.getdoc(module) or module.__doc__ or "").strip()
             module_to_docstring[module] = docstring
 
         if self._custom_tasks is not None:
-            custom_tasks_module = Registry.create_custom_tasks_module(self._custom_tasks)
-            docstring = (inspect.getdoc(custom_tasks_module) or custom_tasks_module.__doc__ or "").strip()
+            custom_tasks_module = Registry.create_custom_tasks_module(
+                self._custom_tasks
+            )
+            docstring = (
+                inspect.getdoc(custom_tasks_module) or custom_tasks_module.__doc__ or ""
+            ).strip()
             module_to_docstring[custom_tasks_module] = docstring
 
         module_to_task_names = {}
@@ -515,12 +602,18 @@ class Registry:
 
             list_fields = {"dataset", "languages", "tags"}
 
-            def process_current_key_value(current_key, current_value, list_fields, parsed):
+            def process_current_key_value(
+                current_key, current_value, list_fields, parsed
+            ):
                 if current_key and current_value:
                     value = "\n".join(current_value).strip()
                     if current_key in list_fields:
                         if "," in value:
-                            parsed[current_key] = [item.strip() for item in value.split(",") if item.strip()]
+                            parsed[current_key] = [
+                                item.strip()
+                                for item in value.split(",")
+                                if item.strip()
+                            ]
                         else:
                             parsed[current_key] = [value] if value else []
                     else:
@@ -529,12 +622,16 @@ class Registry:
             for line in lines:
                 line = line.strip()
                 if not line:
-                    process_current_key_value(current_key, current_value, list_fields, parsed)
+                    process_current_key_value(
+                        current_key, current_value, list_fields, parsed
+                    )
                     current_value = []
                     continue
 
                 if line.endswith(":"):
-                    process_current_key_value(current_key, current_value, list_fields, parsed)
+                    process_current_key_value(
+                        current_key, current_value, list_fields, parsed
+                    )
                     current_key = line[:-1].strip()
                     current_value = []
                 else:
@@ -557,6 +654,12 @@ class Registry:
                 config_dict = {k: v.__str__() for k, v in config_dict.items()}
                 tasks_in_module.append({"name": task_name, "config": config_dict})
 
-            modules_data.append({"module": module_name, "docstring": docstring_parsed, "tasks": tasks_in_module})
+            modules_data.append(
+                {
+                    "module": module_name,
+                    "docstring": docstring_parsed,
+                    "tasks": tasks_in_module,
+                }
+            )
 
         return modules_data
