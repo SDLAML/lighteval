@@ -288,23 +288,28 @@ class Registry:
     @property
     @lru_cache
     def _task_superset_dict(self):
-        """Returns:
-            dict[str, list[str]]: A dictionary where keys are task super set names (suite|task) and values are lists of task subset names (suite|task).
+        """Returns a dict mapping superset keys to lists of matching task names.
 
-        Example:
-            {
-                "lighteval|mmlu" -> ["lighteval|mmlu:abstract_algebra", "lighteval|mmlu:college_biology", ...]
-            }
+        For 2-part names  (e.g. ``hellaswag:cf``):
+            ``hellaswag`` → all hellaswag tasks.
+
+        For 3-part names  (e.g. ``mmlu:abstract_algebra:cf``):
+            ``mmlu``                  → all mmlu tasks  (all subsets × all metrics)
+            ``mmlu:abstract_algebra`` → all metrics for that subset
+            ``mmlu:cf``               → all subsets for that metric
         """
-        # Note: sorted before groupby is important as the python implementation of groupby does not
-        # behave like sql groupby. For more info see the docs of itertools.groupby
-        superset_dict = {
-            k: list(v)
-            for k, v in groupby(
-                sorted(self._task_registry.keys()), lambda x: x.split(":")[0]
-            )
-        }
-        # Only consider supersets with more than one task
+        superset_dict: dict[str, list[str]] = collections.defaultdict(list)
+
+        for task in sorted(self._task_registry.keys()):
+            parts = task.split(":")
+            # top-level prefix always gets a key (works for 2-part and 3-part)
+            superset_dict[parts[0]].append(task)
+            if len(parts) == 3:
+                a, b, c = parts
+                superset_dict[f"{a}:{b}"].append(task)  # e.g. mmlu:abstract_algebra
+                superset_dict[f"{a}:{c}"].append(task)  # e.g. mmlu:cf
+
+        # Only expose keys that map to more than one task
         return {k: v for k, v in superset_dict.items() if len(v) > 1}
 
     def _expand_task_definition(self, task_definition: str):

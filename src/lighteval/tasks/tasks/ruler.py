@@ -27,10 +27,10 @@ RULER (Realistic ULtra-long Language Evaluation with Reasoning) is a long-contex
 benchmark that requires tokenizer-specific data generation.
 
 Setup:
-    Set the RULER_TOKENIZER environment variable to a HuggingFace model name or
+    Set the TOKENIZER_PATH environment variable to a HuggingFace model name or
     local checkpoint folder containing the tokenizer you want to evaluate.
 
-    export RULER_TOKENIZER=/path/to/model  # or a HF model name like "meta-llama/Llama-3.1-8B"
+    export TOKENIZER_PATH=/path/to/model  # or a HF model name like "meta-llama/Llama-3.1-8B"
 
 Data will be generated on the first run and cached under:
     $HF_HOME/lighteval/ruler/<tokenizer_id>/
@@ -379,6 +379,10 @@ def _niah_generate_samples(
     for index in tqdm(
         range(num_samples), desc=f"Generating NIAH samples | {max_seq_length}"
     ):
+        # Per-sample seeding for reproducibility and diversity
+        sample_seed = random_seed + index
+        random.seed(sample_seed)
+        np.random.seed(sample_seed)
         used_haystack = num_haystack
         input_text = answer = query = gen_prefix = length = None
         while True:
@@ -393,7 +397,7 @@ def _niah_generate_samples(
                     type_needle_v=type_needle_v,
                     template=template,
                     num_needle_q=num_needle_q,
-                    random_seed=random_seed,
+                    random_seed=sample_seed,
                 )
                 gen_prefix = _gen_prefix(tnv_base, num_needle_q, num_needle_v, query)
                 prompt = input_text + " " + gen_prefix
@@ -438,7 +442,7 @@ VT_CONFIG = {
     ),
     "answer_prefix": (
         " Answer: According to the chain(s) of variable assignment in the text above, "
-        "{num_v} variables are assgined the value {query}, they are: "
+        "{num_v} variables are assigned the value {query}, they are: "
     ),
 }
 VT_TEMPLATE = VT_CONFIG["template"] + VT_CONFIG["answer_prefix"]
@@ -557,6 +561,9 @@ def _vt_generate_samples(
     for index in tqdm(
         range(num_samples), desc=f"Generating VT samples | {max_seq_length}"
     ):
+        # Per-sample seeding for reproducibility and diversity
+        random.seed(RANDOM_SEED + index)
+        np.random.seed(RANDOM_SEED + index)
         used_noises = num_noises
         input_text = answer = length = None
         while True:
@@ -719,6 +726,10 @@ def _cwe_generate_samples(
     for index in tqdm(
         range(num_samples), desc=f"Generating CWE samples | {max_seq_length}"
     ):
+        # Per-sample seeding for reproducibility and diversity
+        random.seed(RANDOM_SEED + index)
+        np.random.seed(RANDOM_SEED + index)
+        _CWE_RNG.seed(RANDOM_SEED + index)
         used_words = num_words
         input_example = input_text = answer = length = None
         while True:
@@ -783,6 +794,7 @@ def _fwe_generate_input_output(
     vocab_size: int = 2000,
     incremental: int = 10,
     alpha: float = 2.0,
+    sample_seed: int = FWE_SEED,
 ) -> tuple[str, list[str], int]:
     from scipy.special import zeta
 
@@ -793,7 +805,7 @@ def _fwe_generate_input_output(
     while len(set(vocab)) < vocab_size:
         vocab.append("".join(random.choices(string.ascii_lowercase, k=coded_wordlen)))
     vocab = sorted(list(set(vocab)))
-    random.Random(FWE_SEED).shuffle(vocab)
+    random.Random(sample_seed).shuffle(vocab)
     vocab[0] = "..."
 
     def gen_text(nw):
@@ -801,7 +813,7 @@ def _fwe_generate_input_output(
         sampled_cnt = nw * (k**-alpha) / zeta(alpha)
         sampled_words = [[w] * zi for w, zi in zip(vocab, sampled_cnt.astype(int))]
         sampled_words = [x for wlst in sampled_words for x in wlst]
-        random.Random(FWE_SEED).shuffle(sampled_words)
+        random.Random(sample_seed).shuffle(sampled_words)
         return (
             FWE_TEMPLATE.format(context=" ".join(sampled_words), query=""),
             vocab[1:4],
@@ -849,6 +861,10 @@ def _fwe_generate_samples(
     for index in tqdm(
         range(num_samples), desc=f"Generating FWE samples | {max_seq_length}"
     ):
+        # Per-sample seeding for reproducibility and diversity
+        sample_seed = RANDOM_SEED + index
+        random.seed(sample_seed)
+        np.random.seed(sample_seed)
         input_text, answer, _ = _fwe_generate_input_output(
             input_max_len,
             tokenizer,
@@ -857,6 +873,7 @@ def _fwe_generate_samples(
             vocab_size=vs,
             incremental=input_max_len // 32,
             alpha=alpha,
+            sample_seed=sample_seed,
         )
         length = len(tokenizer(input_text).input_ids) + tokens_to_generate
         assert length <= budget
@@ -1002,7 +1019,7 @@ def _qa_generate_input_output(
     else:
         all_docs = docs
 
-    random.Random(RANDOM_SEED).shuffle(all_docs)
+    random.Random(RANDOM_SEED + index).shuffle(all_docs)
     context = "\n\n".join(
         [QA_DOCUMENT_PROMPT.format(i=i + 1, document=d) for i, d in enumerate(all_docs)]
     )
@@ -1042,6 +1059,9 @@ def _qa_generate_samples(
     for index in tqdm(
         range(num_samples), desc=f"Generating QA samples | {max_seq_length}"
     ):
+        # Per-sample seeding for reproducibility and diversity
+        random.seed(RANDOM_SEED + index)
+        np.random.seed(RANDOM_SEED + index)
         used_docs = num_docs
         input_text = answer = length = None
         while True:
@@ -1281,7 +1301,7 @@ def get_ruler_tasks(
     """Register RULER task configs for all lengths.
 
     Data is generated on demand in download_dataset_worker (keyed off
-    RULER_TOKENIZER) so only the lengths actually evaluated are generated.
+    TOKENIZER_PATH) so only the lengths actually evaluated are generated.
     """
     lengths = lengths or DEFAULT_LENGTHS
     subsets = subsets or SUBSETS
@@ -1323,16 +1343,16 @@ def get_ruler_tasks(
 
 
 # ---------------------------------------------------------------------------
-# TASKS_TABLE — populated when RULER_TOKENIZER env var is set
+# TASKS_TABLE — populated when TOKENIZER_PATH env var is set
 # ---------------------------------------------------------------------------
 
-_ruler_tokenizer = os.environ.get("RULER_TOKENIZER")
+_ruler_tokenizer = os.environ.get("TOKENIZER_PATH")
 
 if _ruler_tokenizer:
     TASKS_TABLE = get_ruler_tasks(_ruler_tokenizer)
 else:
     TASKS_TABLE = []
     logger.debug(
-        "RULER_TOKENIZER env var not set — RULER tasks not loaded. "
-        "Set RULER_TOKENIZER=<hf_model_or_path> before importing this module."
+        "TOKENIZER_PATH env var not set — RULER tasks not loaded. "
+        "Set TOKENIZER_PATH=<hf_model_or_path> before importing this module."
     )

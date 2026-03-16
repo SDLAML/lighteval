@@ -33,19 +33,36 @@ def coqa_prompt(line, task_name: str = None):
     return results
 
 
-coqa_first_question = LightevalTaskConfig(
-    name="coqa",
-    prompt_function=coqa_prompt,
+def coqa_bpb_prompt(line, task_name: str = None):
+    """BPB variant: first question only, gold answer as single choice."""
+    q = line["questions"][0]
+    a = line["answers"]["input_text"][0]
+    if not a:
+        return None
+    gold_text = a if a[0].isspace() else " " + a
+    return Doc(
+        task_name=task_name,
+        query=f"{line['story']}\n\nQ: {q}\nA:",
+        choices=[gold_text],
+        gold_index=0,
+    )
+
+
+coqa_bpb = LightevalTaskConfig(
+    name="coqa:bpb",
+    prompt_function=coqa_bpb_prompt,
     hf_repo="stanfordnlp/coqa",
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
-    stop_sequence=["\n", "Question:", "question:"],
-    generation_size=100,
-    version=1,
-    metrics=[Metrics.exact_match],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=-1,
+    metrics=[Metrics.target_bits_per_byte],
+    stop_sequence=["\n"],
+    version=0,
 )
 
 TASKS_TABLE = [
-    coqa_first_question,
+    coqa_bpb,
 ]

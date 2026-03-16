@@ -32,9 +32,12 @@ def normalize_subset(subset: str) -> str:
 
 def get_metrics_for_formulation(formulation: Formulation, metrics: list[Metric]) -> list[Metric]:
     """Choose the appropriate metrics for the given formulation otherwise fallback to the original metrics."""
+    from lighteval.metrics.normalizations import LogProbCharNorm
     match formulation:
-        #
         case MCFFormulation(choice_prefix="Letters"):
-            return [LogLikelihoodAccMetric(normalization=None)]
+            return [
+                LogLikelihoodAccMetric(normalization=None),
+                LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+            ]
         case _:
             return metrics

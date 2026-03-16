@@ -14,4 +14,5 @@ model_parameters:
     #block_size: 64
     #max_new_tokens: 256
     temperature: 0.0
-    top_p: 0.9
+    # top_p: 0.9   # WARNING: top_p < 1.0 auto-enables do_sample=True in transformers >= 4.38,
+    #              # which causes sampling even when temperature=0. Leave unset for greedy decoding.

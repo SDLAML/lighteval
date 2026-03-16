@@ -28,6 +28,17 @@ from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
+_CF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    Metrics.target_bits_per_byte,
+]
+
+_MCF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+]
+
 
 def harness_preprocess(text):
     text = text.strip()
@@ -37,7 +48,8 @@ def harness_preprocess(text):
     text = text.replace("  ", " ")
     return text
 
-def hellaswag_prompt(line, task_name: str = None):
+def hellaswag_mcf_prompt(line, task_name: str = None):
+    """MCF variant: labeled options in prompt, score label tokens via logprobs."""
     query = "The following are multiple choice questions (with answers) about common sense.\n\n"
     query += f"Question: {line['activity_label']}: {line['ctx_a']} {line['ctx_b'].capitalize()}\n"
     query += "".join([f"{key}. {choice}\n" for key, choice in zip(ascii_uppercase, line["endings"])])
@@ -52,7 +64,27 @@ def hellaswag_prompt(line, task_name: str = None):
         instruction="The following are multiple choice questions (with answers) about common sense.\n\n",
     )
 
-def hellaswag_harness_prompt(line, task_name: str = None):
+def hellaswag_bpb_prompt(line, task_name: str = None):
+    """BPB variant: CF-style prompt with only the gold continuation."""
+    ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
+    query = harness_preprocess(line["activity_label"] + ": " + ctx)
+    gold_ix = int(line["label"]) if str(line.get("label", "")).strip() != "" else -1
+    if gold_ix < 0:
+        return None  # test split has no labels; skip
+    gold_text = harness_preprocess(line["endings"][gold_ix])
+    if not gold_text:
+        return None
+    if not gold_text[0].isspace():
+        gold_text = " " + gold_text
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[gold_text],
+        gold_index=0,
+    )
+
+def hellaswag_cf_prompt(line, task_name: str = None):
+    """CF variant: completion-style prompt, score full answer texts via logprobs."""
     ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
     query = harness_preprocess(line["activity_label"] + ": " + ctx)
     choices = [harness_preprocess(ending) for ending in line["endings"]]
@@ -65,9 +97,27 @@ def hellaswag_harness_prompt(line, task_name: str = None):
         gold_index=gold_ix,
     )
 
-hellaswag = LightevalTaskConfig(
-    name="hellaswag",
-    prompt_function=hellaswag_prompt,
+
+# MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
+hellaswag_mcf = LightevalTaskConfig(
+    name="hellaswag:mcf",
+    prompt_function=hellaswag_mcf_prompt,
+    hf_repo="Rowan/hellaswag",
+    hf_subset="default",
+    hf_avail_splits=["train", "test", "validation"],
+    evaluation_splits=["validation"],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=-1,
+    metrics=_MCF_METRICS,
+    stop_sequence=["\n"],
+    version=0,
+)
+
+# Greedy variant: MCF-style prompt, generate 1 token, exact match
+hellaswag_mcf_em = LightevalTaskConfig(
+    name="hellaswag:mcf_em",
+    prompt_function=hellaswag_mcf_prompt,
     hf_repo="Rowan/hellaswag",
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
@@ -75,35 +125,28 @@ hellaswag = LightevalTaskConfig(
     few_shots_split=None,
     few_shots_select=None,
     generation_size=1,
-    metrics=[
-        Metrics.exact_match,
-    ],
+    metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
     version=0,
 )
 
-hellaswag_harness = LightevalTaskConfig(
-    name="hellaswag_harness",
-    prompt_function=hellaswag_harness_prompt,
+# CF variant: completion-style, logprob on full answer text + BPB on gold choice
+hellaswag_cf = LightevalTaskConfig(
+    name="hellaswag:cf",
+    prompt_function=hellaswag_cf_prompt,
     hf_repo="Rowan/hellaswag",
     hf_subset="default",
-    # Optional but recommended for reproducibility - specify the exact commit hash:
-    # hf_revision="6002345709e0801764318f06bf06ce1e7d1a1fe3",
-    # trust_dataset=True,
     hf_avail_splits=["train", "test", "validation"],
-    evaluation_splits=["validation",],
+    evaluation_splits=["validation"],
     few_shots_split=None,
     few_shots_select=None,
-    # generation_size=1,
-    metrics=[
-        LogLikelihoodAccMetric(),
-        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
-        ],
+    metrics=_CF_METRICS,
     stop_sequence=["\n"],
     version=0,
 )
 
 TASKS_TABLE = [
-    hellaswag,
-    hellaswag_harness,
+    hellaswag_mcf,
+    hellaswag_mcf_em,
+    hellaswag_cf,
 ]

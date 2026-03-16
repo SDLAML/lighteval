@@ -381,7 +381,9 @@ class MetricsLogger:
         for k, metrics in self.metric_aggregated.items():
             if "|" in k:
                 task, fewshot = k.split("|")
-                grouped_tasks[f"{task.split(':')[0]}:_average|{fewshot}"].append(k)
+                parts = task.split(":")
+                group_prefix = ":".join([parts[0]] + parts[2:]) if len(parts) > 2 else parts[0]
+                grouped_tasks[f"{group_prefix}:_average|{fewshot}"].append(k)
             for metric, value in metrics.items():
                 suite_average[metric] = suite_average.get(metric, 0) + value
                 suite_nb[metric] = suite_nb.get(metric, 0) + 1

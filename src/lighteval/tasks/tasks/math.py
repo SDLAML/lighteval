@@ -32,6 +32,9 @@ Problem:
 Solution:
 """.strip()
 
+# OLMo easy-suite style: minimal prompt, 4-shot from training data
+MATH_BPB_PROMPT_TEMPLATE = "Problem: {prompt}\nSolution:"
+
 _MATH_SUBSETS = [
     'algebra',
     'counting_and_probability',
@@ -51,29 +54,28 @@ def math_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
+def math_bpb_prompt(line, task_name: str = None):
+    return Doc(
+        task_name=task_name,
+        query=MATH_BPB_PROMPT_TEMPLATE.format(prompt=line["problem"]),
+        choices=[f" {line['solution']}"],
+        gold_index=0,
+    )
+
+# BPB variant: OLMo-style minimal prompt, 4-shot from training data
 TASKS_TABLE = [
     LightevalTaskConfig(
-        name=f"math:{subset}",
-        prompt_function=math_prompt,
+        name=f"math:{subset}:bpb",
+        prompt_function=math_bpb_prompt,
         hf_repo="DigitalLearningGmbH/MATH-lighteval",
         hf_subset=subset,
         hf_avail_splits=["train", "test"],
         evaluation_splits=["test"],
-        few_shots_split=None,
-        few_shots_select=None,
-        generation_size=1024,
-        metrics=[
-            # Metrics.maj_at_n(
-            #     sample_params={
-            #         "n": 4,
-            #         "strip_strings": True,
-            #         "normalize_pred": math_normalizer,
-            #         "normalize_gold": math_normalizer,
-            #     }
-            # ),
-            Metrics.expr_gold_metric,
-        ],
-        stop_sequence=["Question:", "Problem:"],
+        few_shots_split="train",
+        few_shots_select="random_sampling_from_train",
+        generation_size=-1,
+        metrics=[Metrics.target_bits_per_byte],
+        stop_sequence=["Problem:"],
         version=1,
     )
     for subset in _MATH_SUBSETS

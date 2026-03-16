@@ -27,6 +27,7 @@ from typing_extensions import Annotated
 
 from lighteval.cli_args import (
     HELP_PANEL_NAME_4,
+    bootstrap_iters,
     custom_tasks,
     dataset_loading_processes,
     job_id,
@@ -255,6 +256,7 @@ def litellm(
     # === debug ===
     max_samples: max_samples.type = max_samples.default,
     job_id: job_id.type = job_id.default,
+    bootstrap_iters: bootstrap_iters.type = bootstrap_iters.default,
 ):
     """Evaluate models using LiteLLM as backend.
 
@@ -300,6 +302,7 @@ def litellm(
         load_responses_from_details_date_id=load_responses_from_details_date_id,
         remove_reasoning_tags=remove_reasoning_tags,
         reasoning_tags=reasoning_tags,
+        bootstrap_iters=bootstrap_iters,
     )
     pipeline = Pipeline(
         tasks=tasks,

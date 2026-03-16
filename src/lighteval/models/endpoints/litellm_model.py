@@ -22,14 +22,15 @@
 
 import logging
 import os
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed, ThreadPoolExecutor
 from json import JSONDecodeError
 
 import requests
 from tqdm import tqdm
 
-from lighteval.data import GenerativeTaskDataset
+from lighteval.data import GenerativeTaskDataset, LoglikelihoodDataset
 from lighteval.models.abstract_model import LightevalModel, ModelConfig
 from lighteval.models.model_output import ModelResponse
 from lighteval.tasks.prompt_manager import PromptManager
@@ -46,6 +47,7 @@ def _env_flag(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 if is_package_available("litellm"):
     import litellm
@@ -93,8 +95,11 @@ class LiteLLMModelConfig(ModelConfig):
             Environment variable names are provider-specific (e.g., OPENAI_API_KEY).
         concurrent_requests (int):
             Maximum number of concurrent API requests to execute in parallel.
-            Higher values can improve throughput for batch processing but may hit rate limits
-            or exhaust API quotas faster. Default is 10.
+            Higher values improve throughput by keeping the server busy; lower values
+            are safer for rate-limited public APIs. Default is 64, which is appropriate
+            for private vLLM deployments. For public APIs with strict rate limits (e.g.
+            OpenAI free-tier), set this to 5–10. For large private servers (e.g. vLLM
+            with DP=4 on H100s), 256–512 is reasonable.
         verbose (bool):
             Whether to enable verbose logging. Default is False.
         max_model_length (int | None):
@@ -133,12 +138,27 @@ class LiteLLMModelConfig(ModelConfig):
     provider: str | None = None
     base_url: str | None = None
     api_key: str | None = None
-    concurrent_requests: int = 10
+    concurrent_requests: int = 256
     verbose: bool = False
     max_model_length: int | None = None
     extra_body: dict | None = None
     merge_reasoning_content_in_choices: bool = False
     use_chat_template: bool = True
+    trust_remote_code: bool = False
+    tokenizer_path: str | None = None
+    """HuggingFace tokenizer name or local path for accurate token counting in
+    loglikelihood tasks.  If None, falls back to the TOKENIZER_PATH env var, then
+    to litellm's encode() which may use the wrong tokenizer for custom vLLM
+    deployments and produce a shifted logprob window.
+    Example: "/path/to/model" or "meta-llama/Llama-3.1-8B-Instruct"."""
+
+    logprob_batch_size: int = 256
+    """Number of (context, choice) pairs to score in a single batched text_completion
+    call.  vLLM's /v1/completions accepts a list of prompt strings and returns one
+    choice per prompt, reducing N×K HTTP round-trips to ceil(N×K / logprob_batch_size).
+    Set to 1 to use per-pair requests (compatibility mode for servers that do not
+    support batched prompts).  Tune together with concurrent_requests to match
+    your vLLM server capacity."""
 
     api_max_retry: int = 8
     api_retry_sleep: float = 1.0
@@ -164,8 +184,11 @@ class LiteLLMClient(LightevalModel):
         self._max_length = config.max_model_length
         self._enable_litellm_caching = _env_flag("LIGHTEVAL_LITELLM_CACHING", False)
         self.extra_body = config.extra_body
-        self.merge_reasoning_content_in_choices = config.merge_reasoning_content_in_choices
+        self.merge_reasoning_content_in_choices = (
+            config.merge_reasoning_content_in_choices
+        )
         self.use_chat_template = config.use_chat_template
+        self.logprob_batch_size = config.logprob_batch_size
 
         self.API_MAX_RETRY = config.api_max_retry
         self.API_RETRY_SLEEP = config.api_retry_sleep
@@ -181,10 +204,49 @@ class LiteLLMClient(LightevalModel):
             tokenizer=self.tokenizer,
             system_prompt=config.system_prompt,
         )
-        self._warned_empty_reasoning_only_response = False
+        self._warned_empty_reasoning_only_response = threading.Event()
+        self._warned_reasoning_tokens = threading.Event()
+        self._warned_o1 = threading.Event()
+
+        # Load HF tokenizer for accurate ctx_len in loglikelihood tasks.
+        # litellm's encode() maps model names to tokenizers; for custom vLLM deployments
+        # it often falls back to tiktoken or char/4, giving wrong token counts and
+        # a shifted logprob window.  tokenizer_path (or RULER_TOKENIZER env var) fixes this.
+        self._hf_tokenizer = None
+        tokenizer_path = config.tokenizer_path or os.environ.get("TOKENIZER_PATH")
+        if tokenizer_path:
+            try:
+                from transformers import AutoTokenizer
+
+                self._hf_tokenizer = AutoTokenizer.from_pretrained(
+                    tokenizer_path,
+                    trust_remote_code=config.trust_remote_code,
+                )
+                logger.info(f"Loaded HF tokenizer from: {tokenizer_path}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load HF tokenizer '{tokenizer_path}': {e}. Falling back to litellm encode()."
+                )
+
+        # Cache model-type flags once so per-request code avoids repeated lookups.
+        try:
+            self._is_reasoning_model: bool = supports_reasoning(config.model_name)
+        except Exception:
+            self._is_reasoning_model = False
+
+        self._is_o1_model: bool = "o1" in config.model_name
+
+        # Protects lazy initialisation of _max_length against concurrent writes.
+        self._max_length_lock = threading.Lock()
+
+        # Persistent thread pool — reused across all parallel API calls.
+        self._executor = ThreadPoolExecutor(max_workers=self.concurrent_requests)
 
         # Initialize cache for tokenization and predictions
         self._cache = SampleCache(config)
+
+    def cleanup(self):
+        self._executor.shutdown(wait=False)
 
     def _prepare_stop_sequence(self, stop_sequence):
         """Prepare and validate stop sequence."""
@@ -199,13 +261,15 @@ class LiteLLMClient(LightevalModel):
         if not max_new_tokens or max_new_tokens <= 0:
             return None
 
-        if supports_reasoning(self.model):
+        if self._is_reasoning_model:
             # We need to allow more tokens to include reasoning tokens
             max_new_tokens = min(max_new_tokens * 10, self.max_length)
 
-            logger.warning(
-                f"Reasoning model detected, increasing max_new_tokens to {max_new_tokens} to allow for reasoning tokens",
-            )
+            if not self._warned_reasoning_tokens.is_set():
+                logger.warning(
+                    f"Reasoning model detected, increasing max_new_tokens to {max_new_tokens} to allow for reasoning tokens",
+                )
+                self._warned_reasoning_tokens.set()
 
         return max_new_tokens
 
@@ -234,14 +298,18 @@ class LiteLLMClient(LightevalModel):
                 return message.get("reasoning_content")
         return None
 
-    def __call_api(self, prompt, return_logits, max_new_tokens, num_samples, stop_sequence):  # noqa: C901
+    def __call_api(
+        self, prompt, return_logits, max_new_tokens, num_samples, stop_sequence
+    ):  # noqa: C901
         """Make API call with retries."""
         response = LitellmModelResponse()
         stop_sequence = self._prepare_stop_sequence(stop_sequence)
         max_new_tokens = self._prepare_max_new_tokens(max_new_tokens)
 
         if return_logits and not self.provider == "openai":
-            logger.warning("Returning logits is not supported for this provider, ignoring.")
+            logger.warning(
+                "Returning logits is not supported for this provider, ignoring."
+            )
 
         # Prepare kwargs for completion call
         kwargs = {
@@ -263,13 +331,19 @@ class LiteLLMClient(LightevalModel):
         if self.use_chat_template:
             kwargs["messages"] = prompt
             kwargs["response_format"] = {"type": "text"}
-            kwargs["merge_reasoning_content_in_choices"] = self.merge_reasoning_content_in_choices
+            kwargs["merge_reasoning_content_in_choices"] = (
+                self.merge_reasoning_content_in_choices
+            )
         else:
             kwargs["prompt"] = prompt
             completion_call = litellm.text_completion
 
-        if "o1" in self.model:
-            logger.warning("O1 models do not support temperature, top_p, stop sequence. Disabling.")
+        if self._is_o1_model:
+            if not self._warned_o1.is_set():
+                logger.warning(
+                    "O1 models do not support temperature, top_p, stop sequence. Disabling."
+                )
+                self._warned_o1.set()
         else:
             kwargs.update(self.generation_parameters.to_litellm_dict())
 
@@ -282,13 +356,17 @@ class LiteLLMClient(LightevalModel):
                 content = self._get_choice_text(response.choices[0])
                 reasoning_content = self._get_choice_reasoning(response.choices[0])
 
-                if not content and reasoning_content and not self._warned_empty_reasoning_only_response:
+                if (
+                    not content
+                    and reasoning_content
+                    and not self._warned_empty_reasoning_only_response.is_set()
+                ):
                     logger.warning(
                         "Endpoint response contained reasoning_content but no final content. "
                         "This usually means the model is still in thinking mode; disable thinking for evals "
                         "(for example via extra_body.chat_template_kwargs.enable_thinking=false for Qwen3/vLLM)."
                     )
-                    self._warned_empty_reasoning_only_response = True
+                    self._warned_empty_reasoning_only_response.set()
 
                 # If response is empty, retry without caching (maybe the error is recoverable and solved with a retry)
                 if not content:
@@ -300,9 +378,7 @@ class LiteLLMClient(LightevalModel):
                 return response
             except litellm.BadRequestError as e:
                 if "message" in e.__dict__:
-                    error_string = (
-                        "The response was filtered due to the prompt triggering Microsoft's content management policy"
-                    )
+                    error_string = "The response was filtered due to the prompt triggering Microsoft's content management policy"
                     if error_string in e.__dict__["message"]:
                         logger.warning(f"{error_string}. Returning empty response.")
                         return LitellmModelResponse()
@@ -312,14 +388,18 @@ class LiteLLMClient(LightevalModel):
                 )  # Exponential backoff with max 64s
                 # Keep retry logs single-line to avoid noisy provider help text spam.
                 err_text = str(e).strip()
-                err_text = err_text.splitlines()[0] if err_text else e.__class__.__name__
+                err_text = (
+                    err_text.splitlines()[0] if err_text else e.__class__.__name__
+                )
                 logger.warning(
                     f"Error in API call ({e.__class__.__name__}: {err_text}), "
                     f"waiting {wait_time} seconds before retry {attempt + 1}/{self.API_MAX_RETRY}"
                 )
                 time.sleep(wait_time)
 
-        logger.error(f"API call failed after {self.API_MAX_RETRY} attempts, returning empty response.")
+        logger.error(
+            f"API call failed after {self.API_MAX_RETRY} attempts, returning empty response."
+        )
         return LitellmModelResponse()
 
     def __call_api_parallel(
@@ -330,40 +410,58 @@ class LiteLLMClient(LightevalModel):
         num_samples: int | list[int],
         stop_sequence: list[str] | None = None,
     ):
-        results = []
-
-        return_logitss = [return_logits for _ in prompts] if not isinstance(return_logits, list) else return_logits
-        max_new_tokenss = [max_new_tokens for _ in prompts] if not isinstance(max_new_tokens, list) else max_new_tokens
-        num_sampless = [num_samples for _ in prompts] if not isinstance(num_samples, list) else num_samples
+        return_logitss = (
+            [return_logits for _ in prompts]
+            if not isinstance(return_logits, list)
+            else return_logits
+        )
+        max_new_tokenss = (
+            [max_new_tokens for _ in prompts]
+            if not isinstance(max_new_tokens, list)
+            else max_new_tokens
+        )
+        num_sampless = (
+            [num_samples for _ in prompts]
+            if not isinstance(num_samples, list)
+            else num_samples
+        )
         stop_sequencess = [stop_sequence for _ in prompts]
         assert (
-            len(prompts) == len(return_logitss) == len(max_new_tokenss) == len(num_sampless) == len(stop_sequencess)
-        ), (
-            f"Length of prompts, return_logitss, max_new_tokenss, num_sampless, stop_sequences, system_prompts should be the same but are {len(prompts)}, {len(return_logitss)}, {len(max_new_tokenss)}, {len(num_sampless)}, {len(stop_sequencess)}"
-        )
+            len(prompts)
+            == len(return_logitss)
+            == len(max_new_tokenss)
+            == len(num_sampless)
+            == len(stop_sequencess)
+        ), f"Length of prompts, return_logitss, max_new_tokenss, num_sampless, stop_sequences, system_prompts should be the same but are {len(prompts)}, {len(return_logitss)}, {len(max_new_tokenss)}, {len(num_sampless)}, {len(stop_sequencess)}"
 
-        with ThreadPoolExecutor(self.concurrent_requests) as executor:
-            for entry in tqdm(
-                executor.map(
-                    self.__call_api,
+        futures = {
+            self._executor.submit(self.__call_api, p, rl, mn, ns, ss): i
+            for i, (p, rl, mn, ns, ss) in enumerate(
+                zip(
                     prompts,
                     return_logitss,
                     max_new_tokenss,
                     num_sampless,
                     stop_sequencess,
-                ),
-                total=len(prompts),
-            ):
-                results.append(entry)
+                )
+            )
+        }
+        results = [None] * len(prompts)
+        for future in tqdm(as_completed(futures), total=len(prompts)):
+            results[futures[future]] = future.result()
 
         if None in results:
-            raise ValueError("Some entries are not annotated due to errors in annotate_p, please inspect and retry.")
+            raise ValueError(
+                "Some entries are not annotated due to errors in annotate_p, please inspect and retry."
+            )
 
         return results
 
     def estimate_context_length(self) -> int:
         def fallback():
-            logger.warning("Failed to fetch model endpoint info from OpenRouter, returning default max length.")
+            logger.warning(
+                "Failed to fetch model endpoint info from OpenRouter, returning default max length."
+            )
             return self._DEFAULT_MAX_LENGTH
 
         # If the model is used through openrouter, the actual model name comes after the prefix
@@ -406,7 +504,9 @@ class LiteLLMClient(LightevalModel):
         Returns:
             list[ModelResponse]: list of generated responses.
         """
-        dataset = GenerativeTaskDataset(requests=docs, num_dataset_splits=self.DATASET_SPLITS)
+        dataset = GenerativeTaskDataset(
+            requests=docs, num_dataset_splits=self.DATASET_SPLITS
+        )
         results = []
 
         for split in tqdm(
@@ -417,7 +517,9 @@ class LiteLLMClient(LightevalModel):
             disable=self.disable_tqdm,
         ):
             if self.use_chat_template:
-                contexts = [self.prompt_manager.prepare_prompt_api(doc) for doc in split]
+                contexts = [
+                    self.prompt_manager.prepare_prompt_api(doc) for doc in split
+                ]
             else:
                 contexts = [self.prompt_manager.prepare_prompt(doc) for doc in split]
             max_new_tokens = split[0].generation_size  # could be none
@@ -430,11 +532,17 @@ class LiteLLMClient(LightevalModel):
                     "num_samples > 1 is not supported with temperature=0, please set temperature > 0 or use non sampling metrics."
                 )
 
-            responses = self.__call_api_parallel(contexts, return_logits, max_new_tokens, num_samples, stop_sequence)
+            responses = self.__call_api_parallel(
+                contexts, return_logits, max_new_tokens, num_samples, stop_sequence
+            )
 
             for response, context in zip(responses, contexts):
-                result: list[str] = [(self._get_choice_text(choice) or "") for choice in response.choices]
-                reasonings: list[str | None] = [self._get_choice_reasoning(choice) for choice in response.choices]
+                result: list[str] = [
+                    (self._get_choice_text(choice) or "") for choice in response.choices
+                ]
+                reasonings: list[str | None] = [
+                    self._get_choice_reasoning(choice) for choice in response.choices
+                ]
 
                 cur_response = ModelResponse(
                     # In empty responses, the model should return an empty string instead of None
@@ -460,27 +568,336 @@ class LiteLLMClient(LightevalModel):
         if self._max_length is not None:
             return self._max_length
 
+        with self._max_length_lock:
+            # Re-check inside the lock: another thread may have set it while we waited.
+            if self._max_length is not None:
+                return self._max_length
+
+            try:
+                max_tokens = get_max_tokens(self.model)
+            except Exception:
+                logger.error(
+                    f"Unable to get the maximum sequence length for model {self.model} from litellm. Fetching information from OpenRouter instead."
+                )
+                max_tokens = self.estimate_context_length()
+
+            self._max_length = max_tokens
+
+        return self._max_length
+
+    def _count_tokens(self, text: str) -> int:
+        """Return token count using the HF tokenizer if configured, else litellm encode."""
+        if self._hf_tokenizer is not None:
+            return len(self._hf_tokenizer.encode(text, add_special_tokens=False))
         try:
-            max_tokens = get_max_tokens(self.model)
+            return len(encode(self.model, text))
         except Exception:
+            return max(1, len(text) // 4)
+
+    def _score_single(self, prompt: str, ctx_token_count: int) -> tuple[float, bool]:
+        """Score one (context + choice) string via a single echo-based completions call.
+
+        Args:
+            prompt: Full text (context + choice) to score.
+            ctx_token_count: Number of context tokens; continuation logprobs start here.
+
+        Returns:
+            (logprob_sum, is_greedy)
+        """
+        for attempt in range(self.API_MAX_RETRY):
+            try:
+                response = litellm.text_completion(
+                    model=self.model,
+                    custom_llm_provider=self.provider,
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                    prompt=prompt,
+                    max_tokens=1,
+                    echo=True,
+                    logprobs=1,
+                    temperature=0,
+                    caching=self._enable_litellm_caching,
+                    timeout=self.timeout,
+                )
+                break
+            except Exception as e:
+                wait = min(
+                    64, self.API_RETRY_SLEEP * (self.API_RETRY_MULTIPLIER**attempt)
+                )
+                err = str(e).splitlines()[0] if str(e) else e.__class__.__name__
+                logger.warning(
+                    f"logprob call failed ({err}), retry {attempt + 1}/{self.API_MAX_RETRY}"
+                )
+                time.sleep(wait)
+        else:
+            logger.error("logprob call failed after all retries, returning -inf")
+            return float("-inf"), False
+
+        logprobs_obj = response.choices[0].logprobs
+        token_logprobs = logprobs_obj.token_logprobs or []
+
+        # Infer choice token count from response: len = ctx + choice + 1 (generated token)
+        # :-1 would be equivalent but fails when ctx_token_count is off by 1 due to BPE
+        # boundary merges (e.g. "Answer:" + " Yes" -> "Answer:▁Yes" in joint tokenization),
+        # producing an empty slice and logprob_sum = -inf, which poisons corpus BPB.
+        start = ctx_token_count
+        n_choice = len(token_logprobs) - 1 - ctx_token_count
+        if n_choice <= 0 and ctx_token_count > 0:
+            # ctx_token_count overestimates by 1 — shift start back by 1
+            start -= 1
+            n_choice = len(token_logprobs) - 1 - start
+        end = start + max(n_choice, 0)
+
+        cont_logprobs = [lp for lp in token_logprobs[start:end] if lp is not None]
+        logprob_sum = sum(cont_logprobs) if cont_logprobs else float("-inf")
+
+        is_greedy = False
+        top_logprobs = logprobs_obj.top_logprobs or []
+        tokens = logprobs_obj.tokens or []
+        cont_top = top_logprobs[start:end]
+        cont_toks = tokens[start:end]
+        if cont_top and cont_toks and len(cont_top) == len(cont_toks):
+            is_greedy = all(tok in top for tok, top in zip(cont_toks, cont_top) if top)
+
+        return logprob_sum, is_greedy
+
+    def _score_batch(
+        self, batch: list[tuple[int, int, str, int]]
+    ) -> list[tuple[int, int, tuple[float, bool]]]:
+        """Score a batch of (context+choice) strings in a single batched echo call.
+
+        vLLM's /v1/completions accepts ``prompt`` as a list of strings and
+        returns one choice per input prompt, so a single HTTP round-trip covers
+        all pairs in the batch.
+
+        Args:
+            batch: list of (doc_idx, choice_idx, full_text, ctx_token_count)
+
+        Returns:
+            list of (doc_idx, choice_idx, (logprob_sum, is_greedy))
+        """
+        if len(batch) == 1:
+            di, ci, full_text, ctx_len = batch[0]
+            return [(di, ci, self._score_single(full_text, ctx_len))]
+
+        prompts = [full_text for _, _, full_text, _ in batch]
+
+        for attempt in range(self.API_MAX_RETRY):
+            try:
+                response = litellm.text_completion(
+                    model=self.model,
+                    custom_llm_provider=self.provider,
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                    prompt=prompts,
+                    max_tokens=1,
+                    echo=True,
+                    logprobs=1,
+                    temperature=0,
+                    caching=self._enable_litellm_caching,
+                    timeout=self.timeout,
+                )
+                break
+            except Exception as e:
+                wait = min(
+                    64, self.API_RETRY_SLEEP * (self.API_RETRY_MULTIPLIER**attempt)
+                )
+                err = str(e).splitlines()[0] if str(e) else e.__class__.__name__
+                logger.warning(
+                    f"batch logprob call failed ({err}), retry {attempt + 1}/{self.API_MAX_RETRY}"
+                )
+                time.sleep(wait)
+        else:
             logger.error(
-                f"Unable to get the maximum sequence length for model {self.model} from litellm. Fetching information from OpenRouter instead."
+                "batch logprob call failed after all retries, returning -inf for all items"
             )
-            max_tokens = self.estimate_context_length()
+            return [(di, ci, (float("-inf"), False)) for di, ci, _, _ in batch]
 
-        # Avoid future requests
-        self._max_length = max_tokens
+        # choices[i].index == i when prompt is a list with n=1 (OpenAI completions API).
+        choices_by_idx = {c.index: c for c in response.choices}
 
-        return max_tokens
+        results = []
+        for seq_idx, (di, ci, _, ctx_token_count) in enumerate(batch):
+            choice = choices_by_idx.get(seq_idx)
+            if choice is None:
+                logger.warning(
+                    f"Missing response for batch item {seq_idx}, returning -inf"
+                )
+                results.append((di, ci, (float("-inf"), False)))
+                continue
+
+            logprobs_obj = choice.logprobs
+            token_logprobs = logprobs_obj.token_logprobs or []
+
+            start = ctx_token_count
+            n_choice = len(token_logprobs) - 1 - ctx_token_count
+            if n_choice <= 0 and ctx_token_count > 0:
+                start -= 1
+                n_choice = len(token_logprobs) - 1 - start
+            end = start + max(n_choice, 0)
+
+            cont_logprobs = [lp for lp in token_logprobs[start:end] if lp is not None]
+            logprob_sum = sum(cont_logprobs) if cont_logprobs else float("-inf")
+
+            top_logprobs = logprobs_obj.top_logprobs or []
+            tokens = logprobs_obj.tokens or []
+            cont_top = top_logprobs[start:end]
+            cont_toks = tokens[start:end]
+            is_greedy = False
+            if cont_top and cont_toks and len(cont_top) == len(cont_toks):
+                is_greedy = all(
+                    tok in top for tok, top in zip(cont_toks, cont_top) if top
+                )
+
+            results.append((di, ci, (logprob_sum, is_greedy)))
+
+        return results
 
     @cached(SamplingMethod.LOGPROBS)
     def loglikelihood(self, docs: list[Doc]) -> list[ModelResponse]:
-        """Tokenize the context and continuation and compute the log likelihood of those
-        tokenized sequences.
+        """Compute log p(continuation | context) for each choice via echo-based completions.
+
+        Uses /v1/completions with echo=True and logprobs=1. Requires
+        use_chat_template=False and a server that supports the completions
+        endpoint (e.g. vLLM).
+
+        All (doc, choice) pairs are grouped into batches of logprob_batch_size and
+        each batch is sent as a single API call (prompt=[list of strings]), reducing
+        N×K round-trips to ceil(N×K / logprob_batch_size).  Each batch future runs
+        in the ThreadPoolExecutor; tune concurrent_requests to control how many
+        batches are in flight at once.
         """
-        raise NotImplementedError
+        if self.use_chat_template:
+            raise ValueError(
+                "LiteLLMClient.loglikelihood requires use_chat_template=False. "
+                "The chat completions API does not support echo-based logprob extraction."
+            )
+
+        dataset = LoglikelihoodDataset(
+            requests=docs, num_dataset_splits=self.DATASET_SPLITS
+        )
+
+        doc_list: list[Doc] = []
+        context_list: list[str] = []
+
+        for split in dataset.splits_iterator():
+            for doc in split:
+                context = self.prompt_manager.prepare_prompt(doc)
+                doc_list.append(doc)
+                context_list.append(context)
+
+        # scored[doc_idx][choice_idx] = (logprob_sum, is_greedy)
+        scored: list[list[tuple[float, bool]]] = [
+            [(0.0, False)] * len(doc.choices) for doc in doc_list
+        ]
+
+        # Flat work list: (doc_idx, choice_idx, context, choice)
+        work = [
+            (di, ci, context_list[di], choice)
+            for di, doc in enumerate(doc_list)
+            for ci, choice in enumerate(doc.choices)
+        ]
+
+        def _score_batch_work(batch_items: list[tuple]) -> list[tuple]:
+            """Tokenize a batch then score all pairs in one API call."""
+            prepared = []
+            for di, ci, context, choice in batch_items:
+                # ctx_len = total - choice avoids the BPE boundary ±1 error when
+                # tokenizing context alone (e.g. "Answer:" + " Yes" merges into
+                # "Answer:▁Yes", making context_len overestimate by 1).
+                total_len = self._count_tokens(context + choice)
+                choice_len = self._count_tokens(choice)
+                prepared.append((di, ci, context + choice, total_len - choice_len))
+            return self._score_batch(prepared)
+
+        # Chunk work into batches — each batch becomes a single API call with a list
+        # of prompts, reducing N×K HTTP round-trips to ceil(N×K / logprob_batch_size).
+        bs = self.logprob_batch_size
+        batches = [work[i : i + bs] for i in range(0, len(work), bs)]
+        futures = [self._executor.submit(_score_batch_work, batch) for batch in batches]
+        for future in tqdm(
+            as_completed(futures),
+            total=len(batches),
+            desc="Loglikelihoods",
+            disable=self.disable_tqdm,
+        ):
+            for di, ci, result in future.result():
+                scored[di][ci] = result
+
+        results: list[ModelResponse] = []
+        for doc, context, pairs in zip(doc_list, context_list, scored):
+            logprobs = [lp for lp, _ in pairs]
+            argmax = [g for _, g in pairs]
+            results.append(
+                ModelResponse(
+                    input=context, logprobs=logprobs, argmax_logits_eq_gold=argmax
+                )
+            )
+
+        return dataset.get_original_order(results)
+
+    def _rolling_logprob(self, context: str) -> ModelResponse:
+        """Score a single document via echo-based rolling logprob (used in parallel)."""
+        for attempt in range(self.API_MAX_RETRY):
+            try:
+                response = litellm.text_completion(
+                    model=self.model,
+                    custom_llm_provider=self.provider,
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                    prompt=context,
+                    max_tokens=1,
+                    echo=True,
+                    logprobs=0,
+                    temperature=0,
+                    caching=self._enable_litellm_caching,
+                    timeout=self.timeout,
+                )
+                logprobs_obj = response.choices[0].logprobs
+                token_logprobs = logprobs_obj.token_logprobs or []
+                valid_lps = [lp for lp in token_logprobs[:-1] if lp is not None]
+                return ModelResponse(input=context, logprobs=valid_lps)
+            except Exception as e:
+                wait = min(
+                    64, self.API_RETRY_SLEEP * (self.API_RETRY_MULTIPLIER**attempt)
+                )
+                err = str(e).splitlines()[0] if str(e) else e.__class__.__name__
+                logger.warning(
+                    f"rolling logprob call failed ({err}), retry {attempt + 1}/{self.API_MAX_RETRY}"
+                )
+                time.sleep(wait)
+
+        logger.error(
+            "Rolling logprob call failed after all retries, returning empty response."
+        )
+        return ModelResponse(input=context, logprobs=[])
 
     @cached(SamplingMethod.PERPLEXITY)
     def loglikelihood_rolling(self, docs: list[Doc]) -> list[ModelResponse]:
-        """This function is used to compute the log likelihood of the context for perplexity metrics."""
-        raise NotImplementedError
+        """Compute rolling log-likelihood (perplexity) over the full context.
+
+        Sends the full text via echo=True and sums all per-token logprobs.
+        Used for tasks like Lambada that measure BPB/perplexity over a passage.
+        Requires use_chat_template=False.
+        """
+        if self.use_chat_template:
+            raise ValueError(
+                "LiteLLMClient.loglikelihood_rolling requires use_chat_template=False."
+            )
+
+        contexts = [self.prompt_manager.prepare_prompt(doc) for doc in docs]
+
+        futures = {
+            self._executor.submit(self._rolling_logprob, ctx): i
+            for i, ctx in enumerate(contexts)
+        }
+        results = [None] * len(contexts)
+        for future in tqdm(
+            as_completed(futures),
+            total=len(contexts),
+            desc="Rolling loglikelihoods",
+            disable=self.disable_tqdm,
+        ):
+            results[futures[future]] = future.result()
+
+        return results

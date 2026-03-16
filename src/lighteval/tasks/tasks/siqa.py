@@ -31,11 +31,25 @@ paper:
 from string import ascii_uppercase
 
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
+from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
+_CF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    Metrics.target_bits_per_byte,
+]
 
-def siqa_prompt(line, task_name: str = None):
+_MCF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+]
+
+
+def siqa_mcf_prompt(line, task_name: str = None):
+    """MCF variant: labeled A/B/C options in prompt, score label tokens via logprobs."""
     query = "The following are multiple choice questions (with answers) about common sense.\n"
     query += f"Question: {line['context']} {line['question']}\n"
     query += "".join(
@@ -55,9 +69,36 @@ def siqa_prompt(line, task_name: str = None):
     )
 
 
-siqa = LightevalTaskConfig(
-    name="siqa",
-    prompt_function=siqa_prompt,
+def siqa_cf_prompt(line, task_name: str = None):
+    """CF variant: completion-style prompt with full answer texts as choices."""
+    answers = [line["answerA"], line["answerB"], line["answerC"]]
+    query = f"Context: {line['context']}\nQuestion: {line['question']}\nAnswer:"
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[" " + a for a in answers],
+        gold_index=int(line["label"]) - 1,
+    )
+
+
+def siqa_bpb_prompt(line, task_name: str = None):
+    """BPB variant: CF-style prompt with only the gold answer."""
+    answers = [line["answerA"], line["answerB"], line["answerC"]]
+    gold_ix = int(line["label"]) - 1
+    gold_text = " " + answers[gold_ix]
+    query = f"Context: {line['context']}\nQuestion: {line['question']}\nAnswer:"
+    return Doc(
+        task_name=task_name,
+        query=query,
+        choices=[gold_text],
+        gold_index=0,
+    )
+
+
+# Greedy variant: MCF-style prompt, generate 1 token, exact match
+siqa_mcf_em = LightevalTaskConfig(
+    name="siqa:mcf_em",
+    prompt_function=siqa_mcf_prompt,
     hf_repo="lighteval/siqa",
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
@@ -70,6 +111,40 @@ siqa = LightevalTaskConfig(
     version=0,
 )
 
+# MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
+siqa_mcf = LightevalTaskConfig(
+    name="siqa:mcf",
+    prompt_function=siqa_mcf_prompt,
+    hf_repo="lighteval/siqa",
+    hf_subset="default",
+    hf_avail_splits=["train", "validation"],
+    evaluation_splits=["validation"],
+    few_shots_split=None,
+    few_shots_select="random_sampling_from_train",
+    generation_size=-1,
+    metrics=_MCF_METRICS,
+    stop_sequence=["\n"],
+    version=0,
+)
+
+# CF variant: completion-style, logprob on full answer text + BPB on gold choice
+siqa_cf = LightevalTaskConfig(
+    name="siqa:cf",
+    prompt_function=siqa_cf_prompt,
+    hf_repo="lighteval/siqa",
+    hf_subset="default",
+    hf_avail_splits=["train", "validation"],
+    evaluation_splits=["validation"],
+    few_shots_split=None,
+    few_shots_select="random_sampling_from_train",
+    generation_size=-1,
+    metrics=_CF_METRICS,
+    stop_sequence=["\n"],
+    version=0,
+)
+
 TASKS_TABLE = [
-    siqa,
+    siqa_mcf_em,
+    siqa_mcf,
+    siqa_cf,
 ]

@@ -1578,6 +1578,7 @@ class RulerStringMatchAny(SampleLevelComputation):
 
     Used for QA subtasks (SQuAD, HotpotQA) where any acceptable answer
     appearing in the prediction counts as a full correct response.
+    Returns 1.0 if any gold string is found in the prediction, 0.0 otherwise.
     """
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
@@ -1589,9 +1590,7 @@ class RulerStringMatchAny(SampleLevelComputation):
         golds = doc.get_golds()
         if not golds:
             return 0.0
-        # Same formula as string_match_all in RULER reference (common_utils.py).
-        # For QA, gold list contains paraphrase answers; score = fraction found.
-        return sum(g.lower() in pred for g in golds) / len(golds)
+        return float(any(g.lower() in pred for g in golds))
 
 
 class RulerStringMatch(SampleLevelComputation):
