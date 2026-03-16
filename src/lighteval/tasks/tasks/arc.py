@@ -23,15 +23,23 @@ https://arxiv.org/abs/1803.05457
 """
 
 from string import ascii_uppercase
-from inspect_ai.dataset import Sample
-from inspect_ai.scorer import choice
-from inspect_ai.solver import multiple_choice
 
 from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
 from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
+
+_CF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    Metrics.target_bits_per_byte,
+]
+
+_MCF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+]
 
 
 def arc_prompt(line, task_name: str = None):
@@ -56,16 +64,9 @@ def arc_mcf_prompt(line, task_name: str = None):
     )
 
 
-def record_to_sample(record):
-    query = record["question"].strip()
-    target = record["answerKey"]
-    choices = record["choices"]["text"]
-
-    return Sample(input=query, target=target, choices=choices)
-
-
-arc_challenge = LightevalTaskConfig(
-    name="arc:challenge",
+# CF variant: completion-style, logprob on full answer text + BPB on gold choice
+arc_challenge_cf = LightevalTaskConfig(
+    name="arc:challenge:cf",
     prompt_function=arc_prompt,
     hf_repo="allenai/ai2_arc",
     hf_subset="ARC-Challenge",
@@ -73,21 +74,13 @@ arc_challenge = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select="random_sampling_from_train",
-    # generation_size=1,
-    metrics=[
-        # Metrics.loglikelihood_acc,
-        LogLikelihoodAccMetric(),
-        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
-    ],
+    metrics=_CF_METRICS,
     stop_sequence=["\n"],
     version=0,
-    # sample_fields=record_to_sample,
-    # solver=[multiple_choice(cache=True)],
-    # scorer=choice(),
 )
 
-arc_easy = LightevalTaskConfig(
-    name="arc:easy",
+arc_easy_cf = LightevalTaskConfig(
+    name="arc:easy:cf",
     prompt_function=arc_prompt,
     hf_repo="allenai/ai2_arc",
     hf_subset="ARC-Easy",
@@ -95,19 +88,12 @@ arc_easy = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select="random_sampling_from_train",
-    # generation_size=1,
-    metrics=[
-        # Metrics.loglikelihood_acc,
-        LogLikelihoodAccMetric(),
-        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
-    ],
+    metrics=_CF_METRICS,
     stop_sequence=["\n"],
     version=0,
-    # sample_fields=record_to_sample,
-    # solver=[multiple_choice(cache=True)],
-    # scorer=choice(),
 )
 
+# MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
 arc_challenge_mcf = LightevalTaskConfig(
     name="arc:challenge:mcf",
     prompt_function=arc_mcf_prompt,
@@ -117,10 +103,8 @@ arc_challenge_mcf = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select="random_sampling_from_train",
-    generation_size=1,
-    metrics=[
-        Metrics.exact_match,
-    ],
+    generation_size=-1,
+    metrics=_MCF_METRICS,
     stop_sequence=["\n"],
     version=0,
 )
@@ -134,15 +118,45 @@ arc_easy_mcf = LightevalTaskConfig(
     evaluation_splits=["test"],
     few_shots_split=None,
     few_shots_select="random_sampling_from_train",
+    generation_size=-1,
+    metrics=_MCF_METRICS,
+    stop_sequence=["\n"],
+    version=0,
+)
+
+# Greedy variant: MCF-style prompt, generate 1 token, exact match
+arc_challenge_mcf_em = LightevalTaskConfig(
+    name="arc:challenge:mcf_em",
+    prompt_function=arc_mcf_prompt,
+    hf_repo="allenai/ai2_arc",
+    hf_subset="ARC-Challenge",
+    hf_avail_splits=["train", "validation", "test"],
+    evaluation_splits=["test"],
+    few_shots_split=None,
+    few_shots_select="random_sampling_from_train",
     generation_size=1,
-    metrics=[
-        Metrics.exact_match,
-    ],
+    metrics=[Metrics.exact_match],
+    stop_sequence=["\n"],
+    version=0,
+)
+
+arc_easy_mcf_em = LightevalTaskConfig(
+    name="arc:easy:mcf_em",
+    prompt_function=arc_mcf_prompt,
+    hf_repo="allenai/ai2_arc",
+    hf_subset="ARC-Easy",
+    hf_avail_splits=["train", "validation", "test"],
+    evaluation_splits=["test"],
+    few_shots_split=None,
+    few_shots_select="random_sampling_from_train",
+    generation_size=1,
+    metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
     version=0,
 )
 
 TASKS_TABLE = [
-    arc_challenge, arc_easy,
+    arc_challenge_cf, arc_easy_cf,
     arc_challenge_mcf, arc_easy_mcf,
+    arc_challenge_mcf_em, arc_easy_mcf_em,
 ]

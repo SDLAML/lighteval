@@ -237,6 +237,17 @@ job_id = Arg(
     default=0,
 )
 
+bootstrap_iters = Arg(
+    type=Annotated[
+        int,
+        Option(
+            help="Number of bootstrap iterations for computing metric stderr. Set to 0 to disable (much faster for large task suites like MMLU).",
+            rich_help_panel=HELP_PANEL_NAME_3,
+        ),
+    ],
+    default=0,
+)
+
 
 # Common argument patterns
 tasks = Arg(

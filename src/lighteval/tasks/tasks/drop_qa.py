@@ -66,19 +66,41 @@ def drop_prompt(line, task_name: str = None):
     )
 
 
-drop_qa = LightevalTaskConfig(
-    name="drop",
-    prompt_function=drop_prompt,
+def drop_bpb_prompt(line, task_name: str = None):
+    """BPB variant: CF-style prompt with only the first gold answer."""
+    answer = line["answer"]
+    if answer["number"] != "":
+        gold_text = str(answer["number"])
+    elif answer["spans"]:
+        gold_text = ", ".join(answer["spans"])
+    else:
+        gold_text = " ".join([answer["date"]["day"], answer["date"]["month"], answer["date"]["year"]]).strip()
+    if not gold_text:
+        return None  # degenerate sample with no extractable answer; skip
+    if not gold_text[0].isspace():
+        gold_text = " " + gold_text
+    return Doc(
+        task_name=task_name,
+        query=f"Passage: {line['passage']}\nQuestion: {line['question']}\nAnswer:",
+        choices=[gold_text],
+        gold_index=0,
+    )
+
+
+drop_bpb = LightevalTaskConfig(
+    name="drop:bpb",
+    prompt_function=drop_bpb_prompt,
     hf_repo="lighteval/drop_harness",
     hf_subset="default",
     evaluation_splits=("validation",),
     few_shots_split="train",
-    generation_size=50,
-    stop_sequence=["Question:", "question:", "\n"],
-    metrics=[Metrics.exact_match],
-    version=1,
+    few_shots_select="random_sampling_from_train",
+    generation_size=-1,
+    stop_sequence=["\n"],
+    metrics=[Metrics.target_bits_per_byte],
+    version=0,
 )
 
 TASKS_TABLE = [
-    drop_qa,
+    drop_bpb,
 ]

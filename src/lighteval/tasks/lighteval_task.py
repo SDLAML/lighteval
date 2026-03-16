@@ -481,7 +481,7 @@ class LightevalTask:
         import os as _os
         from pathlib import Path as _Path
 
-        _ruler_tok = _os.environ.get("RULER_TOKENIZER")
+        _ruler_tok = _os.environ.get("TOKENIZER_PATH")
         if _ruler_tok and not _os.path.isdir(task.dataset_path):
             try:
                 from lighteval.tasks.tasks.ruler import (

@@ -3,9 +3,9 @@ model_parameters:
   provider: "openai"
   base_url: "https://router.huggingface.co/hf-inference/v1"
   generation_parameters:
-    temperature: 0.5
+    temperature: 0        # 0 = greedy; set > 0 only for sampling-based generation tasks
     max_new_tokens: 256
-    top_p: 0.9
     seed: 0
-    repetition_penalty: 1.0
-    frequency_penalty: 0.0
+    # top_p: 0.9          # only meaningful with temperature > 0
+    # repetition_penalty: 1.0   # 1.0 = no effect
+    # frequency_penalty: 0.0    # 0.0 = no effect

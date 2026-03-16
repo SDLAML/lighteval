@@ -167,9 +167,10 @@ class TargetPerplexityPreparator(Preparator):
         Returns:
             PerplexityCorpusMetricInput: Stores the measured logprobs and associated text lengths, counted in the reference unit.
         """
-        logprobs_flat = np.sum(model_response.logprobs)
+        gold_ix = as_list(doc.gold_index)[0]
+        gold_logprob = model_response.logprobs[gold_ix]
         reference_text_flat = " ".join(doc.get_golds())
-        return PerplexityCorpusMetricInput(logprobs=logprobs_flat, weights=self.count_units(reference_text_flat))
+        return PerplexityCorpusMetricInput(logprobs=gold_logprob, weights=self.count_units(reference_text_flat))
 
 
 class PerplexityPreparator(Preparator):

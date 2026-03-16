@@ -699,6 +699,13 @@ class Metrics(Enum):
         corpus_level_fn=CorpusLevelPerplexityMetric("perplexity"),
         higher_is_better=False,
     )
+    target_bits_per_byte = SampleLevelMetric(
+        metric_name="target_bpb",
+        sample_level_fn=TargetPerplexityPreparator(units_type="bytes"),
+        category=SamplingMethod.LOGPROBS,
+        corpus_level_fn=CorpusLevelPerplexityMetric("bits_per_byte"),
+        higher_is_better=False,
+    )
     ter = CorpusLevelMetric(
         metric_name="ter",
         sample_level_fn=GenerativePreparator(),
