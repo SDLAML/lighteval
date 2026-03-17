@@ -93,7 +93,7 @@ class PipelineParameters:
     remove_reasoning_tags: bool = True
     reasoning_tags: str | list[tuple[str, str]] = "[('<think>', '</think>')]"
     load_responses_from_details_date_id: str | None = None
-    bootstrap_iters: int = 0
+    bootstrap_iters: int = 1000
     load_tasks_multilingual: bool = False
 
     def __post_init__(self):  # noqa C901
