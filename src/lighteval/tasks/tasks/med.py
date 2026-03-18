@@ -51,7 +51,7 @@ def med_mcqa_mcf_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=query,
-        choices=list(ascii_uppercase)[:4],
+        choices=[" " + c for c in list(ascii_uppercase)[:4]],
         gold_index=line["cop"] - 1,
         instruction="Give a letter answer among A, B, C or D.\n",
     )
