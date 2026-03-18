@@ -58,7 +58,7 @@ def commonsenseqa_mcf_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=query,
-        choices=list(ascii_uppercase)[: len(line["choices"]["text"])],
+        choices=[" " + c.lstrip() for c in list(ascii_uppercase)[: len(line["choices"]["text"])]],
         gold_index=list(ascii_uppercase).index(line["answerKey"].strip()),
         instruction="The following are multiple choice questions (with answers) about common sense.\n",
     )
