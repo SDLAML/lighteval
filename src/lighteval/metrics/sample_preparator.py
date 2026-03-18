@@ -167,6 +167,7 @@ class TargetPerplexityPreparator(Preparator):
         Returns:
             PerplexityCorpusMetricInput: Stores the measured logprobs and associated text lengths, counted in the reference unit.
         """
+        assert len(as_list(doc.gold_index)) == 1, "TargetPerplexityPreparator is meant to be used with a single target reference only."
         gold_ix = as_list(doc.gold_index)[0]
         gold_logprob = model_response.logprobs[gold_ix]
         reference_text_flat = " ".join(doc.get_golds())
