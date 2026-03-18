@@ -98,31 +98,6 @@ _MMLU_SUBSETS = [
 ]
 
 
-def mmlu_prompt(line, task_name: str = None):
-    """MCF-style prompt with label choices: used for greedy and mcf variants."""
-    subject = line["subject"]
-    query = f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}"
-    query += "".join(
-        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
-    )
-    query += "\nAnswer:"
-
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[" A", " B", " C", " D"],
-        gold_index=gold_ix,
-        fewshot_sorting_class=line["choices"][gold_ix],
-        instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
-    )
-
-
 def mmlu_cf_prompt(line, task_name: str = None):
     """CF variant: completion-format prompt with full answer texts as choices."""
     subject = line["subject"]
@@ -310,7 +285,7 @@ def mmlu_redux_chat_prompt(line, task_name: str = None):
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"mmlu:{subset}:mcf_em",
-        prompt_function=mmlu_prompt,
+        prompt_function=mmlu_mcf_prompt,
         hf_repo="lighteval/mmlu",
         hf_subset=subset,
         hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
