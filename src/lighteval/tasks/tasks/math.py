@@ -49,7 +49,6 @@ def math_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=MATH_PROMPT_TEMPLATE.format(prompt=line["problem"]),
-        # query=f"Question: {line['problem']}\nAnswer:",
         choices=[f" {line['solution']}"],
         gold_index=0,
     )
@@ -76,6 +75,26 @@ TASKS_TABLE = [
         generation_size=-1,
         metrics=[Metrics.target_bits_per_byte],
         stop_sequence=["Problem:"],
+        version=1,
+    )
+    for subset in _MATH_SUBSETS
+]
+
+TASKS_TABLE += [
+    LightevalTaskConfig(
+        name=f"math:{subset}:extr_match",
+        prompt_function=math_prompt,
+        hf_repo="DigitalLearningGmbH/MATH-lighteval",
+        hf_subset=subset,
+        hf_avail_splits=["train", "test"],
+        evaluation_splits=["test"],
+        few_shots_split=None,
+        few_shots_select=None,
+        generation_size=1024,
+        metrics=[
+            Metrics.expr_gold_metric,
+        ],
+        stop_sequence=["Question:", "Problem:"],
         version=1,
     )
     for subset in _MATH_SUBSETS
