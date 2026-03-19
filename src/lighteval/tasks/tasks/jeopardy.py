@@ -38,6 +38,24 @@ def jeopardy_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
+jeopardy_em = LightevalTaskConfig(
+    name="jeopardy:em",
+    prompt_function=get_qa_prompt_function(
+        Language.ENGLISH,
+        lambda line: {
+            "question": line["question"],
+            "choices": [line["answer"]],
+        },
+    ),
+    hf_repo="openaccess-ai-collective/jeopardy",
+    hf_subset="default",
+    evaluation_splits=("train",),
+    few_shots_split="train",
+    generation_size=250,
+    stop_sequence=["\n", "Question:", "question:"],
+    metrics=[Metrics.exact_match],
+    version=1,
+)
 
 jeopardy_bpb = LightevalTaskConfig(
     name="jeopardy:bpb",
@@ -54,5 +72,6 @@ jeopardy_bpb = LightevalTaskConfig(
 )
 
 TASKS_TABLE = [
+    jeopardy_em,
     jeopardy_bpb,
 ]
