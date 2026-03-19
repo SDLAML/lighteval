@@ -69,25 +69,6 @@ def winogrande_mcf_prompt(line, task_name: str = None):
     )
 
 
-def winogrande_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold completion."""
-    gold_ix = int(line["answer"]) - 1 if line["answer"] != "" else -1
-    if gold_ix < 0:
-        return None  # test split has no labels; skip
-    query, end_of_target = line["sentence"].split("_")
-    end_of_target = end_of_target.strip()
-    option = line["option1"] if gold_ix == 0 else line["option2"]
-    gold_text = f"{option} {end_of_target}"
-    if not gold_text[0].isspace():
-        gold_text = " " + gold_text
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-    )
-
-
 # CF variant: completion-style, logprob on full answer text + BPB on gold choice
 winogrande_cf = LightevalTaskConfig(
     name="winogrande:cf",

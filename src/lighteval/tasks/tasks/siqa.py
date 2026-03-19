@@ -81,20 +81,6 @@ def siqa_cf_prompt(line, task_name: str = None):
     )
 
 
-def siqa_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer."""
-    answers = [line["answerA"], line["answerB"], line["answerC"]]
-    gold_ix = int(line["label"]) - 1
-    gold_text = " " + answers[gold_ix]
-    query = f"Context: {line['context']}\nQuestion: {line['question']}\nAnswer:"
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-    )
-
-
 # Greedy variant: MCF-style prompt, generate 1 token, exact match
 siqa_mcf_em = LightevalTaskConfig(
     name="siqa:mcf_em",

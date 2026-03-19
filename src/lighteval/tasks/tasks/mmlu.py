@@ -144,28 +144,6 @@ def mmlu_mcf_prompt(line, task_name: str = None):
     )
 
 
-def mmlu_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer as single choice."""
-    subject = line["subject"]
-    query = f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:"
-
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-    gold_text = " " + line["choices"][gold_ix]
-
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-        fewshot_sorting_class=line["choices"][gold_ix],
-        instruction=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\n",
-    )
-
-
 def mmlu_chat_prompt(line, task_name: str = None):
     subject = line["subject"]
     query = line["question"]
@@ -232,27 +210,6 @@ def mmlu_redux_cf_prompt(line, task_name: str = None):
         query=f"Question: {line['question']}\nAnswer:",
         choices=[" " + c for c in line["choices"]],
         gold_index=gold_ix,
-        fewshot_sorting_class=line["choices"][gold_ix],
-    )
-
-
-def mmlu_redux_bpb_prompt(line, task_name: str = None):
-    """BPB variant for redux: single gold answer choice."""
-    if line["error_type"] != "ok":
-        return None
-
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-    gold_text = " " + line["choices"][gold_ix]
-
-    return Doc(
-        task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
         fewshot_sorting_class=line["choices"][gold_ix],
     )
 

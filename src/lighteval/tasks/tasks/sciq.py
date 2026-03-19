@@ -76,21 +76,6 @@ def sciq_mcf_prompt(line, task_name: str = None):
     )
 
 
-def sciq_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with gold correct_answer as single choice."""
-    gold_text = line["correct_answer"]
-    if not gold_text:
-        return None
-    if not gold_text[0].isspace():
-        gold_text = " " + gold_text
-    return Doc(
-        task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
-    )
-
-
 # CF variant: completion-style, logprob on full answer text + BPB on gold choice
 sciq_cf = LightevalTaskConfig(
     name="sciq:cf",
