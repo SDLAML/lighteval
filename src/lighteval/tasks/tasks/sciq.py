@@ -22,7 +22,7 @@ paper:
 https://arxiv.org/abs/1707.06209
 """
 
-import random
+import hashlib
 from string import ascii_uppercase
 
 from lighteval.metrics.metrics import Metrics
@@ -57,7 +57,7 @@ def sciq_cf_prompt(line, task_name: str = None):
 
 def sciq_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled A/B/C/D options, score label tokens via logprobs."""
-    gold_index = random.randint(0, 3)
+    gold_index = int(hashlib.md5(line["question"].encode()).hexdigest(), 16) % 4
     choices = [line["distractor1"], line["distractor2"], line["distractor3"]]
     choices.insert(gold_index, line["correct_answer"])
 

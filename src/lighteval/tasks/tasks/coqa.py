@@ -26,6 +26,20 @@ from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
 
+def coqa_gen_prompt(line, task_name: str = None):
+    """GenQA variant: first Q only, generate answer, score with F1. 0-shot."""
+    q = line["questions"][0]
+    a = line["answers"]["input_text"][0]
+    if not a:
+        return None
+    return Doc(
+        task_name=task_name,
+        query=f"{line['story']}\n\nQ: {q}\nA:",
+        choices=[f" {a}"],
+        gold_index=0,
+    )
+
+
 def coqa_prompt(line, task_name: str = None):
     results = []
     for q, a in zip(line["questions"], line["answers"]["input_text"]):
@@ -63,6 +77,22 @@ coqa_bpb = LightevalTaskConfig(
     version=0,
 )
 
+coqa_gen = LightevalTaskConfig(
+    name="coqa:gen",
+    prompt_function=coqa_gen_prompt,
+    hf_repo="stanfordnlp/coqa",
+    hf_subset="default",
+    hf_avail_splits=["train", "validation"],
+    evaluation_splits=["validation"],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=50,
+    stop_sequence=["\n"],
+    metrics=[Metrics.f1_score, Metrics.exact_match],
+    version=0,
+)
+
 TASKS_TABLE = [
     coqa_bpb,
+    coqa_gen,
 ]

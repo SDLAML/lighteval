@@ -20,8 +20,20 @@ paper:
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
-from lighteval.tasks.templates.qa import get_qa_prompt_function
-from lighteval.utils.language import Language
+
+
+def jeopardy_gen_prompt(line, task_name: str = None):
+    """GenQA variant: generate answer, score with F1."""
+    gold_text = line["answer"]
+    if not gold_text:
+        return None
+    is_few_shots = line.get("__few_shots", False)
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['question']}\nAnswer:",
+        choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
+        gold_index=0,
+    )
 
 
 def jeopardy_bpb_prompt(line, task_name: str = None):
@@ -53,6 +65,21 @@ jeopardy_bpb = LightevalTaskConfig(
     version=0,
 )
 
+jeopardy_gen = LightevalTaskConfig(
+    name="jeopardy:gen",
+    prompt_function=jeopardy_gen_prompt,
+    hf_repo="openaccess-ai-collective/jeopardy",
+    hf_subset="default",
+    evaluation_splits=("train",),
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
+    generation_size=50,
+    stop_sequence=["\n"],
+    metrics=[Metrics.f1_score, Metrics.exact_match],
+    version=0,
+)
+
 TASKS_TABLE = [
     jeopardy_bpb,
+    jeopardy_gen,
 ]

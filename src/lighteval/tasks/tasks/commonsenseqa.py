@@ -25,10 +25,6 @@ https://arxiv.org/abs/1811.00937
 
 from string import ascii_uppercase
 
-from inspect_ai.dataset import Sample
-from inspect_ai.scorer import choice
-from inspect_ai.solver import multiple_choice
-
 from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
 from lighteval.metrics.normalizations import LogProbCharNorm
@@ -89,13 +85,6 @@ def commonsenseqa_bpb_prompt(line, task_name: str = None):
     )
 
 
-def record_to_sample(record):
-    query = record["question"]
-    choices = record["choices"]["text"]
-    target = record["answerKey"]
-    return Sample(input=query, target=target, choices=choices)
-
-
 # Greedy variant: MCF-style prompt, generate 1 token, exact match
 commonsenseqa_mcf_em = LightevalTaskConfig(
     name="commonsenseqa:mcf_em",
@@ -110,9 +99,6 @@ commonsenseqa_mcf_em = LightevalTaskConfig(
     metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
     version=0,
-    sample_fields=record_to_sample,
-    solver=[multiple_choice(cache=True)],
-    scorer=choice(),
 )
 
 # MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
