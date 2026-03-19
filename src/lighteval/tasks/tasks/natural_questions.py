@@ -53,7 +53,6 @@ def nq_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
-
 natural_questions_bpb = LightevalTaskConfig(
     name="natural_questions:bpb",
     prompt_function=nq_bpb_prompt,

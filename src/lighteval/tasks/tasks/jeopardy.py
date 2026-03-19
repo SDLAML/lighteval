@@ -50,7 +50,6 @@ def jeopardy_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
-
 jeopardy_bpb = LightevalTaskConfig(
     name="jeopardy:bpb",
     prompt_function=jeopardy_bpb_prompt,

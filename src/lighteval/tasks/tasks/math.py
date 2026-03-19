@@ -49,7 +49,6 @@ def math_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=MATH_PROMPT_TEMPLATE.format(prompt=line["problem"]),
-        # query=f"Question: {line['problem']}\nAnswer:",
         choices=[f" {line['solution']}"],
         gold_index=0,
     )
