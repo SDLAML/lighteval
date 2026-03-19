@@ -48,6 +48,19 @@ def coqa_bpb_prompt(line, task_name: str = None):
     )
 
 
+coqa_em = LightevalTaskConfig(
+    name="coqa:em",
+    prompt_function=coqa_prompt,
+    hf_repo="stanfordnlp/coqa",
+    hf_subset="default",
+    hf_avail_splits=["train", "validation"],
+    evaluation_splits=["validation"],
+    stop_sequence=["\n", "Question:", "question:"],
+    generation_size=100,
+    version=1,
+    metrics=[Metrics.exact_match],
+)
+
 coqa_bpb = LightevalTaskConfig(
     name="coqa:bpb",
     prompt_function=coqa_bpb_prompt,
@@ -65,4 +78,5 @@ coqa_bpb = LightevalTaskConfig(
 
 TASKS_TABLE = [
     coqa_bpb,
+    coqa_em,
 ]
