@@ -51,7 +51,7 @@ def med_mcqa_mcf_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=query,
-        choices=list(ascii_uppercase)[:4],
+        choices=[" " + c for c in list(ascii_uppercase)[:4]],
         gold_index=line["cop"] - 1,
         instruction="Give a letter answer among A, B, C or D.\n",
     )
@@ -102,19 +102,6 @@ def med_mcqa_cf_prompt(line, task_name: str = None):
         query=f"Question: {line['question']}\nAnswer:",
         choices=[" " + a for a in answers],
         gold_index=line["cop"] - 1,
-    )
-
-
-def med_mcqa_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer."""
-    answers = [line["opa"], line["opb"], line["opc"], line["opd"]]
-    gold_ix = line["cop"] - 1
-    gold_text = " " + answers[gold_ix]
-    return Doc(
-        task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
     )
 
 

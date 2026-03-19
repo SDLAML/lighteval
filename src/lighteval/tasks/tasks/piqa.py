@@ -71,22 +71,6 @@ def piqa_cf_prompt(line, task_name: str = None):
     )
 
 
-def piqa_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold solution."""
-    gold_ix = int(line["label"])
-    gold_text = line["sol1"] if gold_ix == 0 else line["sol2"]
-    if not gold_text:
-        return None
-    if not gold_text[0].isspace():
-        gold_text = " " + gold_text
-    return Doc(
-        task_name=task_name,
-        query=f"Question: {line['goal']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
-    )
-
-
 # MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
 piqa_mcf = LightevalTaskConfig(
     name="piqa:mcf",

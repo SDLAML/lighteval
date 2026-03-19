@@ -45,13 +45,14 @@ _MCF_METRICS = [
 
 def sciq_cf_prompt(line, task_name: str = None):
     """CF variant: completion-style, score full answer texts via logprobs."""
+    gold_index = int(hashlib.md5(line["correct_answer"].encode()).hexdigest(), 16) % 4
+    choices = [line["distractor1"], line["distractor2"], line["distractor3"]]
+    choices.insert(gold_index, line["correct_answer"])
     return Doc(
         task_name=task_name,
         query=f"{line['support']}\nQuestion: {line['question']}\nAnswer:".strip(),
-        choices=[
-            f" {c}" for c in [line["distractor1"], line["distractor2"], line["distractor3"], line["correct_answer"]]
-        ],
-        gold_index=3,
+        choices=[f" {c.lstrip()}" for c in choices],
+        gold_index=gold_index,
     )
 
 
@@ -72,21 +73,6 @@ def sciq_mcf_prompt(line, task_name: str = None):
         choices=[" " + letter for letter in ascii_uppercase[:len(choices)]],
         gold_index=gold_index,
         instruction="The following are multiple choice questions (with answers) about science.\n\n",
-    )
-
-
-def sciq_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with gold correct_answer as single choice."""
-    gold_text = line["correct_answer"]
-    if not gold_text:
-        return None
-    if not gold_text[0].isspace():
-        gold_text = " " + gold_text
-    return Doc(
-        task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
     )
 
 

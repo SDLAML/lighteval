@@ -54,7 +54,7 @@ def commonsenseqa_mcf_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=query,
-        choices=list(ascii_uppercase)[: len(line["choices"]["text"])],
+        choices=[" " + c.lstrip() for c in list(ascii_uppercase)[: len(line["choices"]["text"])]],
         gold_index=list(ascii_uppercase).index(line["answerKey"].strip()),
         instruction="The following are multiple choice questions (with answers) about common sense.\n",
     )
@@ -71,18 +71,6 @@ def commonsenseqa_cf_prompt(line, task_name: str = None):
         gold_index=gold_ix,
     )
 
-
-def commonsenseqa_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer."""
-    query = f"Question: {line['question']}\nAnswer:"
-    gold_ix = list(ascii_uppercase).index(line["answerKey"].strip())
-    gold_text = " " + line["choices"]["text"][gold_ix]
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-    )
 
 
 # Greedy variant: MCF-style prompt, generate 1 token, exact match

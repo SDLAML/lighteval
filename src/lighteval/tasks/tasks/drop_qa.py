@@ -43,47 +43,6 @@ def drop_gen_prompt(line, task_name: str = None):
     )
 
 
-def drop_prompt(line, task_name: str = None):
-    def _flatten_validated_answers(validated_answers):
-        valid_answers = []
-        for i in range(len(validated_answers["number"])):
-            valid_answers.append(
-                {
-                    "number": validated_answers["number"][i],
-                    "date": validated_answers["date"][i],
-                    "spans": validated_answers["spans"][i],
-                }
-            )
-        return valid_answers
-
-    def parse_answer(answer):
-        if answer["number"] != "":
-            return (str(answer["number"]),)
-        if answer["spans"] != []:
-            return tuple(answer["spans"])
-        return (" ".join([answer["date"]["day"], answer["date"]["month"], answer["date"]["year"]]).strip(),)
-
-    answers = []
-    answers_set = set()
-    candidates = [line["answer"]] + _flatten_validated_answers(line["validated_answers"])
-    for candidate in candidates:
-        answer = parse_answer(candidate)
-        if answer in answers_set:
-            continue
-        answers.append(answer)
-        answers_set.add(answer)
-
-    is_few_shots = line.get("__few_shots", False)
-
-    return Doc(
-        task_name=task_name,
-        query=f"Passage: {line['passage']}\nQuestion: {line['question']}\nAnswer:",
-        choices=[f"{' ' if is_few_shots else ''}{', '.join(a)}" for a in answers],
-        gold_index=list(range(len(answers))),
-        specific={"golds_no_preprocessing": [list(a) for a in answers]},
-    )
-
-
 def drop_bpb_prompt(line, task_name: str = None):
     """BPB variant: CF-style prompt with only the first gold answer."""
     answer = line["answer"]
@@ -103,7 +62,6 @@ def drop_bpb_prompt(line, task_name: str = None):
         choices=[gold_text],
         gold_index=0,
     )
-
 
 drop_bpb = LightevalTaskConfig(
     name="drop:bpb",

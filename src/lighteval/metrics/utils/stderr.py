@@ -89,7 +89,7 @@ def bootstrap_stderr(metric: Callable, population: list, number_experiments: int
         # sample w replacement
         res.extend(_bootstrap_internal(metric=metric, number_draws=number_draws)((population, seed)))
 
-    return mean_stderr(res)
+    return _stddev(res)
 
 
 def get_stderr_function(aggregation: Callable, number_experiments: int = 1000):

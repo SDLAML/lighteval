@@ -61,7 +61,6 @@ def squad_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
-
 squad_v2_bpb = LightevalTaskConfig(
     name="squad_v2:bpb",
     prompt_function=squad_bpb_prompt,

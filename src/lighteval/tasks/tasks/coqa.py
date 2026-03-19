@@ -40,13 +40,6 @@ def coqa_gen_prompt(line, task_name: str = None):
     )
 
 
-def coqa_prompt(line, task_name: str = None):
-    results = []
-    for q, a in zip(line["questions"], line["answers"]["input_text"]):
-        results.append(Doc(task_name=task_name, query=f"{line['story']} \n\nQ: {q}\n\nA: ", choices=[a], gold_index=0))
-    return results
-
-
 def coqa_bpb_prompt(line, task_name: str = None):
     """BPB variant: first question only, gold answer as single choice."""
     q = line["questions"][0]

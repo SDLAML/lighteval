@@ -98,31 +98,6 @@ _MMLU_SUBSETS = [
 ]
 
 
-def mmlu_prompt(line, task_name: str = None):
-    """MCF-style prompt with label choices: used for greedy and mcf variants."""
-    subject = line["subject"]
-    query = f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}"
-    query += "".join(
-        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
-    )
-    query += "\nAnswer:"
-
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[" A", " B", " C", " D"],
-        gold_index=gold_ix,
-        fewshot_sorting_class=line["choices"][gold_ix],
-        instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
-    )
-
-
 def mmlu_cf_prompt(line, task_name: str = None):
     """CF variant: completion-format prompt with full answer texts as choices."""
     subject = line["subject"]
@@ -166,28 +141,6 @@ def mmlu_mcf_prompt(line, task_name: str = None):
         gold_index=gold_ix,
         fewshot_sorting_class=line["choices"][gold_ix],
         instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
-    )
-
-
-def mmlu_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer as single choice."""
-    subject = line["subject"]
-    query = f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:"
-
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-    gold_text = " " + line["choices"][gold_ix]
-
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-        fewshot_sorting_class=line["choices"][gold_ix],
-        instruction=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\n",
     )
 
 
@@ -265,29 +218,6 @@ def mmlu_redux_cf_prompt(line, task_name: str = None):
     )
 
 
-def mmlu_redux_bpb_prompt(line, task_name: str = None):
-    """BPB variant for redux — mirrors mmlu_bpb_prompt exactly, filters non-ok rows."""
-    if line["error_type"] != "ok":
-        return None
-
-    subject = line["subject"]
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-    gold_text = " " + line["choices"][gold_ix]
-
-    return Doc(
-        task_name=task_name,
-        query=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
-        fewshot_sorting_class=line["choices"][gold_ix],
-        instruction=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\n",
-    )
-
-
 def mmlu_redux_chat_prompt(line, task_name: str = None):
     """Chat variant for redux — mirrors mmlu_chat_prompt exactly, filters non-ok rows."""
     if line["error_type"] != "ok":
@@ -320,7 +250,7 @@ def mmlu_redux_chat_prompt(line, task_name: str = None):
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"mmlu:{subset}:mcf_em",
-        prompt_function=mmlu_prompt,
+        prompt_function=mmlu_mcf_prompt,
         hf_repo="lighteval/mmlu",
         hf_subset=subset,
         hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
