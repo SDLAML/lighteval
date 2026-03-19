@@ -29,8 +29,21 @@ https://arxiv.org/abs/1806.03822
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
-from lighteval.tasks.templates.qa import get_qa_prompt_function
-from lighteval.utils.language import Language
+
+
+def squad_gen_prompt(line, task_name: str = None):
+    """GenQA variant: generate answer, score with F1 against all valid answers."""
+    valid_answers = [ans for ans in line["answers"]["text"] if len(ans) > 0]
+    if not valid_answers:
+        return None
+    is_few_shots = line.get("__few_shots", False)
+    gold_text = f"{' ' if is_few_shots else ''}{valid_answers[0]}"
+    return Doc(
+        task_name=task_name,
+        query=f"Context: {line['context']}\nQuestion: {line['question']}\nAnswer:",
+        choices=[gold_text],
+        gold_index=0,
+    )
 
 
 def squad_bpb_prompt(line, task_name: str = None):
@@ -64,6 +77,22 @@ squad_v2_bpb = LightevalTaskConfig(
     version=0,
 )
 
+squad_v2_gen = LightevalTaskConfig(
+    name="squad_v2:gen",
+    prompt_function=squad_gen_prompt,
+    hf_repo="rajpurkar/squad_v2",
+    hf_subset="squad_v2",
+    hf_filter=lambda line: any(ans for ans in line["answers"]["text"] if len(ans) > 0),
+    evaluation_splits=("validation",),
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
+    generation_size=50,
+    stop_sequence=["\n"],
+    metrics=[Metrics.f1_score, Metrics.exact_match],
+    version=0,
+)
+
 TASKS_TABLE = [
     squad_v2_bpb,
+    squad_v2_gen,
 ]

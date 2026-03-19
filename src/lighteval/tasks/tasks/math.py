@@ -80,3 +80,22 @@ TASKS_TABLE = [
     )
     for subset in _MATH_SUBSETS
 ]
+
+# CoT generation variant: 4-shot, greedy decode, extractive match on final answer
+TASKS_TABLE += [
+    LightevalTaskConfig(
+        name=f"math:{subset}:gen",
+        prompt_function=math_prompt,
+        hf_repo="DigitalLearningGmbH/MATH-lighteval",
+        hf_subset=subset,
+        hf_avail_splits=["train", "test"],
+        evaluation_splits=["test"],
+        few_shots_split="train",
+        few_shots_select="random_sampling_from_train",
+        generation_size=1024,
+        metrics=[Metrics.expr_gold_metric],
+        stop_sequence=["Problem:"],
+        version=0,
+    )
+    for subset in _MATH_SUBSETS
+]

@@ -216,15 +216,16 @@ def mmlu_chat_prompt(line, task_name: str = None):
 
 
 def mmlu_redux_prompt(line, task_name: str = None):
-    """MCF-style redux prompt with label choices: used for greedy and mcf variants."""
+    """MCF-style redux prompt — mirrors mmlu_prompt exactly, filters non-ok rows."""
     if line["error_type"] != "ok":
         return None
 
-    query = f"Question: {line['question']}"
+    subject = line["subject"]
+    query = f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}"
     query += "".join(
         [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
     )
-    query += "\n\nAnswer:"
+    query += "\nAnswer:"
 
     gold_ix = (
         ascii_uppercase.index(line["answer"])
@@ -238,14 +239,16 @@ def mmlu_redux_prompt(line, task_name: str = None):
         choices=[" A", " B", " C", " D"],
         gold_index=gold_ix,
         fewshot_sorting_class=line["choices"][gold_ix],
+        instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
     )
 
 
 def mmlu_redux_cf_prompt(line, task_name: str = None):
-    """CF variant for redux: completion-format with full answer texts."""
+    """CF variant for redux — mirrors mmlu_cf_prompt exactly, filters non-ok rows."""
     if line["error_type"] != "ok":
         return None
 
+    subject = line["subject"]
     gold_ix = (
         ascii_uppercase.index(line["answer"])
         if isinstance(line["answer"], str)
@@ -254,18 +257,20 @@ def mmlu_redux_cf_prompt(line, task_name: str = None):
 
     return Doc(
         task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
+        query=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:",
         choices=[" " + c for c in line["choices"]],
         gold_index=gold_ix,
         fewshot_sorting_class=line["choices"][gold_ix],
+        instruction=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\n",
     )
 
 
 def mmlu_redux_bpb_prompt(line, task_name: str = None):
-    """BPB variant for redux: single gold answer choice."""
+    """BPB variant for redux — mirrors mmlu_bpb_prompt exactly, filters non-ok rows."""
     if line["error_type"] != "ok":
         return None
 
+    subject = line["subject"]
     gold_ix = (
         ascii_uppercase.index(line["answer"])
         if isinstance(line["answer"], str)
@@ -275,22 +280,25 @@ def mmlu_redux_bpb_prompt(line, task_name: str = None):
 
     return Doc(
         task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
+        query=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:",
         choices=[gold_text],
         gold_index=0,
         fewshot_sorting_class=line["choices"][gold_ix],
+        instruction=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\n",
     )
 
 
 def mmlu_redux_chat_prompt(line, task_name: str = None):
+    """Chat variant for redux — mirrors mmlu_chat_prompt exactly, filters non-ok rows."""
     if line["error_type"] != "ok":
         return None
 
+    subject = line["subject"]
     query = line["question"]
     query += "".join(
         [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
     )
-    query += "\n\nThink step by step before answering."
+    query += "\nThink step by step before answering."
 
     gold_ix = (
         ascii_uppercase.index(line["answer"])
@@ -303,6 +311,8 @@ def mmlu_redux_chat_prompt(line, task_name: str = None):
         query=query,
         choices=[" A", " B", " C", " D"],
         gold_index=gold_ix,
+        fewshot_sorting_class=line["choices"][gold_ix],
+        instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
     )
 
 
@@ -391,8 +401,8 @@ TASKS_TABLE += [
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
-        few_shots_split=None,
-        few_shots_select=None,
+        few_shots_split="test",
+        few_shots_select="random_sampling_from_train",
         generation_size=5,
         metrics=[Metrics.exact_match],
         stop_sequence=["\n"],
@@ -410,8 +420,8 @@ TASKS_TABLE += [
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
-        few_shots_split=None,
-        few_shots_select=None,
+        few_shots_split="test",
+        few_shots_select="random_sampling_from_train",
         generation_size=4096,
         metrics=[Metrics.gpqa_instruct_metric],
         stop_sequence=["Question:"],
@@ -429,8 +439,8 @@ TASKS_TABLE += [
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
-        few_shots_split=None,
-        few_shots_select=None,
+        few_shots_split="test",
+        few_shots_select="random_sampling_from_train",
         generation_size=-1,
         metrics=_CF_METRICS,
         stop_sequence=["\n"],
@@ -448,8 +458,8 @@ TASKS_TABLE += [
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
-        few_shots_split=None,
-        few_shots_select=None,
+        few_shots_split="test",
+        few_shots_select="random_sampling_from_train",
         generation_size=-1,
         metrics=_MCF_METRICS,
         stop_sequence=["\n"],

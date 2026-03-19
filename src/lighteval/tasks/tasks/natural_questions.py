@@ -23,8 +23,20 @@ https://ai.google.com/research/NaturalQuestions
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
-from lighteval.tasks.templates.qa import get_qa_prompt_function
-from lighteval.utils.language import Language
+
+
+def nq_gen_prompt(line, task_name: str = None):
+    """GenQA variant: generate answer, score with F1."""
+    gold_text = line["answer"]
+    if not gold_text:
+        return None
+    is_few_shots = line.get("__few_shots", False)
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['question']}\nAnswer:",
+        choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
+        gold_index=0,
+    )
 
 
 def nq_bpb_prompt(line, task_name: str = None):
@@ -56,6 +68,21 @@ natural_questions_bpb = LightevalTaskConfig(
     version=0,
 )
 
+natural_questions_gen = LightevalTaskConfig(
+    name="natural_questions:gen",
+    prompt_function=nq_gen_prompt,
+    hf_repo="lighteval/small_natural_questions",
+    hf_subset="default",
+    evaluation_splits=("test",),
+    few_shots_split="few_shot",
+    few_shots_select="random_sampling_from_train",
+    generation_size=50,
+    stop_sequence=["\n"],
+    metrics=[Metrics.f1_score, Metrics.exact_match],
+    version=0,
+)
+
 TASKS_TABLE = [
     natural_questions_bpb,
+    natural_questions_gen,
 ]
