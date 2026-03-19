@@ -90,19 +90,6 @@ def med_mcqa_cf_prompt(line, task_name: str = None):
     )
 
 
-def med_mcqa_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer."""
-    answers = [line["opa"], line["opb"], line["opc"], line["opd"]]
-    gold_ix = line["cop"] - 1
-    gold_text = " " + answers[gold_ix]
-    return Doc(
-        task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
-    )
-
-
 # Greedy variant: MCF-style prompt, generate token(s), exact match
 med_mcqa_mcf_em = LightevalTaskConfig(
     name="med_mcqa:mcf_em",

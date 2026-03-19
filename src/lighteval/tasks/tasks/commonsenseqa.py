@@ -76,19 +76,6 @@ def commonsenseqa_cf_prompt(line, task_name: str = None):
     )
 
 
-def commonsenseqa_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold answer."""
-    query = f"Question: {line['question']}\nAnswer:"
-    gold_ix = list(ascii_uppercase).index(line["answerKey"].strip())
-    gold_text = " " + line["choices"]["text"][gold_ix]
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-    )
-
-
 def record_to_sample(record):
     query = record["question"]
     choices = record["choices"]["text"]

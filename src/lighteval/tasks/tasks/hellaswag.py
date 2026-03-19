@@ -64,25 +64,6 @@ def hellaswag_mcf_prompt(line, task_name: str = None):
         instruction="The following are multiple choice questions (with answers) about common sense.\n\n",
     )
 
-def hellaswag_bpb_prompt(line, task_name: str = None):
-    """BPB variant: CF-style prompt with only the gold continuation."""
-    ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
-    query = harness_preprocess(line["activity_label"] + ": " + ctx)
-    gold_ix = int(line["label"]) if str(line.get("label", "")).strip() != "" else -1
-    if gold_ix < 0:
-        return None  # test split has no labels; skip
-    gold_text = harness_preprocess(line["endings"][gold_ix])
-    if not gold_text:
-        return None
-    if not gold_text[0].isspace():
-        gold_text = " " + gold_text
-    return Doc(
-        task_name=task_name,
-        query=query,
-        choices=[gold_text],
-        gold_index=0,
-    )
-
 def hellaswag_cf_prompt(line, task_name: str = None):
     """CF variant: completion-style prompt, score full answer texts via logprobs."""
     ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
