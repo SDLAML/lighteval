@@ -48,6 +48,26 @@ def squad_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
+squad_v2_em = LightevalTaskConfig(
+    name="squad_v2:em",
+    prompt_function=get_qa_prompt_function(
+        Language.ENGLISH,
+        lambda line: {
+            "question": line["question"],
+            "context": line["context"],
+            "choices": [ans for ans in line["answers"]["text"] if len(ans) > 0],
+        },
+    ),
+    hf_repo="rajpurkar/squad_v2",
+    hf_subset="squad_v2",
+    hf_filter=lambda line: any(ans for ans in line["answers"]["text"] if len(ans) > 0),
+    evaluation_splits=("validation",),
+    few_shots_split="train",
+    stop_sequence=["\n", "Question:", "question:"],
+    generation_size=200,
+    metrics=[Metrics.exact_match],
+    version=1,
+)
 
 squad_v2_bpb = LightevalTaskConfig(
     name="squad_v2:bpb",
@@ -65,5 +85,6 @@ squad_v2_bpb = LightevalTaskConfig(
 )
 
 TASKS_TABLE = [
+    squad_v2_em,
     squad_v2_bpb,
 ]
