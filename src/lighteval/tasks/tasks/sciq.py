@@ -45,13 +45,14 @@ _MCF_METRICS = [
 
 def sciq_cf_prompt(line, task_name: str = None):
     """CF variant: completion-style, score full answer texts via logprobs."""
+    gold_index = random.randint(0, 3)
+    choices = [line["distractor1"], line["distractor2"], line["distractor3"]]
+    choices.insert(gold_index, line["correct_answer"])
     return Doc(
         task_name=task_name,
         query=f"{line['support']}\nQuestion: {line['question']}\nAnswer:".strip(),
-        choices=[
-            f" {c}" for c in [line["distractor1"], line["distractor2"], line["distractor3"], line["correct_answer"]]
-        ],
-        gold_index=3,
+        choices=[f" {c.lstrip()}" for c in choices],
+        gold_index=gold_index,
     )
 
 
