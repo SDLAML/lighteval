@@ -86,6 +86,18 @@ def drop_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
+drop_em = LightevalTaskConfig(
+    name="drop:em",
+    prompt_function=drop_prompt,
+    hf_repo="lighteval/drop_harness",
+    hf_subset="default",
+    evaluation_splits=("validation",),
+    few_shots_split="train",
+    generation_size=50,
+    stop_sequence=["Question:", "question:", "\n"],
+    metrics=[Metrics.exact_match],
+    version=1,
+)
 
 drop_bpb = LightevalTaskConfig(
     name="drop:bpb",
@@ -102,5 +114,6 @@ drop_bpb = LightevalTaskConfig(
 )
 
 TASKS_TABLE = [
+    drop_em,
     drop_bpb,
 ]
