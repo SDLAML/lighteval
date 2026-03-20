@@ -3,7 +3,7 @@ name:
 Math
 
 dataset:
-DigitalLearningGmbH/MATH-lighteval
+EleutherAI/hendrycks_math
 
 abstract:
 
@@ -66,7 +66,7 @@ TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"math:{subset}:bpb",
         prompt_function=math_bpb_prompt,
-        hf_repo="DigitalLearningGmbH/MATH-lighteval",
+        hf_repo="EleutherAI/hendrycks_math",
         hf_subset=subset,
         hf_avail_splits=["train", "test"],
         evaluation_splits=["test"],
@@ -85,7 +85,7 @@ TASKS_TABLE += [
     LightevalTaskConfig(
         name=f"math:{subset}:gen",
         prompt_function=math_prompt,
-        hf_repo="DigitalLearningGmbH/MATH-lighteval",
+        hf_repo="EleutherAI/hendrycks_math",
         hf_subset=subset,
         hf_avail_splits=["train", "test"],
         evaluation_splits=["test"],

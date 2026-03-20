@@ -41,25 +41,21 @@ _MCF_METRICS = [
 
 def piqa_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled A/B options in prompt, score label tokens via logprobs."""
-    letters = list(ascii_uppercase)[:2]
-    query = "The following are multiple choice questions (with answers) about common sense.\n"
-    query += f"Question: {line['goal']}\n"
-    query += "".join([f"{key}. {choice}\n" for key, choice in zip(letters, [line["sol1"], line["sol2"]])])
-    query += "Answer:"
-
+    choices = [line["sol1"], line["sol2"]]
+    options = "\n".join(f" {l}. {c}" for l, c in zip(["A", "B"], choices))
+    query = f"Goal: {line['goal']}\n{options}\nAnswer:"
     gold_ix = int(line["label"])
     return Doc(
         task_name=task_name,
         query=query,
-        choices=[" " + l for l in letters],
+        choices=[" A", " B"],
         gold_index=gold_ix,
-        instruction="The following are multiple choice questions (with answers) about common sense.\n",
     )
 
 
 def piqa_cf_prompt(line, task_name: str = None):
     """CF variant: completion-style prompt, score full answer texts via logprobs."""
-    query = f"Question: {line['goal']}\nAnswer:"
+    query = f"Goal: {line['goal']}\nAnswer:"
     choices = [line["sol1"], line["sol2"]]
     choices = [c if c and c[0].isspace() else " " + c for c in choices]
     gold_ix = int(line["label"])
@@ -79,8 +75,8 @@ piqa_mcf = LightevalTaskConfig(
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_MCF_METRICS,
     stop_sequence=["\n"],
@@ -94,9 +90,9 @@ piqa_mcf_em = LightevalTaskConfig(
     hf_repo="lighteval/piqa",
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
-    evaluation_splits=["validation", "test"],
-    few_shots_split=None,
-    few_shots_select=None,
+    evaluation_splits=["validation"],
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=1,
     metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
@@ -111,8 +107,9 @@ piqa_cf = LightevalTaskConfig(
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
+    generation_size=-1,
     metrics=_CF_METRICS,
     stop_sequence=["\n"],
     version=0,

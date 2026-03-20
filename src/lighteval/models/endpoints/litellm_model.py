@@ -62,7 +62,11 @@ if is_package_available("litellm"):
 
     # Silence provider hint prints emitted directly via print() in LiteLLM internals.
     litellm.suppress_debug_info = True
-    litellm.cache = Cache(type=LiteLLMCacheType.DISK)
+    # Use a per-process temp dir to avoid SQLite lock contention on shared
+    # filesystems when many SLURM jobs run concurrently.
+    import tempfile as _tempfile
+    _cache_dir = _tempfile.mkdtemp(prefix="litellm_cache_")
+    litellm.cache = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=_cache_dir)
 else:
     from unittest.mock import Mock
 
@@ -594,6 +598,23 @@ class LiteLLMClient(LightevalModel):
         except Exception:
             return max(1, len(text) // 4)
 
+    def _left_truncate_tokens(self, text: str, max_tokens: int) -> str:
+        """Left-truncate text to at most max_tokens tokens (keeping the rightmost tokens).
+
+        Avoids tokenize+decode roundtrip when no truncation is needed.
+        """
+        if self._hf_tokenizer is not None:
+            ids = self._hf_tokenizer.encode(text, add_special_tokens=False)
+            if len(ids) <= max_tokens:
+                return text
+            return self._hf_tokenizer.decode(ids[-max_tokens:], skip_special_tokens=False)
+        # Fallback: character-ratio approximation
+        total = self._count_tokens(text)
+        if total <= max_tokens:
+            return text
+        keep_chars = max(1, int(len(text) * max_tokens / total))
+        return text[-keep_chars:]
+
     def _score_single(self, prompt: str, ctx_token_count: int) -> tuple[float, bool]:
         """Score one (context + choice) string via a single echo-based completions call.
 
@@ -807,7 +828,19 @@ class LiteLLMClient(LightevalModel):
                 # "Answer:▁Yes", making context_len overestimate by 1).
                 total_len = self._count_tokens(context + choice)
                 choice_len = self._count_tokens(choice)
-                prepared.append((di, ci, context + choice, total_len - choice_len))
+                prompt = context + choice
+                # Left-truncate (OLMES-style): drop early few-shot examples when
+                # the combined prompt exceeds the model's context window.
+                # Reserve 1 token for the required output token (server rejects if
+                # input_tokens + 1 > max_length).
+                max_input = self.max_length - 1
+                if total_len > max_input:
+                    logger.warning(
+                        f"Prompt too long ({total_len} tokens > {max_input} max); left-truncating."
+                    )
+                    prompt = self._left_truncate_tokens(prompt, max_input)
+                    total_len = max_input
+                prepared.append((di, ci, prompt, total_len - choice_len))
             return self._score_batch(prepared)
 
         # Chunk work into batches — each batch becomes a single API call with a list
@@ -838,6 +871,13 @@ class LiteLLMClient(LightevalModel):
 
     def _rolling_logprob(self, context: str) -> ModelResponse:
         """Score a single document via echo-based rolling logprob (used in parallel)."""
+        # Left-truncate to max context length (OLMES-style).
+        truncated = self._left_truncate_tokens(context, self.max_length - 1)
+        if truncated is not context:
+            logger.warning(
+                f"Rolling logprob prompt too long (> {self.max_length} tokens); left-truncating."
+            )
+            context = truncated
         for attempt in range(self.API_MAX_RETRY):
             try:
                 response = litellm.text_completion(

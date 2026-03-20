@@ -29,13 +29,14 @@ from lighteval.tasks.requests import Doc
 # Assumed dataset fields: "question" (str), "answer" (str)
 # Adjust if the actual allenai/basic-skills schema differs.
 
+# HF config names in allenai/basic-skills (only validation split available)
 _BASIC_SKILLS_SUBSETS = [
     "arithmetic",
-    "string_manipulation",
-    "simple_coding",
+    "string_operations",
+    "coding",
     "logical_reasoning",
-    "common_sense",
-    "pattern_recognition",
+    "common_knowledge",
+    "pattern",
 ]
 
 
@@ -74,10 +75,10 @@ for _subset in _BASIC_SKILLS_SUBSETS:
             prompt_function=basic_skills_bpb_prompt,
             hf_repo="allenai/basic-skills",
             hf_subset=_subset,
-            hf_avail_splits=["train", "test"],
-            evaluation_splits=["test"],
-            few_shots_split="train",
-            few_shots_select="random_sampling_from_train",
+            hf_avail_splits=["validation"],
+            evaluation_splits=["validation"],
+            few_shots_split="validation",
+            few_shots_select="random_sampling",
             generation_size=-1,
             metrics=[
                 LogLikelihoodAccMetric(normalization=LogProbTokenNorm()),

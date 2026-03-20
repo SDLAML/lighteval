@@ -50,7 +50,7 @@ def sciq_cf_prompt(line, task_name: str = None):
     choices.insert(gold_index, line["correct_answer"])
     return Doc(
         task_name=task_name,
-        query=f"{line['support']}\nQuestion: {line['question']}\nAnswer:".strip(),
+        query=f"Question: {line['question']}\nAnswer:",
         choices=[f" {c.lstrip()}" for c in choices],
         gold_index=gold_index,
     )
@@ -62,17 +62,14 @@ def sciq_mcf_prompt(line, task_name: str = None):
     choices = [line["distractor1"], line["distractor2"], line["distractor3"]]
     choices.insert(gold_index, line["correct_answer"])
 
-    query = "The following are multiple choice questions (with answers) about science.\n\n"
-    query += f"Question: {line['question']}\n"
-    query += "".join([f"{key}. {choice}\n" for key, choice in zip(ascii_uppercase, choices)])
-    query += "Answer:"
+    options = "\n".join(f" {l}. {c}" for l, c in zip(ascii_uppercase[:4], choices))
+    query = f"Question: {line['question']}\n{options}\nAnswer:"
 
     return Doc(
         task_name=task_name,
         query=query,
-        choices=[" " + letter for letter in ascii_uppercase[:len(choices)]],
+        choices=[" " + letter for letter in ascii_uppercase[: len(choices)]],
         gold_index=gold_index,
-        instruction="The following are multiple choice questions (with answers) about science.\n\n",
     )
 
 
@@ -84,8 +81,8 @@ sciq_cf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_CF_METRICS,
     stop_sequence=["\n"],
@@ -100,8 +97,8 @@ sciq_mcf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_MCF_METRICS,
     stop_sequence=["\n"],
@@ -116,8 +113,8 @@ sciq_mcf_em = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=1,
     metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
