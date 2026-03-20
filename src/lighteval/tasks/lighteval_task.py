@@ -508,11 +508,32 @@ class LightevalTask:
                 dataset = dataset.filter(task.dataset_filter)
             return dataset  # type: ignore
 
-        dataset = load_dataset(
-            path=task.dataset_path,
-            name=task.dataset_config_name,
-            revision=task.dataset_revision,
-        )
+        try:
+            dataset = load_dataset(
+                path=task.dataset_path,
+                name=task.dataset_config_name,
+                revision=task.dataset_revision,
+            )
+        except (RuntimeError, ConnectionError) as _e:
+            _msg = str(_e)
+            if not (
+                (isinstance(_e, RuntimeError) and "no longer supported" in _msg)
+                or (isinstance(_e, ConnectionError) and "OfflineModeIsEnabled" in _msg)
+            ):
+                raise
+            # Datasets ≥3.0 removed script-based loading, or we are offline.
+            # Fall back to loading raw JSON/Parquet files from the HF Hub cache.
+            _splits = list(task.config.hf_avail_splits or [])
+            if not _splits:
+                _splits = (
+                    ([task.fewshot_split] if task.fewshot_split else [])
+                    + [s for s in task.evaluation_split if s not in ([task.fewshot_split] if task.fewshot_split else [])]
+                )
+            _prefix = f"hf://datasets/{task.dataset_path}"
+            if task.dataset_config_name:
+                _prefix = f"{_prefix}/{task.dataset_config_name}"
+            _data_files = {s: f"{_prefix}/{s}.json" for s in _splits}
+            dataset = load_dataset("json", data_files=_data_files)
 
         if task.dataset_filter is not None:
             dataset = dataset.filter(task.dataset_filter)

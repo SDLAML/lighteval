@@ -50,29 +50,21 @@ _MCF_METRICS = [
 
 def siqa_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled A/B/C options in prompt, score label tokens via logprobs."""
-    query = "The following are multiple choice questions (with answers) about common sense.\n"
-    query += f"Question: {line['context']} {line['question']}\n"
-    query += "".join(
-        [
-            f"{key}. {choice}\n"
-            for key, choice in zip(list(ascii_uppercase)[:3], [line["answerA"], line["answerB"], line["answerC"]])
-        ]
-    )
-    query += "Answer: "
-
+    choices = [line["answerA"], line["answerB"], line["answerC"]]
+    options = "\n".join(f" {l}. {c}" for l, c in zip(list(ascii_uppercase)[:3], choices))
+    query = f"Question: {line['context']} {line['question']}\n{options}\nAnswer:"
     return Doc(
         task_name=task_name,
         query=query,
-        choices=["A", "B", "C"],
+        choices=[" A", " B", " C"],
         gold_index=int(line["label"]) - 1,
-        instruction="The following are multiple choice questions (with answers) about common sense.\n",
     )
 
 
 def siqa_cf_prompt(line, task_name: str = None):
     """CF variant: completion-style prompt with full answer texts as choices."""
     answers = [line["answerA"], line["answerB"], line["answerC"]]
-    query = f"Context: {line['context']}\nQuestion: {line['question']}\nAnswer:"
+    query = f"Question: {line['context']} {line['question']}\nAnswer:"
     return Doc(
         task_name=task_name,
         query=query,
@@ -89,8 +81,8 @@ siqa_mcf_em = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=1,
     metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
@@ -105,7 +97,7 @@ siqa_mcf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="train",
     few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_MCF_METRICS,
@@ -121,7 +113,7 @@ siqa_cf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="train",
     few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_CF_METRICS,

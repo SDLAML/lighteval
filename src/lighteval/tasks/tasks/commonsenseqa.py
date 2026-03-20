@@ -45,18 +45,14 @@ _MCF_METRICS = [
 
 def commonsenseqa_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled options in prompt, score label tokens via logprobs."""
-    query = f"The following are multiple choice questions (with answers) about common sense.\nQuestion: {line['question']}\n"
-    query += "".join(
-        [f"{key}. {choice}\n" for key, choice in zip(ascii_uppercase, [f" {c}" for c in line["choices"]["text"]])]
-    )
-    query += "Answer:"
-
+    choices = line["choices"]["text"]
+    options = "\n".join(f" {l}. {c}" for l, c in zip(ascii_uppercase[:len(choices)], choices))
+    query = f"Question: {line['question']}\n{options}\nAnswer:"
     return Doc(
         task_name=task_name,
         query=query,
-        choices=[" " + c.lstrip() for c in list(ascii_uppercase)[: len(line["choices"]["text"])]],
+        choices=[" " + l for l in ascii_uppercase[:len(choices)]],
         gold_index=list(ascii_uppercase).index(line["answerKey"].strip()),
-        instruction="The following are multiple choice questions (with answers) about common sense.\n",
     )
 
 
