@@ -26,7 +26,7 @@ def mbpp_bpb_prompt(line, task_name=None):
     #   <assert statements>
     #   """
     #   def function_name(...):   ← start of gold continuation
-    prompt = f'"""\n{line["text"]}\n{tests}\n"""\n'
+    prompt = f'"""\n{line["prompt"]}\n{tests}\n"""\n'
     return Doc(
         task_name=task_name,
         query=prompt,
