@@ -19,9 +19,7 @@ arithmetic, reasoning, coding, commonsense, basic-skills, qa
 paper:
 """
 
-from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
 from lighteval.metrics.metrics import Metrics
-from lighteval.metrics.normalizations import LogProbTokenNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
@@ -81,7 +79,6 @@ for _subset in _BASIC_SKILLS_SUBSETS:
             few_shots_select="random_sampling",
             generation_size=-1,
             metrics=[
-                LogLikelihoodAccMetric(normalization=LogProbTokenNorm()),
                 Metrics.target_bits_per_byte,
             ],
             stop_sequence=["\n"],

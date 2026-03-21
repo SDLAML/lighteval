@@ -516,24 +516,92 @@ class LightevalTask:
             )
         except (RuntimeError, ConnectionError) as _e:
             _msg = str(_e)
-            if not (
-                (isinstance(_e, RuntimeError) and "no longer supported" in _msg)
-                or (isinstance(_e, ConnectionError) and "OfflineModeIsEnabled" in _msg)
-            ):
+            _is_script_err = isinstance(_e, RuntimeError) and "no longer supported" in _msg
+            _is_offline = isinstance(_e, ConnectionError) and "OfflineModeIsEnabled" in _msg
+            if not (_is_script_err or _is_offline):
                 raise
-            # Datasets ≥3.0 removed script-based loading, or we are offline.
-            # Fall back to loading raw JSON/Parquet files from the HF Hub cache.
+
             _splits = list(task.config.hf_avail_splits or [])
             if not _splits:
                 _splits = (
                     ([task.fewshot_split] if task.fewshot_split else [])
                     + [s for s in task.evaluation_split if s not in ([task.fewshot_split] if task.fewshot_split else [])]
                 )
-            _prefix = f"hf://datasets/{task.dataset_path}"
-            if task.dataset_config_name:
-                _prefix = f"{_prefix}/{task.dataset_config_name}"
-            _data_files = {s: f"{_prefix}/{s}.json" for s in _splits}
-            dataset = load_dataset("json", data_files=_data_files)
+
+            if _is_offline:
+                # No network available. Bypass load_dataset entirely and read
+                # the parquet files directly from the local HF hub cache.
+                _hf_home = _os.environ.get(
+                    "HF_HOME", _os.path.expanduser("~/.cache/huggingface")
+                )
+                _hub_cache = _os.environ.get(
+                    "HF_HUB_CACHE", _os.path.join(_hf_home, "hub")
+                )
+                _repo_dir = "datasets--" + task.dataset_path.replace("/", "--")
+                _snap_base = _os.path.join(_hub_cache, _repo_dir, "snapshots")
+
+                _data_files: dict = {}
+                _data_fmt: str = "parquet"
+                if _os.path.isdir(_snap_base):
+                    _revisions = sorted(
+                        _os.listdir(_snap_base),
+                        key=lambda r: _os.path.getmtime(_os.path.join(_snap_base, r)),
+                    )
+                    for _rev in reversed(_revisions):
+                        _rev_dir = _os.path.join(_snap_base, _rev)
+                        _config_dir = (
+                            _os.path.join(_rev_dir, task.dataset_config_name)
+                            if task.dataset_config_name
+                            else _rev_dir
+                        )
+                        # Use os.listdir (not glob) so symlinks in the hub
+                        # cache are resolved correctly.
+                        for _search_dir in [_config_dir, _os.path.join(_config_dir, "data")]:
+                            if not _os.path.isdir(_search_dir):
+                                continue
+                            try:
+                                _entries = _os.listdir(_search_dir)
+                            except OSError:
+                                continue
+                            for _split in _splits:
+                                for _ext in (".parquet", ".json", ".jsonl"):
+                                    _pq = sorted(
+                                        _os.path.join(_search_dir, f)
+                                        for f in _entries
+                                        if f.endswith(_ext)
+                                        and (
+                                            f.startswith(f"{_split}-")
+                                            or f == f"{_split}{_ext}"
+                                        )
+                                    )
+                                    if _pq:
+                                        _data_files[_split] = _pq
+                                        _data_fmt = (
+                                            "parquet" if _ext == ".parquet"
+                                            else "json"
+                                        )
+                                        break
+                            if _data_files:
+                                break
+                        if _data_files:
+                            break
+
+                if not _data_files:
+                    raise FileNotFoundError(
+                        f"Dataset '{task.dataset_path}' (config={task.dataset_config_name!r}) "
+                        f"not found in local HF hub cache at '{_snap_base}'. "
+                        "Download the dataset with internet access first."
+                    ) from _e
+
+                dataset = load_dataset(_data_fmt, data_files=_data_files)
+
+            else:
+                # Script-based dataset (online mode): fall back to raw files via hf://.
+                _prefix = f"hf://datasets/{task.dataset_path}"
+                if task.dataset_config_name:
+                    _prefix = f"{_prefix}/{task.dataset_config_name}"
+                _data_files = {s: f"{_prefix}/{s}.json" for s in _splits}
+                dataset = load_dataset("json", data_files=_data_files)
 
         if task.dataset_filter is not None:
             dataset = dataset.filter(task.dataset_filter)
