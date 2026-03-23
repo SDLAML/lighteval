@@ -62,10 +62,17 @@ if is_package_available("litellm"):
 
     # Silence provider hint prints emitted directly via print() in LiteLLM internals.
     litellm.suppress_debug_info = True
-    # Use a per-process temp dir to avoid SQLite lock contention on shared
-    # filesystems when many SLURM jobs run concurrently.
+    # Prefer an explicit cache root when provided; otherwise use a per-process
+    # temp dir to avoid SQLite lock contention on shared filesystems when many
+    # SLURM jobs run concurrently.
     import tempfile as _tempfile
-    _cache_dir = _tempfile.mkdtemp(prefix="litellm_cache_")
+
+    _cache_dir = os.environ.get("LITELLM_CACHE_DIR")
+    if _cache_dir:
+        _cache_dir = os.path.expandvars(os.path.expanduser(_cache_dir))
+        os.makedirs(_cache_dir, exist_ok=True)
+    else:
+        _cache_dir = _tempfile.mkdtemp(prefix="litellm_cache_")
     litellm.cache = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=_cache_dir)
 else:
     from unittest.mock import Mock
@@ -607,7 +614,9 @@ class LiteLLMClient(LightevalModel):
             ids = self._hf_tokenizer.encode(text, add_special_tokens=False)
             if len(ids) <= max_tokens:
                 return text
-            return self._hf_tokenizer.decode(ids[-max_tokens:], skip_special_tokens=False)
+            return self._hf_tokenizer.decode(
+                ids[-max_tokens:], skip_special_tokens=False
+            )
         # Fallback: character-ratio approximation
         total = self._count_tokens(text)
         if total <= max_tokens:
