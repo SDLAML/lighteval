@@ -535,6 +535,20 @@ class LiteLLMClient(LightevalModel):
                 contexts = [self.prompt_manager.prepare_prompt(doc) for doc in split]
             max_new_tokens = split[0].generation_size  # could be none
             return_logits = split[0].use_logits
+
+            # Left-truncate (OLMES-style): drop early few-shot examples when
+            # the prompt + generation would exceed the model's context window.
+            if not self.use_chat_template and max_new_tokens:
+                max_ctx = self.max_length - max_new_tokens
+                truncated = []
+                for ctx in contexts:
+                    if self._count_tokens(ctx) > max_ctx:
+                        logger.warning(
+                            f"Prompt too long (> {max_ctx} tokens for max_new_tokens={max_new_tokens}); left-truncating."
+                        )
+                        ctx = self._left_truncate_tokens(ctx, max_ctx)
+                    truncated.append(ctx)
+                contexts = truncated
             num_samples = split[0].num_samples
             stop_sequence = split[0].stop_sequences
 
