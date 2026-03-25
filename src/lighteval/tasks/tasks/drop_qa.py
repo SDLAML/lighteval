@@ -30,16 +30,20 @@ def drop_gen_prompt(line, task_name: str = None):
     answer = line["answer"]
     if answer["number"] != "":
         gold_text = str(answer["number"])
+        gold_entry = [gold_text]
     elif answer["spans"]:
         gold_text = answer["spans"][0]
+        gold_entry = answer["spans"]  # all spans for F1
     else:
         gold_text = " ".join([answer["date"]["day"], answer["date"]["month"], answer["date"]["year"]]).strip()
+        gold_entry = [gold_text]
     is_few_shots = line.get("__few_shots", False)
     return Doc(
         task_name=task_name,
         query=f"Passage: {line['passage']}\nQuestion: {line['question']}\nAnswer:",
         choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
         gold_index=0,
+        specific={"golds_no_preprocessing": [gold_entry]},
     )
 
 
