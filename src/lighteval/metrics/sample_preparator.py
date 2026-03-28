@@ -60,6 +60,13 @@ class PerplexityCorpusMetricInput(CorpusMetricInput):
     weights: list[int]
 
 
+@dataclass
+class COMETCorpusMetricInput(CorpusMetricInput):
+    source: str
+    hyp: str
+    ref: list[str]
+
+
 class Preparator:
     pass
 
@@ -91,6 +98,19 @@ class GenerativePreparator(Preparator):
                 val_str = str(v)
             attr_strs.append(f"{k}={val_str}")
         return f"{self.__class__.__name__}({', '.join(attr_strs)})"
+
+
+class COMETPreparator(Preparator):
+    @staticmethod
+    def prepare(doc: Doc, model_response: ModelResponse, **kwargs) -> "COMETCorpusMetricInput":
+        """Prepares a translation example for COMET scoring.
+
+        Reads the source sentence from doc.specific["source_text"] (set by the translation
+        template), combines it with the model's hypothesis and the gold reference(s).
+        """
+        source = (doc.specific or {}).get("source_text", "")
+        golds = as_list(doc.get_golds())
+        return COMETCorpusMetricInput(source=source, hyp=model_response.final_text, ref=golds)
 
 
 class LoglikelihoodPreparator(Preparator):

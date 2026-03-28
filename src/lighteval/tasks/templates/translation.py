@@ -145,7 +145,7 @@ def get_translation_prompt_function(
             for text in as_list(input_data["target_text"])
         ]
 
-        return continuation_prompt_fn(
+        doc = continuation_prompt_fn(
             {
                 "instruction": input_data.get("instruction", ""),
                 "context": context,
@@ -154,5 +154,9 @@ def get_translation_prompt_function(
             },
             task_name,
         )
+        # Store the cleaned source text so COMET metric can access it without re-parsing the prompt.
+        if doc is not None:
+            doc.specific = (doc.specific or {}) | {"source_text": source_text}
+        return doc
 
     return translation_prompt

@@ -21,13 +21,18 @@
 # SOFTWARE.
 
 import functools
+import json
 import logging
+import os
 import random
+import tarfile
+import urllib.request
 from dataclasses import asdict, dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from datasets import DatasetDict, load_dataset
-from huggingface_hub import TextGenerationInputGrammarType
+from datasets import Dataset, DatasetDict, load_dataset
+from huggingface_hub import TextGenerationInputGrammarType, hf_hub_download, list_repo_files
 from inspect_ai.dataset import Sample
 from multiprocess import Pool
 from pytablewriter import MarkdownTableWriter
@@ -43,6 +48,249 @@ from lighteval.utils.utils import ListLike, as_list
 
 
 logger = logging.getLogger(__name__)
+
+
+def _get_manual_dataset_cache_dir() -> Path:
+    hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    cache_dir = hf_home / "lighteval_manual_datasets"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _matches_hub_split_file(path: str, split: str, ext: str, config_name: str | None) -> bool:
+    posix_path = PurePosixPath(path)
+    filename = posix_path.name
+    if not filename.endswith(ext):
+        return False
+
+    if filename.startswith(f"{split}-") or filename == f"{split}{ext}":
+        if config_name:
+            return posix_path.parent.as_posix() == config_name
+        return posix_path.parent.as_posix() in (".", "")
+
+    if not config_name:
+        return False
+
+    if filename == f"{config_name}_{split}{ext}" and posix_path.parent.as_posix() in (
+        "data",
+        ".",
+        "",
+    ):
+        return True
+
+    return False
+
+
+def _load_hub_raw_dataset_files(
+    dataset_path: str,
+    config_name: str | None,
+    splits: list[str],
+    *,
+    revision: str | None = None,
+    local_files_only: bool = False,
+) -> DatasetDict | None:
+    repo_files = list_repo_files(
+        repo_id=dataset_path,
+        repo_type="dataset",
+        revision=revision,
+    )
+
+    data_files: dict[str, list[str]] = {}
+    data_format: str | None = None
+    for split in splits:
+        matched_files = []
+        matched_format = None
+        for ext, fmt in ((".parquet", "parquet"), (".jsonl", "json"), (".json", "json")):
+            matched_files = [
+                hf_hub_download(
+                    repo_id=dataset_path,
+                    repo_type="dataset",
+                    filename=repo_file,
+                    revision=revision,
+                    local_files_only=local_files_only,
+                )
+                for repo_file in repo_files
+                if _matches_hub_split_file(repo_file, split, ext, config_name)
+            ]
+            if matched_files:
+                matched_format = fmt
+                break
+
+        if not matched_files or matched_format is None:
+            return None
+
+        if data_format is None:
+            data_format = matched_format
+        elif data_format != matched_format:
+            raise ValueError(
+                f"Inconsistent raw file formats for dataset {dataset_path}: {data_format} vs {matched_format}"
+            )
+
+        data_files[split] = sorted(matched_files)
+
+    if not data_files or data_format is None:
+        return None
+
+    return load_dataset(data_format, data_files=data_files)
+
+
+def _load_mgsm_dataset(config_name: str) -> DatasetDict:
+    import csv
+    import importlib.util
+
+    from huggingface_hub import hf_hub_download
+
+    exemplars_path = hf_hub_download(
+        repo_id="juletxara/mgsm",
+        repo_type="dataset",
+        filename="exemplars.py",
+    )
+    tsv_path = hf_hub_download(
+        repo_id="juletxara/mgsm",
+        repo_type="dataset",
+        filename=f"mgsm_{config_name}.tsv",
+    )
+
+    spec = importlib.util.spec_from_file_location("mgsm_exemplars", exemplars_path)
+    exemplars_module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(exemplars_module)
+
+    train_rows = []
+    examples = exemplars_module.MGSM_EXEMPLARS[config_name]
+    number_answers = exemplars_module.EXEMPLAR_NUMBER_ANSWERS
+    equation_solutions = exemplars_module.EXEMPLAR_EQUATION_SOLUTIONS
+    for key, data in examples.items():
+        idx = int(key) - 1
+        train_rows.append(
+            {
+                "question": data["q"],
+                "answer": data["a"],
+                "answer_number": number_answers[idx],
+                "equation_solution": equation_solutions[idx],
+            }
+        )
+
+    test_rows = []
+    with open(tsv_path, encoding="utf-8") as csv_file:
+        csv_reader = csv.reader(csv_file, quotechar='"', delimiter="\t")
+        for row in csv_reader:
+            test_rows.append(
+                {
+                    "question": row[0],
+                    "answer": None,
+                    "answer_number": int(row[1].replace(",", "")),
+                    "equation_solution": None,
+                }
+            )
+
+    return DatasetDict(
+        {
+            "train": Dataset.from_list(train_rows),
+            "test": Dataset.from_list(test_rows),
+        }
+    )
+
+
+def _load_wmt24pp_dataset(config_name: str, local_files_only: bool = False) -> DatasetDict:
+    from huggingface_hub import hf_hub_download
+
+    jsonl_path = hf_hub_download(
+        repo_id="google/wmt24pp",
+        repo_type="dataset",
+        filename=f"{config_name}.jsonl",
+        local_files_only=local_files_only,
+    )
+
+    rows = []
+    with open(jsonl_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+
+    return DatasetDict({"train": Dataset.from_list(rows)})
+
+
+def _load_flores_dataset(config_name: str, local_files_only: bool = False) -> DatasetDict:
+    cache_dir = _get_manual_dataset_cache_dir() / "flores"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    archive_path = cache_dir / "flores200_dataset.tar.gz"
+    extract_dir = cache_dir / "flores200_dataset"
+
+    if not extract_dir.exists():
+        if not archive_path.exists():
+            if local_files_only:
+                raise FileNotFoundError(
+                    f"FLORES archive not found in local cache: {archive_path}"
+                )
+            urllib.request.urlretrieve(
+                "https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz",
+                archive_path,
+            )
+
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(cache_dir)
+
+    if "-" in config_name:
+        langs = config_name.split("-", 1)
+    else:
+        langs = [config_name]
+
+    def _sentence_path(split: str, lang: str) -> Path:
+        return extract_dir / split / f"{lang}.{split}"
+
+    def _metadata_path(split: str) -> Path:
+        return extract_dir / f"metadata_{split}.tsv"
+
+    def _build_split(split: str) -> Dataset:
+        with open(_metadata_path(split), encoding="utf-8") as meta_file:
+            metadata_lines = [line.rstrip("\n") for line in meta_file]
+        header, rows = metadata_lines[0], metadata_lines[1:]
+        if header.split("\t")[:5] != [
+            "URL",
+            "domain",
+            "topic",
+            "has_image",
+            "has_hyperlink",
+        ]:
+            raise ValueError(f"Unexpected FLORES metadata header: {header}")
+
+        sentences_by_lang: dict[str, list[str]] = {}
+        for lang in langs:
+            with open(_sentence_path(split, lang), encoding="utf-8") as sentence_file:
+                sentences_by_lang[lang] = [
+                    line.rstrip("\n") for line in sentence_file
+                ]
+
+        data = []
+        for idx, metadata in enumerate(rows, start=1):
+            url, domain, topic, has_image, has_hyperlink = metadata.split("\t")
+            row = {
+                "id": idx,
+                "URL": url,
+                "domain": domain,
+                "topic": topic,
+                "has_image": 1 if has_image == "yes" else 0,
+                "has_hyperlink": 1 if has_hyperlink == "yes" else 0,
+            }
+            if len(langs) == 1:
+                row["sentence"] = sentences_by_lang[langs[0]][idx - 1]
+            else:
+                for lang in langs:
+                    row[f"sentence_{lang}"] = sentences_by_lang[lang][idx - 1]
+            data.append(row)
+
+        return Dataset.from_list(data)
+
+    return DatasetDict(
+        {
+            "dev": _build_split("dev"),
+            "devtest": _build_split("devtest"),
+        }
+    )
 
 
 @dataclass
@@ -521,6 +769,42 @@ class LightevalTask:
             if not (_is_script_err or _is_offline):
                 raise
 
+            if _is_script_err and task.dataset_path == "juletxara/mgsm":
+                dataset = _load_mgsm_dataset(task.dataset_config_name)
+                if task.dataset_filter is not None:
+                    dataset = dataset.filter(task.dataset_filter)
+                return dataset  # type: ignore
+
+            if (_is_script_err or _is_offline) and task.dataset_path == "google/wmt24pp":
+                dataset = _load_wmt24pp_dataset(
+                    task.dataset_config_name,
+                    local_files_only=_is_offline,
+                )
+                if task.dataset_filter is not None:
+                    dataset = dataset.filter(task.dataset_filter)
+                return dataset  # type: ignore
+
+            if (_is_script_err or _is_offline) and task.dataset_path == "facebook/flores":
+                dataset = _load_flores_dataset(
+                    task.dataset_config_name,
+                    local_files_only=_is_offline,
+                )
+                if task.dataset_filter is not None:
+                    dataset = dataset.filter(task.dataset_filter)
+                return dataset  # type: ignore
+
+            if _is_script_err:
+                dataset = _load_hub_raw_dataset_files(
+                    dataset_path=task.dataset_path,
+                    config_name=task.dataset_config_name,
+                    splits=list(task.config.hf_avail_splits or []),
+                    revision=task.dataset_revision,
+                )
+                if dataset is not None:
+                    if task.dataset_filter is not None:
+                        dataset = dataset.filter(task.dataset_filter)
+                    return dataset  # type: ignore
+
             _splits = list(task.config.hf_avail_splits or [])
             if not _splits:
                 _splits = (
@@ -554,9 +838,24 @@ class LightevalTask:
                             if task.dataset_config_name
                             else _rev_dir
                         )
+                        def _matches_cached_file(_filename: str, _split: str, _ext: str) -> bool:
+                            if not _filename.endswith(_ext):
+                                return False
+                            if _filename.startswith(f"{_split}-") or _filename == f"{_split}{_ext}":
+                                return True
+                            return bool(
+                                task.dataset_config_name
+                                and _filename == f"{task.dataset_config_name}_{_split}{_ext}"
+                            )
+
                         # Use os.listdir (not glob) so symlinks in the hub
                         # cache are resolved correctly.
-                        for _search_dir in [_config_dir, _os.path.join(_config_dir, "data")]:
+                        for _search_dir in [
+                            _config_dir,
+                            _os.path.join(_config_dir, "data"),
+                            _rev_dir,
+                            _os.path.join(_rev_dir, "data"),
+                        ]:
                             if not _os.path.isdir(_search_dir):
                                 continue
                             try:
@@ -568,11 +867,7 @@ class LightevalTask:
                                     _pq = sorted(
                                         _os.path.join(_search_dir, f)
                                         for f in _entries
-                                        if f.endswith(_ext)
-                                        and (
-                                            f.startswith(f"{_split}-")
-                                            or f == f"{_split}{_ext}"
-                                        )
+                                        if _matches_cached_file(f, _split, _ext)
                                     )
                                     if _pq:
                                         _data_files[_split] = _pq

@@ -6,37 +6,57 @@ dataset:
 juletxara/mgsm
 
 abstract:
-Mgsm multilingual benchmark.
+MGSM (Multilingual Grade School Math) is a multilingual benchmark testing
+mathematical reasoning across languages, derived from GSM8K.
+
+Refactored to use unified :gen suffix consistent with English gsm8k.py.
+English is excluded — use gsm8k.py for English evaluation.
+Reports both expr_gold_metric (math expression parser) and
+MultilingualQuasiExactMatchMetric (language-aware fuzzy match, handles
+non-ASCII digit systems like Japanese/Thai).
 
 languages:
-bengali, chinese, english, french, german, japanese, russian, spanish, swahili,
-telugu, thai
+bengali, french, german, japanese, russian, spanish, swahili, telugu, thai,
+chinese
 
 tags:
 math, multilingual, reasoning
 
 paper:
+https://arxiv.org/abs/2210.03057
 """
 
 from langcodes import standardize_tag
 
-from lighteval.metrics.dynamic_metrics import (
-    MultilingualQuasiExactMatchMetric,
-)
+from lighteval.metrics.dynamic_metrics import MultilingualQuasiExactMatchMetric
+from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.templates.qa import get_qa_prompt_function
 from lighteval.utils.language import Language
 
 
+# Languages covered by juletxara/mgsm (English excluded — use gsm8k.py)
+_LANGUAGES = [
+    Language.SPANISH,
+    Language.FRENCH,
+    Language.GERMAN,
+    Language.RUSSIAN,
+    Language.CHINESE,
+    Language.JAPANESE,
+    Language.THAI,
+    Language.SWAHILI,
+    Language.BENGALI,
+    Language.TELUGU,
+]
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
-        name=f"mgsm_{language.value}",
+        name=f"mgsm:{language.value}:gen",
         prompt_function=get_qa_prompt_function(
             language,
             lambda line: {
                 "question": line["question"],
-                # The cot is available but we have no use:
-                # line["answer"]
                 "choices": [str(line["answer_number"])],
             },
         ),
@@ -44,23 +64,12 @@ TASKS_TABLE = [
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("test",),
         few_shots_split="train",
-        generation_size=25,
+        generation_size=512,
         metrics=[
+            Metrics.expr_gold_metric,
             MultilingualQuasiExactMatchMetric(language, "full"),
         ],
-        stop_sequence=("\n",),
+        stop_sequence=["\n"],
     )
-    for language in [
-        Language.ENGLISH,
-        Language.SPANISH,
-        Language.FRENCH,
-        Language.GERMAN,
-        Language.RUSSIAN,
-        Language.CHINESE,
-        Language.JAPANESE,
-        Language.THAI,
-        Language.SWAHILI,
-        Language.BENGALI,
-        Language.TELUGU,
-    ]
+    for language in _LANGUAGES
 ]
