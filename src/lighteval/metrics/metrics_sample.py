@@ -35,7 +35,6 @@ import numpy as np
 from huggingface_hub import HfApi
 from nltk.metrics.distance import edit_distance
 from nltk.tokenize import word_tokenize
-from nltk.tokenize.treebank import TreebankWordTokenizer
 from nltk.translate.bleu_score import sentence_bleu
 from pydantic import BaseModel
 from scipy.stats import hypergeom
@@ -51,6 +50,7 @@ from lighteval.metrics.normalizations import (
     remove_braces,
     remove_braces_and_strip,
 )
+from lighteval.metrics.utils.nltk_resources import ensure_nltk_resource
 from lighteval.metrics.utils.judge_utils import (
     get_judge_prompt_simpleqa,
     process_judge_response_simpleqa,
@@ -870,9 +870,7 @@ class BLEU(SampleLevelComputation):
         Returns:
             float: Score over the current sample's items.
         """
-        import nltk
-
-        nltk.download("punkt_tab")
+        ensure_nltk_resource("tokenizers/punkt_tab", "punkt_tab")
         golds = doc.get_golds()
         predictions = model_response.final_text
         return np.mean([self._bleu_score(golds, p) for p in predictions])
@@ -889,7 +887,9 @@ class BLEU(SampleLevelComputation):
         """
         weights = [1 if ix == self.n_gram else 0 for ix in range(1, 5)]
         return sentence_bleu(
-            [word_tokenize(g) for g in gold], word_tokenize(pred), weights=weights
+            [word_tokenize(g) for g in gold],
+            word_tokenize(pred),
+            weights=weights,
         )
 
 

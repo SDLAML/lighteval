@@ -1426,3 +1426,27 @@ TRANSLATION_LITERALS: dict[Language, TranslationLiterals] = {
     Language.YUE_CHINESE: TranslationLiterals(language=Language.YUE_CHINESE),
     Language.ZULU: TranslationLiterals(language=Language.ZULU),
 }
+
+# Some multilingual benchmark additions rely on the generic MCQ prompt template,
+# which requires at least localized question/answer labels. Where dedicated
+# translations are still missing, fall back to English labels so the task can run.
+for _language in [
+    Language.AMHARIC,
+    Language.HAUSA,
+    Language.HEBREW,
+    Language.IGBO,
+    Language.KIRGHIZ,
+    Language.KOREAN,
+    Language.LITHUANIAN,
+    Language.MALAGASY,
+    Language.MALAY,
+    Language.NEPALI,
+    Language.NYANJA,
+    Language.PERSIAN,
+    Language.SHONA,
+    Language.SINHALA,
+    Language.SOMALI,
+    Language.YORUBA,
+]:
+    TRANSLATION_LITERALS[_language].question_word = "question"
+    TRANSLATION_LITERALS[_language].answer = "answer"
