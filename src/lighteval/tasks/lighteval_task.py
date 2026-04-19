@@ -134,7 +134,7 @@ def _load_hub_raw_dataset_files(
     return load_dataset(data_format, data_files=data_files)
 
 
-def _load_mgsm_dataset(config_name: str) -> DatasetDict:
+def _load_mgsm_dataset(config_name: str, local_files_only: bool = False) -> DatasetDict:
     import csv
     import importlib.util
 
@@ -144,11 +144,13 @@ def _load_mgsm_dataset(config_name: str) -> DatasetDict:
         repo_id="juletxara/mgsm",
         repo_type="dataset",
         filename="exemplars.py",
+        local_files_only=local_files_only,
     )
     tsv_path = hf_hub_download(
         repo_id="juletxara/mgsm",
         repo_type="dataset",
         filename=f"mgsm_{config_name}.tsv",
+        local_files_only=local_files_only,
     )
 
     spec = importlib.util.spec_from_file_location("mgsm_exemplars", exemplars_path)
@@ -769,8 +771,11 @@ class LightevalTask:
             if not (_is_script_err or _is_offline):
                 raise
 
-            if _is_script_err and task.dataset_path == "juletxara/mgsm":
-                dataset = _load_mgsm_dataset(task.dataset_config_name)
+            if (_is_script_err or _is_offline) and task.dataset_path == "juletxara/mgsm":
+                dataset = _load_mgsm_dataset(
+                    task.dataset_config_name,
+                    local_files_only=_is_offline,
+                )
                 if task.dataset_filter is not None:
                     dataset = dataset.filter(task.dataset_filter)
                 return dataset  # type: ignore
