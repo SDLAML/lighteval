@@ -32,17 +32,17 @@ from lighteval.utils.language import Language
 
 
 _LANGUAGES = [
-    Language.ENGLISH,
+    # Language.ENGLISH,
     Language.ARABIC,
     Language.CZECH,
     Language.GREEK,
-    # Language.BASQUE,
+    Language.BASQUE,
     Language.KOREAN,
     # Language.SERBIAN,
     Language.CATALAN,
     Language.GALICIAN,
     Language.HUNGARIAN,
-    # Language.VIETNAMESE,
+    Language.VIETNAMESE,
     Language.SPANISH,
     Language.FRENCH,
     Language.GERMAN,
