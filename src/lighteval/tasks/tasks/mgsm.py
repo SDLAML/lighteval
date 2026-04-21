@@ -74,7 +74,7 @@ TASKS_TABLE = [
             Metrics.expr_gold_metric,
             # MultilingualQuasiExactMatchMetric(language, "full"),
         ],
-        stop_sequence=["Question:", "Problem:"],
+        stop_sequence=["Question:", "Problem:", "\n\n"],
     )
     for language in _LANGUAGES
 ]
