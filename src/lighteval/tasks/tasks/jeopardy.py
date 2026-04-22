@@ -94,7 +94,7 @@ def jeopardy_mc_mcf_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=f"Category: {category}\nQuestion: {question}\n{options}\nAnswer:",
-        choices=labels,
+        choices=[" " + l for l in labels],
         gold_index=gold,
     )
 

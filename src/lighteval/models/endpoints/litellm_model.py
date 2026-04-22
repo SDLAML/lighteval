@@ -638,12 +638,13 @@ class LiteLLMClient(LightevalModel):
         keep_chars = max(1, int(len(text) * max_tokens / total))
         return text[-keep_chars:]
 
-    def _score_single(self, prompt: str, ctx_token_count: int) -> tuple[float, bool]:
+    def _score_single(self, prompt: str, choice_len: int) -> tuple[float, bool]:
         """Score one (context + choice) string via a single echo-based completions call.
 
         Args:
             prompt: Full text (context + choice) to score.
-            ctx_token_count: Number of context tokens; continuation logprobs start here.
+            choice_len: Number of choice tokens; sliced from the right of the echoed logprobs,
+                before the one generated token.  This approach is server-BOS-agnostic.
 
         Returns:
             (logprob_sum, is_greedy)
@@ -680,17 +681,12 @@ class LiteLLMClient(LightevalModel):
         logprobs_obj = response.choices[0].logprobs
         token_logprobs = logprobs_obj.token_logprobs or []
 
-        # Infer choice token count from response: len = ctx + choice + 1 (generated token)
-        # :-1 would be equivalent but fails when ctx_token_count is off by 1 due to BPE
-        # boundary merges (e.g. "Answer:" + " Yes" -> "Answer:▁Yes" in joint tokenization),
-        # producing an empty slice and logprob_sum = -inf, which poisons corpus BPB.
-        start = ctx_token_count
-        n_choice = len(token_logprobs) - 1 - ctx_token_count
-        if n_choice <= 0 and ctx_token_count > 0:
-            # ctx_token_count overestimates by 1 — shift start back by 1
-            start -= 1
-            n_choice = len(token_logprobs) - 1 - start
-        end = start + max(n_choice, 0)
+        # Slice choice tokens from the right: the response is
+        #   [BOS?] [context tokens...] [choice tokens...] [1 generated token]
+        # Anchoring from the right is BOS-agnostic and robust to any server-side
+        # special-token prepending.
+        end = len(token_logprobs) - 1  # exclude the one generated token
+        start = max(0, end - choice_len)
 
         cont_logprobs = [lp for lp in token_logprobs[start:end] if lp is not None]
         logprob_sum = sum(cont_logprobs) if cont_logprobs else float("-inf")
@@ -715,14 +711,14 @@ class LiteLLMClient(LightevalModel):
         all pairs in the batch.
 
         Args:
-            batch: list of (doc_idx, choice_idx, full_text, ctx_token_count)
+            batch: list of (doc_idx, choice_idx, full_text, choice_len)
 
         Returns:
             list of (doc_idx, choice_idx, (logprob_sum, is_greedy))
         """
         if len(batch) == 1:
-            di, ci, full_text, ctx_len = batch[0]
-            return [(di, ci, self._score_single(full_text, ctx_len))]
+            di, ci, full_text, choice_len = batch[0]
+            return [(di, ci, self._score_single(full_text, choice_len))]
 
         prompts = [full_text for _, _, full_text, _ in batch]
 
@@ -761,7 +757,7 @@ class LiteLLMClient(LightevalModel):
         choices_by_idx = {c.index: c for c in response.choices}
 
         results = []
-        for seq_idx, (di, ci, _, ctx_token_count) in enumerate(batch):
+        for seq_idx, (di, ci, _, choice_len) in enumerate(batch):
             choice = choices_by_idx.get(seq_idx)
             if choice is None:
                 logger.warning(
@@ -773,12 +769,8 @@ class LiteLLMClient(LightevalModel):
             logprobs_obj = choice.logprobs
             token_logprobs = logprobs_obj.token_logprobs or []
 
-            start = ctx_token_count
-            n_choice = len(token_logprobs) - 1 - ctx_token_count
-            if n_choice <= 0 and ctx_token_count > 0:
-                start -= 1
-                n_choice = len(token_logprobs) - 1 - start
-            end = start + max(n_choice, 0)
+            end = len(token_logprobs) - 1  # exclude the one generated token
+            start = max(0, end - choice_len)
 
             cont_logprobs = [lp for lp in token_logprobs[start:end] if lp is not None]
             logprob_sum = sum(cont_logprobs) if cont_logprobs else float("-inf")
@@ -846,11 +838,8 @@ class LiteLLMClient(LightevalModel):
             """Tokenize a batch then score all pairs in one API call."""
             prepared = []
             for di, ci, context, choice in batch_items:
-                # ctx_len = total - choice avoids the BPE boundary ±1 error when
-                # tokenizing context alone (e.g. "Answer:" + " Yes" merges into
-                # "Answer:▁Yes", making context_len overestimate by 1).
-                total_len = self._count_tokens(context + choice)
                 choice_len = self._count_tokens(choice)
+                total_len = self._count_tokens(context + choice)
                 prompt = context + choice
                 # Left-truncate (OLMES-style): drop early few-shot examples when
                 # the combined prompt exceeds the model's context window.
@@ -862,8 +851,7 @@ class LiteLLMClient(LightevalModel):
                         f"Prompt too long ({total_len} tokens > {max_input} max); left-truncating."
                     )
                     prompt = self._left_truncate_tokens(prompt, max_input)
-                    total_len = max_input
-                prepared.append((di, ci, prompt, total_len - choice_len))
+                prepared.append((di, ci, prompt, choice_len))
             return self._score_batch(prepared)
 
         # Chunk work into batches — each batch becomes a single API call with a list

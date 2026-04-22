@@ -208,9 +208,11 @@ def mmlu_redux_cf_prompt(line, task_name: str = None):
         else line["answer"]
     )
 
+    query = f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:"
+
     return Doc(
         task_name=task_name,
-        query=f"The following are multiple choice questions about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}\nAnswer:",
+        query=query,
         choices=[" " + c for c in line["choices"]],
         gold_index=gold_ix,
         fewshot_sorting_class=line["choices"][gold_ix],

@@ -50,10 +50,12 @@ def harness_preprocess(text):
 
 def hellaswag_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled options in prompt, score label tokens via logprobs."""
-    query = "The following are multiple choice questions (with answers) about common sense.\n\n"
-    query += f"Question: {line['activity_label']}: {line['ctx_a']} {line['ctx_b'].capitalize()}\n"
-    query += "".join([f"{key}. {choice}\n" for key, choice in zip(ascii_uppercase, line["endings"])])
-    query += "Answer:"
+    ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
+    query = harness_preprocess(line["activity_label"] + ": " + ctx)
+    query += "".join(
+        [f"\n{key}. {harness_preprocess(choice)}" for key, choice in zip(ascii_uppercase, line["endings"])]
+    )
+    query += "\nAnswer:"
 
     gold_ix = int(line["label"]) if line["label"] != "" else -1
     return Doc(
@@ -61,7 +63,6 @@ def hellaswag_mcf_prompt(line, task_name: str = None):
         query=query,
         choices=[" " + i for i in ascii_uppercase[: len(line["endings"])]],
         gold_index=gold_ix,
-        instruction="The following are multiple choice questions (with answers) about common sense.\n\n",
     )
 
 def hellaswag_cf_prompt(line, task_name: str = None):
@@ -110,7 +111,6 @@ hellaswag_mcf_em = LightevalTaskConfig(
     stop_sequence=["\n"],
     version=0,
 )
-
 # CF variant: completion-style, logprob on full answer text + BPB on gold choice
 hellaswag_cf = LightevalTaskConfig(
     name="hellaswag:cf",
@@ -121,6 +121,7 @@ hellaswag_cf = LightevalTaskConfig(
     evaluation_splits=["validation"],
     few_shots_split=None,
     few_shots_select=None,
+    generation_size=-1,
     metrics=_CF_METRICS,
     stop_sequence=["\n"],
     version=0,

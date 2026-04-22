@@ -91,6 +91,7 @@ _LANGUAGES = [
 
 def _hellaswag_adapter(line):
     return {
+        "activity_label": line.get("activity_label", ""),
         "ctx_a": line["ctx_a"],
         "ctx_b": line["ctx_b"],
         "continuations": line["endings"],
