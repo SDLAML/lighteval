@@ -46,8 +46,8 @@ def winogrande_cf_prompt(line, task_name: str = None):
     end_of_target = end_of_target.strip()
     return Doc(
         task_name=task_name,
-        query=query,
-        choices=[f"{line['option1']} {end_of_target}", f"{line['option2']} {end_of_target}"],
+        query=query.rstrip(),
+        choices=[f" {line['option1']} {end_of_target}", f" {line['option2']} {end_of_target}"],
         gold_index=int(line["answer"]) - 1 if line["answer"] != "" else -1,
     )
 
