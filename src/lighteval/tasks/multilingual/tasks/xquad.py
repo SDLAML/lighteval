@@ -49,8 +49,8 @@ TASKS_TABLE = [
         hf_subset=f"xquad.{standardize_tag(language.value)}",
         evaluation_splits=("validation",),
         few_shots_split="validation",
-        generation_size=400,
-        stop_sequence=("\n",),
+        generation_size=100,
+        stop_sequence=["\n",],
         metrics=(
             MultilingualQuasiExactMatchMetric(language, "prefix"),
             MultilingualQuasiF1ScoreMetric(language),
