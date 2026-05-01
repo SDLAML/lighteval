@@ -90,7 +90,8 @@ SUBSETS = [
 
 DEFAULT_LENGTHS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
-NUM_SAMPLES = 500
+# NUM_SAMPLES = 500
+NUM_SAMPLES = 100
 RANDOM_SEED = 42
 
 # ---------------------------------------------------------------------------
@@ -147,7 +148,13 @@ def _get_cache_dir(tokenizer_path: str) -> Path:
 # ---------------------------------------------------------------------------
 
 NIAH_NEEDLE = "One of the special magic {type_needle_v} for {key} is: {value}."
-NIAH_TEMPLATE = (
+NIAH_TEMPLATE_SINGLE = (
+    "A special magic {type_needle_v} is hidden within the following text. "
+    "Make sure to memorize it. I will quiz you about the {type_needle_v} afterwards.\n"
+    "{context}\n"
+    "What is the special magic {type_needle_v} for {query} mentioned in the provided text?"
+)
+NIAH_TEMPLATE_MULTI = (
     "Some special magic {type_needle_v} are hidden within the following text. "
     "Make sure to memorize it. I will quiz you about the {type_needle_v} afterwards.\n"
     "{context}\n"
@@ -321,7 +328,7 @@ def _niah_generate_samples(
     type_needle_v: str,
     template: str,
     num_samples: int = NUM_SAMPLES,
-    tokens_to_generate: int = 128,
+    tokens_to_generate: int = 50,
     num_needle_v: int = 1,
     num_needle_k: int = 1,
     num_needle_q: int = 1,
@@ -361,7 +368,7 @@ def _niah_generate_samples(
             random_seed=random_seed,
         )
         gen_prefix = _gen_prefix(tnv_base, num_needle_q, num_needle_v, query)
-        prompt = input_text + " " + gen_prefix
+        prompt = _build_runtime_prompt(input_text, gen_prefix)
         total_tokens = len(tokenizer(prompt).input_ids)
         if total_tokens + tokens_to_generate > budget:
             num_haystack -= incremental
@@ -400,7 +407,7 @@ def _niah_generate_samples(
                     random_seed=sample_seed,
                 )
                 gen_prefix = _gen_prefix(tnv_base, num_needle_q, num_needle_v, query)
-                prompt = input_text + " " + gen_prefix
+                prompt = _build_runtime_prompt(input_text, gen_prefix)
                 length = len(tokenizer(prompt).input_ids) + tokens_to_generate
                 assert length <= budget
                 break
@@ -434,7 +441,7 @@ def _niah_generate_samples(
 # ---------------------------------------------------------------------------
 
 VT_CONFIG = {
-    "tokens_to_generate": 30,
+    "tokens_to_generate": 50,
     "template": (
         "Memorize and track the chain(s) of variable assignment hidden in the "
         "following text.\n\n{context}\n"
@@ -446,6 +453,7 @@ VT_CONFIG = {
     ),
 }
 VT_TEMPLATE = VT_CONFIG["template"] + VT_CONFIG["answer_prefix"]
+VT_ANSWER_PREFIX_BASE = " Answer: According to the chain(s) of variable assignment"
 
 
 def _vt_generate_chains(
@@ -506,6 +514,47 @@ def _vt_randomize_icl(icl_example: str) -> str:
     return icl_example
 
 
+def _split_prompt_on_answer_prefix(
+    prompt: str, answer_prefix: str, *, strip_input: bool = False
+) -> tuple[str, str]:
+    prefix_index = prompt.rfind(answer_prefix)
+    if prefix_index == -1:
+        raise ValueError("Answer prefix not found in prompt")
+
+    input_text = prompt[:prefix_index]
+    if strip_input:
+        input_text = input_text.strip()
+    gen_prefix = prompt[prefix_index:].strip()
+    return input_text, gen_prefix
+
+
+def _runtime_prompt_budget_length(
+    tokenizer, input_text: str, gen_prefix: str, tokens_to_generate: int
+) -> int:
+    prompt = _build_runtime_prompt(input_text, gen_prefix)
+    return len(tokenizer(prompt).input_ids) + tokens_to_generate
+
+
+def _vt_build_cached_sample(input_text: str, icl_prompt: str) -> tuple[str, str]:
+    cutoff = input_text.index(VT_CONFIG["template"][:20])
+    full_prompt = input_text[:cutoff] + icl_prompt + "\n\n" + input_text[cutoff:]
+    return _split_prompt_on_answer_prefix(full_prompt, VT_ANSWER_PREFIX_BASE)
+
+
+def _cwe_build_cached_sample(input_example: str, input_text: str) -> tuple[str, str]:
+    input_text_clean, gen_prefix = _split_prompt_on_answer_prefix(
+        input_text, CWE_CONFIG["answer_prefix"]
+    )
+    full_input = (input_example + "\n" + input_text_clean).strip()
+    return full_input, gen_prefix
+
+
+def _fwe_build_cached_sample(input_text: str) -> tuple[str, str]:
+    return _split_prompt_on_answer_prefix(
+        input_text, FWE_CONFIG["answer_prefix"], strip_input=True
+    )
+
+
 def _vt_generate_samples(
     tokenizer,
     max_seq_length: int,
@@ -513,7 +562,7 @@ def _vt_generate_samples(
     incremental: int = 10,
     num_chains: int = 1,
     num_hops: int = 4,
-    tokens_to_generate: int = 30,
+    tokens_to_generate: int = VT_CONFIG["tokens_to_generate"],
 ) -> list[dict]:
     budget = max_seq_length
 
@@ -542,15 +591,16 @@ def _vt_generate_samples(
     icl_str = (
         icl_text_raw + " " + icl_out
     )  # full ICL text: question + gen_prefix + answers
-    example_tokens = len(tokenizer(icl_str + "\n\n").input_ids)
-
     # --- Step 2: Find num_noises for main examples ---
     num_noises = incremental
     total_tokens = 0
-    while total_tokens + tokens_to_generate + example_tokens < budget:
+    while total_tokens + tokens_to_generate < budget:
         input_text, _ = _vt_generate_input_output(num_noises, num_chains, num_hops)
-        total_tokens = len(tokenizer(input_text).input_ids)
-        if total_tokens + tokens_to_generate + example_tokens > budget:
+        cached_input, cached_gen_prefix = _vt_build_cached_sample(input_text, icl_str)
+        total_tokens = len(
+            tokenizer(_build_runtime_prompt(cached_input, cached_gen_prefix)).input_ids
+        )
+        if total_tokens + tokens_to_generate > budget:
             num_noises -= incremental
             break
         num_noises += incremental
@@ -571,10 +621,11 @@ def _vt_generate_samples(
                 input_text, answer = _vt_generate_input_output(
                     used_noises, num_chains, num_hops
                 )
-                length = (
-                    len(tokenizer(input_text).input_ids)
-                    + tokens_to_generate
-                    + example_tokens
+                cached_input, cached_gen_prefix = _vt_build_cached_sample(
+                    input_text, _vt_randomize_icl(icl_str)
+                )
+                length = _runtime_prompt_budget_length(
+                    tokenizer, cached_input, cached_gen_prefix, tokens_to_generate
                 )
                 assert length <= budget
                 break
@@ -587,30 +638,14 @@ def _vt_generate_samples(
         if answer is None:
             continue
 
-        # Insert ICL example between any model template prefix and the task template
-        cutoff = input_text.index(VT_CONFIG["template"][:20])
-        input_text = (
-            input_text[:cutoff]
-            + _vt_randomize_icl(icl_str)
-            + "\n\n"
-            + input_text[cutoff:]
-        )
-
-        # Split off gen_prefix (the answer_prefix at the end of VT_TEMPLATE)
-        gen_prefix_index = input_text.rfind(
-            " Answer: According to the chain(s) of variable assignment"
-        )
-        gen_prefix = input_text[gen_prefix_index:].strip()
-        input_text = input_text[:gen_prefix_index]
-
         write_jsons.append(
             {
                 "index": index,
-                "input": input_text,
+                "input": cached_input,
                 "outputs": answer,
                 "length": length,
                 "max_length": max_seq_length,
-                "gen_prefix": gen_prefix,
+                "gen_prefix": cached_gen_prefix,
             }
         )
 
@@ -624,7 +659,7 @@ def _vt_generate_samples(
 # ---------------------------------------------------------------------------
 
 CWE_CONFIG = {
-    "tokens_to_generate": 120,
+    "tokens_to_generate": 100,
     "template": (
         "Below is a numbered list of words. In these words, some appear more often than others. "
         "Memorize the ones that appear most often.\n{context}\n"
@@ -692,7 +727,7 @@ def _cwe_generate_samples(
     max_seq_length: int,
     num_samples: int = NUM_SAMPLES,
     incremental: int = 10,
-    tokens_to_generate: int = 120,
+    tokens_to_generate: int = CWE_CONFIG["tokens_to_generate"],
 ) -> list[dict]:
     words = _get_cwe_words()
     budget = max_seq_length
@@ -703,14 +738,9 @@ def _cwe_generate_samples(
         input_example, input_text, answer = _cwe_generate_input_output(
             num_words, max_seq_length, words
         )
+        full_input, gen_prefix = _cwe_build_cached_sample(input_example, input_text)
         total_tokens = len(
-            tokenizer(
-                input_example
-                + "\n"
-                + input_text
-                + " "
-                + " ".join(f"{i+1}. {w}" for i, w in enumerate(answer))
-            ).input_ids
+            tokenizer(_build_runtime_prompt(full_input, gen_prefix)).input_ids
         )
         if total_tokens + tokens_to_generate > budget:
             num_words -= incremental
@@ -737,7 +767,12 @@ def _cwe_generate_samples(
                 input_example, input_text, answer = _cwe_generate_input_output(
                     used_words, max_seq_length, words
                 )
-                length = len(tokenizer(input_text).input_ids) + tokens_to_generate
+                full_input, gen_prefix = _cwe_build_cached_sample(
+                    input_example, input_text
+                )
+                length = _runtime_prompt_budget_length(
+                    tokenizer, full_input, gen_prefix, tokens_to_generate
+                )
                 assert length <= budget
                 break
             except Exception:
@@ -749,13 +784,10 @@ def _cwe_generate_samples(
         if answer is None:
             continue
 
-        gen_prefix_idx = input_text.rfind(CWE_CONFIG["answer_prefix"])
-        gen_prefix = input_text[gen_prefix_idx:].strip()
-        input_text = input_text[:gen_prefix_idx]
         write_jsons.append(
             {
                 "index": index,
-                "input": input_text.strip(),
+                "input": full_input,
                 "outputs": answer,
                 "length": length,
                 "max_length": max_seq_length,
@@ -776,7 +808,7 @@ FWE_CONFIG = {
     "tokens_to_generate": 50,
     "template": (
         "Read the following coded text and track the frequency of each coded word. "
-        "Find the three most frequently appeared coded words. {context}\n"
+        "Find the three most frequently appeared coded words.\n{context}\n"
         "Question: Do not provide any explanation. Please ignore the dots '....'. "
         "What are the three most frequently appeared words in the above coded text?"
     ),
@@ -875,13 +907,11 @@ def _fwe_generate_samples(
             alpha=alpha,
             sample_seed=sample_seed,
         )
-        length = len(tokenizer(input_text).input_ids) + tokens_to_generate
+        input_text_clean, gen_prefix = _fwe_build_cached_sample(input_text)
+        length = _runtime_prompt_budget_length(
+            tokenizer, input_text_clean, gen_prefix, tokens_to_generate
+        )
         assert length <= budget
-
-        # Strip answer prefix from input
-        ans_prefix_idx = input_text.rfind(FWE_CONFIG["answer_prefix"])
-        gen_prefix = input_text[ans_prefix_idx:].strip()
-        input_text_clean = input_text[:ans_prefix_idx].strip()
 
         write_jsons.append(
             {
@@ -904,7 +934,7 @@ def _fwe_generate_samples(
 # ---------------------------------------------------------------------------
 
 QA_CONFIG = {
-    "tokens_to_generate": 32,
+    "tokens_to_generate": 50,
     "template": (
         "Answer the question based on the given documents. "
         "Only give me the answer and do not output any other words.\n\n"
@@ -1033,7 +1063,7 @@ def _qa_generate_samples(
     qas: list[dict],
     max_seq_length: int,
     num_samples: int = NUM_SAMPLES,
-    tokens_to_generate: int = 32,
+    tokens_to_generate: int = QA_CONFIG["tokens_to_generate"],
     incremental: int = 10,
 ) -> list[dict]:
     budget = max_seq_length
@@ -1043,7 +1073,7 @@ def _qa_generate_samples(
     total_tokens = 0
     while total_tokens + tokens_to_generate < budget:
         input_text, _ = _qa_generate_input_output(0, num_docs, qas=qas, docs=docs)
-        prompt = input_text + " " + gen_prefix
+        prompt = _build_runtime_prompt(input_text, gen_prefix)
         total_tokens = len(tokenizer(prompt).input_ids)
         if total_tokens + tokens_to_generate > budget:
             num_docs -= incremental
@@ -1069,7 +1099,7 @@ def _qa_generate_samples(
                 input_text, answer = _qa_generate_input_output(
                     index, used_docs, qas=qas, docs=docs
                 )
-                prompt = input_text + " " + gen_prefix
+                prompt = _build_runtime_prompt(input_text, gen_prefix)
                 length = len(tokenizer(prompt).input_ids) + tokens_to_generate
                 assert length <= budget
                 break
@@ -1110,7 +1140,7 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_haystack="repeat",
             type_needle_k="words",
             type_needle_v="numbers",
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_SINGLE,
         )
     elif subset == "niah_single_2":
         _ensure_nltk()
@@ -1121,7 +1151,7 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_haystack="essay",
             type_needle_k="words",
             type_needle_v="numbers",
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_SINGLE,
         )
     elif subset == "niah_single_3":
         _ensure_nltk()
@@ -1132,7 +1162,7 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_haystack="essay",
             type_needle_k="words",
             type_needle_v="uuids",
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_SINGLE,
         )
     elif subset == "niah_multikey_1":
         _ensure_nltk()
@@ -1144,7 +1174,7 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_needle_k="words",
             type_needle_v="numbers",
             num_needle_k=4,
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_SINGLE,
         )
     elif subset == "niah_multikey_2":
         return _niah_generate_samples(
@@ -1155,7 +1185,7 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_needle_k="words",
             type_needle_v="numbers",
             num_needle_k=4,
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_SINGLE,
         )
     elif subset == "niah_multikey_3":
         return _niah_generate_samples(
@@ -1166,7 +1196,8 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_needle_k="uuids",
             type_needle_v="uuids",
             num_needle_k=4,
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_SINGLE,
+            tokens_to_generate=100,
         )
     elif subset == "niah_multiquery":
         _ensure_nltk()
@@ -1178,7 +1209,8 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_needle_k="words",
             type_needle_v="numbers",
             num_needle_q=4,
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_MULTI,
+            tokens_to_generate=100,
         )
     elif subset == "niah_multivalue":
         _ensure_nltk()
@@ -1190,7 +1222,8 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_needle_k="words",
             type_needle_v="numbers",
             num_needle_v=4,
-            template=NIAH_TEMPLATE,
+            template=NIAH_TEMPLATE_MULTI,
+            tokens_to_generate=300 if length == 4096 else 250,
         )
     elif subset == "vt":
         return _vt_generate_samples(tokenizer, max_seq_length=length)
@@ -1272,19 +1305,27 @@ def ensure_ruler_cache(
 # ---------------------------------------------------------------------------
 
 
+def _build_runtime_prompt(input_text: str, gen_prefix: str = "") -> str:
+    """Build the exact prompt text used at evaluation time.
+
+    RULER caches `input` and `gen_prefix` separately, then `ruler_prompt`
+    joins them with a newline before sending the prompt to the model.
+    """
+    if gen_prefix:
+        return input_text + "\n" + gen_prefix
+    return input_text
+
+
 def ruler_prompt(line: dict, task_name: str = None) -> Doc:
     outputs = line["outputs"]
-    # Append gen_prefix so the model receives the completion-eliciting prefix
-    # (matches lm-eval-harness YAML: doc_to_text="{{input}}" + gen_prefix="{{gen_prefix}}")
-    query = line["input"]
-    gp = line.get("gen_prefix", "")
-    if gp:
-        query = query + " " + gp
+    gen_prefix = line.get("gen_prefix", "")
+    query = _build_runtime_prompt(line["input"], gen_prefix)
     return Doc(
         query=query,
         choices=outputs,
         gold_index=list(range(len(outputs))),
         task_name=task_name,
+        specific={"gen_prefix": gen_prefix} if gen_prefix else None,
     )
 
 
@@ -1315,11 +1356,16 @@ def get_ruler_tasks(
             # subset never triggers generation of all subsets.
             cache_path = cache_base / str(length) / subset
             metric = [Metrics.ruler_match]
+            _niah_gen_sizes = {
+                "niah_multikey_3": 100,
+                "niah_multiquery": 100,
+                "niah_multivalue": 300 if length == 4096 else 250,
+            }
             gen_size = (
-                128
+                _niah_gen_sizes.get(subset, 50)
                 if "niah" in subset
                 else (
-                    30 if subset == "vt" else 120 if subset == "cwe" else 50
+                    50 if subset == "vt" else 100 if subset == "cwe" else 50
                 )  # fwe and qa
             )
             tasks.append(
