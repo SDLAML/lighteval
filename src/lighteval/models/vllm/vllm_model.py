@@ -319,31 +319,12 @@ class VLLMModel(LightevalModel):
         return model
 
     def _create_auto_tokenizer(self, config: VLLMModelConfig):
-        # Use vllm's get_tokenizer first; for some Mistral models with `tekken.json` it
-        # returns a `MistralTokenizer` whose API (no `eos_token`/`pad_token` attrs and
-        # not callable like an HF tokenizer) is incompatible with the rest of lighteval.
-        # In that case, fall back to HF `AutoTokenizer.from_pretrained`, since these
-        # models also ship `tokenizer.json` / `tokenizer_config.json`.
-        tokenizer_name = config.tokenizer or config.model_name
         tokenizer = get_tokenizer(
-            tokenizer_name,  # use HF tokenizer for non-HF models, like GGUF model.
+            config.tokenizer or config.model_name,  # use HF tokenizer for non-HF models, like GGUF model.
             tokenizer_mode="auto",
             trust_remote_code=config.trust_remote_code,
             revision=config.revision,
         )
-        if not hasattr(tokenizer, "eos_token"):
-            from transformers import AutoTokenizer
-
-            logger.warning(
-                "vllm's get_tokenizer returned a tokenizer without `eos_token` "
-                f"(type={type(tokenizer).__name__}). Falling back to "
-                "transformers.AutoTokenizer for HF-compatible interface."
-            )
-            tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_name,
-                revision=config.revision,
-                trust_remote_code=config.trust_remote_code,
-            )
         tokenizer.pad_token = tokenizer.eos_token
         return tokenizer
 
