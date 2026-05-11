@@ -140,7 +140,7 @@ def _mcf_adapter(line):
     }
 
 
-_MMLU_CF_METRICS = [MMLUCategoryGroupingCF]
+_MMLU_CF_METRICS = [MMLUCategoryGroupingCF, Metrics.target_bits_per_byte]
 _MMLU_MCF_METRICS = [MMLUCategoryGroupingMCF]
 
 

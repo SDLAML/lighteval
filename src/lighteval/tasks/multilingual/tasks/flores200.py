@@ -267,7 +267,7 @@ TASKS_TABLE = build_english_centric_translation_tasks(
             hf_avail_splits=("dev", "devtest"),
             evaluation_splits=("devtest",),
             few_shots_split="dev",
-            few_shots_select="random_sampling_from_train",
+            few_shots_select="random_sampling",
         )
         for lang_code in flores_200_languages
         if lang_code != _ENGLISH_FLORES_CODE

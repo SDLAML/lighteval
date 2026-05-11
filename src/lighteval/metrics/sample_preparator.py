@@ -110,7 +110,10 @@ class COMETPreparator(Preparator):
         """
         source = (doc.specific or {}).get("source_text", "")
         golds = as_list(doc.get_golds())
-        return COMETCorpusMetricInput(source=source, hyp=model_response.final_text, ref=golds)
+        preds = model_response.final_text
+        if len(preds) > 1:
+            logger.warning("Multiple predictions present, keeping only the first prediction (for COMET).")
+        return COMETCorpusMetricInput(source=source, hyp=preds[0], ref=golds)
 
 
 class LoglikelihoodPreparator(Preparator):
