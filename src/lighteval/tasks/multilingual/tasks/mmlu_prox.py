@@ -116,7 +116,7 @@ def mmlu_prox_mcf_prompt(line, task_name: str = None):
         return None
     labels = list(ascii_uppercase[: len(options)])
     query = f"Question: {line['question'].strip()}\n"
-    query += "".join([f"{lbl}. {opt}\n" for lbl, opt in zip(labels, options)])
+    query += "".join([f" {lbl}. {opt}\n" for lbl, opt in zip(labels, options)])
     query += "Answer:"
     return Doc(
         task_name=task_name,
