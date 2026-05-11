@@ -577,14 +577,20 @@ class LightevalTask:
                 if doc is None or doc == []:
                     continue
 
-                doc.id = str(ix)
-
-                # Transfer task-level generation parameters to the document
-                doc.generation_grammar = self.generation_grammar
-                doc.generation_size = self.generation_size
-                doc.stop_sequences = self.stop_sequence
-
-                docs.append(doc)
+                # Support multi-doc returns (list of Docs per row, e.g. multi-turn tasks)
+                if isinstance(doc, list):
+                    for sub_ix, sub_doc in enumerate(doc):
+                        sub_doc.id = f"{ix}_{sub_ix}"
+                        sub_doc.generation_grammar = self.generation_grammar
+                        sub_doc.generation_size = self.generation_size
+                        sub_doc.stop_sequences = self.stop_sequence
+                        docs.append(sub_doc)
+                else:
+                    doc.id = str(ix)
+                    doc.generation_grammar = self.generation_grammar
+                    doc.generation_size = self.generation_size
+                    doc.stop_sequences = self.stop_sequence
+                    docs.append(doc)
 
         return docs
 

@@ -52,7 +52,7 @@ def arc_prompt(line, task_name: str = None):
 
 def arc_mcf_prompt(line, task_name: str = None):
     query = f"Question: {line['question']}\n"
-    query += "".join([f"{key}. {choice}\n" for key, choice in zip(ascii_uppercase, line["choices"]["text"])])
+    query += "".join([f" {key}. {choice}\n" for key, choice in zip(ascii_uppercase, line["choices"]["text"])])
     query += "Answer:"
 
     gold_ix = line["choices"]["label"].index(line["answerKey"])

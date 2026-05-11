@@ -49,11 +49,18 @@ LANGUAGES = [
 
 
 def mt_mbpp_bpb_prompt(line, task_name=None):
-    """Prompt = problem description (text); gold = code solution."""
+    """Prompt = problem description + opening code fence; gold = code + closing fence.
+
+    Matches OLMO: the query ends with ```{language}\n so the model scores the
+    code body and closing fence as the gold continuation. perplexity_leading_space
+    is implicitly False here (gold has no leading space).
+    """
+    lang = line["language"]
+    code = line["code"].strip()
     return Doc(
         task_name=task_name,
-        query=line["text"],
-        choices=[line["code"]],
+        query=line["text"].strip() + f"\n```{lang}\n",
+        choices=[code + "\n```"],
         gold_index=0,
     )
 

@@ -827,19 +827,29 @@ class LiteLLMClient(LightevalModel):
             [(0.0, False)] * len(doc.choices) for doc in doc_list
         ]
 
-        # Flat work list: (doc_idx, choice_idx, context, choice)
+        # Pre-compute token lengths once per context (not 4× per context via choices)
+        # to avoid redundant BPE tokenization in the thread pool.
+        context_lens: list[int] = [self._count_tokens(ctx) for ctx in context_list]
+
+        # Pre-compute choice lengths once per unique choice text.
+        _unique_choices: dict[str, int] = {}
+        for doc in doc_list:
+            for choice in doc.choices:
+                if choice not in _unique_choices:
+                    _unique_choices[choice] = self._count_tokens(choice)
+
+        # Flat work list: (doc_idx, choice_idx, context, choice, context_len, choice_len)
         work = [
-            (di, ci, context_list[di], choice)
+            (di, ci, context_list[di], choice, context_lens[di], _unique_choices[choice])
             for di, doc in enumerate(doc_list)
             for ci, choice in enumerate(doc.choices)
         ]
 
         def _score_batch_work(batch_items: list[tuple]) -> list[tuple]:
-            """Tokenize a batch then score all pairs in one API call."""
+            """Score a batch of (context+choice) pairs in a single batched echo call."""
             prepared = []
-            for di, ci, context, choice in batch_items:
-                choice_len = self._count_tokens(choice)
-                total_len = self._count_tokens(context + choice)
+            for di, ci, context, choice, ctx_len, ch_len in batch_items:
+                total_len = ctx_len + ch_len
                 prompt = context + choice
                 # Left-truncate (OLMES-style): drop early few-shot examples when
                 # the combined prompt exceeds the model's context window.
@@ -851,7 +861,7 @@ class LiteLLMClient(LightevalModel):
                         f"Prompt too long ({total_len} tokens > {max_input} max); left-truncating."
                     )
                     prompt = self._left_truncate_tokens(prompt, max_input)
-                prepared.append((di, ci, prompt, choice_len))
+                prepared.append((di, ci, prompt, ch_len))
             return self._score_batch(prepared)
 
         # Chunk work into batches — each batch becomes a single API call with a list
