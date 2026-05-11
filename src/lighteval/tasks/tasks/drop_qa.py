@@ -76,7 +76,7 @@ drop_bpb = LightevalTaskConfig(
     few_shots_split="train",
     few_shots_select="random_sampling_from_train",
     generation_size=-1,
-    stop_sequence=["\n"],
+    stop_sequence=["\n\n", "Passage:", "Question:"],
     metrics=[Metrics.target_bits_per_byte],
     version=0,
 )
@@ -90,7 +90,7 @@ drop_gen = LightevalTaskConfig(
     few_shots_split="train",
     few_shots_select="random_sampling_from_train",
     generation_size=100,
-    stop_sequence=["\n"],
+    stop_sequence=["\n\n", "Passage:", "Question:"],
     metrics=[Metrics.drop],
     version=0,
 )

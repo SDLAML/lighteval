@@ -52,8 +52,9 @@ def hellaswag_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled options in prompt, score label tokens via logprobs."""
     ctx = line["ctx_a"] + " " + line["ctx_b"].capitalize()
     query = harness_preprocess(line["activity_label"] + ": " + ctx)
+    query += "\nChoose the best continuation:"
     query += "".join(
-        [f"\n{key}. {harness_preprocess(choice)}" for key, choice in zip(ascii_uppercase, line["endings"])]
+        [f"\n {key}. {harness_preprocess(choice)}" for key, choice in zip(ascii_uppercase, line["endings"])]
     )
     query += "\nAnswer:"
 
@@ -88,7 +89,7 @@ hellaswag_mcf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="test",
     few_shots_select=None,
     generation_size=-1,
     metrics=_MCF_METRICS,
@@ -104,7 +105,7 @@ hellaswag_mcf_em = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="test",
     few_shots_select=None,
     generation_size=1,
     metrics=[Metrics.exact_match],
@@ -119,7 +120,7 @@ hellaswag_cf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="test",
     few_shots_select=None,
     generation_size=-1,
     metrics=_CF_METRICS,

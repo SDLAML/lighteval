@@ -39,11 +39,14 @@ _MCF_METRICS = [
 
 
 def med_mcqa_mcf_prompt(line, task_name: str = None):
-    """MCF variant: labeled A/B/C/D options, score label tokens via logprobs."""
-    query = f"Give a letter answer among A, B, C or D.\nQuestion: {line['question']}\n"
+    """MCF variant: labeled A/B/C/D options, score label tokens via logprobs.
+
+    Matches OLMO's MedMCQAMC: plain Question + options, no instruction prefix.
+    """
+    query = f"Question: {line['question']}\n"
     query += "".join(
         [
-            f"{key}. {choice}\n"
+            f" {key}. {choice}\n"
             for key, choice in zip(ascii_uppercase, [line["opa"], line["opb"], line["opc"], line["opd"]])
         ]
     )
@@ -53,7 +56,6 @@ def med_mcqa_mcf_prompt(line, task_name: str = None):
         query=query,
         choices=[" " + c for c in list(ascii_uppercase)[:4]],
         gold_index=line["cop"] - 1,
-        instruction="Give a letter answer among A, B, C or D.\n",
     )
 
 

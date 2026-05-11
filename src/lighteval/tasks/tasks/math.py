@@ -33,7 +33,8 @@ Solution:
 """.strip()
 
 # OLMo easy-suite style: minimal prompt, 4-shot from training data
-MATH_BPB_PROMPT_TEMPLATE = "Problem: {prompt}\nSolution:"
+# Format matches OLMO's minerva cot_style: "Problem:\n{problem}\n\nSolution:"
+MATH_BPB_PROMPT_TEMPLATE = "Problem:\n{prompt}\n\nSolution:"
 
 _MATH_SUBSETS = [
     'algebra',
