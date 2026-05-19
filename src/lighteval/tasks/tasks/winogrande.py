@@ -42,7 +42,7 @@ def winogrande_cf_prompt(line, task_name: str = None):
     BPB = logprob(suffix | prefix + gold_option) / bytes(suffix).
 
     Accuracy is not meaningful in this single-choice format (always 1.0), so
-    only BPB is reported. Use winogrande:mcf for accuracy scoring.
+    only BPB is reported. Use winogrande:cf for accuracy scoring.
     """
     sentence = line["sentence"]
     blank_pos = sentence.index("_")
@@ -100,17 +100,17 @@ def winogrande_rc_prompt(line, task_name: str = None):
     )
 
 
-# CF variant: partial evaluation (OLMO-style), BPB only
+# BPB variant: partial evaluation (OLMO-style), BPB only
 # Accuracy is not reported because partial eval uses one fixed gold choice.
-winogrande_cf = LightevalTaskConfig(
-    name="winogrande:cf",
+winogrande_bpb = LightevalTaskConfig(
+    name="winogrande:bpb",
     prompt_function=winogrande_cf_prompt,
     hf_repo="allenai/winogrande",
     hf_subset="winogrande_xl",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
-    few_shots_select="random_sampling",
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=[Metrics.target_bits_per_byte],
     stop_sequence=["\n"],
@@ -149,11 +149,11 @@ winogrande_mcf_em = LightevalTaskConfig(
     version=0,
 )
 
-# RC variant: standard cloze-form for accuracy (approximates Table 46 RC_none).
+# CF variant: standard cloze-form for accuracy (approximates Table 46 RC_none).
 # Scores P(option+suffix | prefix) rather than OLMO's P(suffix | prefix+option),
 # but gives meaningful accuracy using lighteval's standard Doc framework.
-winogrande_rc = LightevalTaskConfig(
-    name="winogrande:rc",
+winogrande_cf = LightevalTaskConfig(
+    name="winogrande:cf",
     prompt_function=winogrande_rc_prompt,
     hf_repo="allenai/winogrande",
     hf_subset="winogrande_xl",
@@ -164,15 +164,14 @@ winogrande_rc = LightevalTaskConfig(
     generation_size=-1,
     metrics=[
         LogLikelihoodAccMetric(),
-        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
     ],
     stop_sequence=["\n"],
     version=0,
 )
 
 TASKS_TABLE = [
+    winogrande_bpb,
     winogrande_cf,
     winogrande_mcf,
     winogrande_mcf_em,
-    winogrande_rc,
 ]
