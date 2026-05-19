@@ -88,11 +88,23 @@ SUBSETS = [
     "qa_2",
 ]
 
-DEFAULT_LENGTHS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+DEFAULT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
 # NUM_SAMPLES = 500
 NUM_SAMPLES = 100
 RANDOM_SEED = 42
+
+MIN_RULER_LENGTH = 2048
+# Reserve 1 token so vllm/inference-time special tokens (e.g. BOS) don't push
+# prompt + gen_size over the model's context window.
+PROMPT_SAFETY_MARGIN = 1
+
+
+def _validate_lengths(lengths: list[int]) -> list[int]:
+    bad = [x for x in lengths if x < MIN_RULER_LENGTH]
+    if bad:
+        raise ValueError(f"RULER lengths must be >= {MIN_RULER_LENGTH}; got {bad}")
+    return lengths
 
 # ---------------------------------------------------------------------------
 # Tokenizer helpers
@@ -135,10 +147,26 @@ def _get_model_arch(tokenizer_path: str) -> str:
     return f"{safe}_{h}"
 
 
+def _get_tokenizer_hash(tokenizer_path: str) -> str:
+    candidates = [
+        os.path.join(tokenizer_path, "tokenizer.json"),
+        os.path.join(tokenizer_path, "tokenizer.model"),
+        os.path.join(tokenizer_path, "vocab.json"),
+        os.path.join(tokenizer_path, "tokenizer_config.json"),
+    ]
+    hasher = hashlib.md5()
+    for path in candidates:
+        if os.path.isfile(path):
+            hasher.update(path.encode())
+            hasher.update(str(os.path.getmtime(path)).encode())
+    return hasher.hexdigest()[:8]
+
+
 def _get_cache_dir(tokenizer_path: str) -> Path:
     hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
     arch = _get_model_arch(tokenizer_path)
-    return Path(hf_home) / "lighteval" / "ruler" / arch
+    tok_hash = _get_tokenizer_hash(tokenizer_path)
+    return Path(hf_home) / "lighteval" / "ruler" / f"{arch}_{tok_hash}"
 
 
 # ---------------------------------------------------------------------------
@@ -334,13 +362,11 @@ def _niah_generate_samples(
     num_needle_q: int = 1,
     random_seed: int = RANDOM_SEED,
 ) -> list[dict]:
-    budget = max_seq_length
+    budget = max_seq_length - PROMPT_SAFETY_MARGIN
     num_needle_k = max(num_needle_k, num_needle_q)
 
     if type_haystack == "essay":
         incremental = 500
-    elif type_haystack in ("repeat", "needle"):
-        incremental = 25 if max_seq_length >= 4096 else 5
     else:
         incremental = 25
 
@@ -383,9 +409,16 @@ def _niah_generate_samples(
     num_haystack = max(incremental, num_haystack)
 
     write_jsons = []
-    for index in tqdm(
-        range(num_samples), desc=f"Generating NIAH samples | {max_seq_length}"
-    ):
+    index = 0
+    pbar = tqdm(total=num_samples, desc=f"Generating NIAH samples | {max_seq_length}")
+    MAX_ATTEMPTS = num_samples * 10
+    while len(write_jsons) < num_samples:
+        if index >= MAX_ATTEMPTS:
+            logger.warning(
+                f"Reached max attempts ({MAX_ATTEMPTS}) for NIAH at length {max_seq_length}, "
+                f"got {len(write_jsons)}/{num_samples} samples"
+            )
+            break
         # Per-sample seeding for reproducibility and diversity
         sample_seed = random_seed + index
         random.seed(sample_seed)
@@ -394,7 +427,7 @@ def _niah_generate_samples(
         input_text = answer = query = gen_prefix = length = None
         while True:
             try:
-                input_text, answer, query = _niah_generate_input_output(
+                cand_text, cand_answer, cand_query = _niah_generate_input_output(
                     used_haystack,
                     haystack,
                     type_haystack=type_haystack,
@@ -406,10 +439,15 @@ def _niah_generate_samples(
                     num_needle_q=num_needle_q,
                     random_seed=sample_seed,
                 )
-                gen_prefix = _gen_prefix(tnv_base, num_needle_q, num_needle_v, query)
-                prompt = _build_runtime_prompt(input_text, gen_prefix)
-                length = len(tokenizer(prompt).input_ids) + tokens_to_generate
-                assert length <= budget
+                cand_prefix = _gen_prefix(tnv_base, num_needle_q, num_needle_v, cand_query)
+                cand_prompt = _build_runtime_prompt(cand_text, cand_prefix)
+                cand_length = len(tokenizer(cand_prompt).input_ids) + tokens_to_generate
+                if cand_length > budget:
+                    raise RuntimeError(f"length {cand_length} exceeds budget {budget}")
+                # Commit only after validation passes
+                input_text, answer, query = cand_text, cand_answer, cand_query
+                gen_prefix = cand_prefix
+                length = cand_length
                 break
             except Exception:
                 if used_haystack > incremental:
@@ -418,6 +456,7 @@ def _niah_generate_samples(
                     break
 
         if answer is None:
+            index += 1
             continue
 
         write_jsons.append(
@@ -430,6 +469,9 @@ def _niah_generate_samples(
                 "gen_prefix": gen_prefix,
             }
         )
+        pbar.update(1)
+        index += 1
+    pbar.close()
 
     return write_jsons
 
@@ -448,12 +490,12 @@ VT_CONFIG = {
         "Question: Find all variables that are assigned the value {query} in the text above."
     ),
     "answer_prefix": (
-        " Answer: According to the chain(s) of variable assignment in the text above, "
-        "{num_v} variables are assigned the value {query}, they are: "
+        "Answer: According to the chain(s) of variable assignment in the text above, "
+        "{num_v} variables are assigned the value {query}, they are:"
     ),
 }
 VT_TEMPLATE = VT_CONFIG["template"] + VT_CONFIG["answer_prefix"]
-VT_ANSWER_PREFIX_BASE = " Answer: According to the chain(s) of variable assignment"
+VT_ANSWER_PREFIX_BASE = "Answer: According to the chain(s) of variable assignment"
 
 
 def _vt_generate_chains(
@@ -564,7 +606,7 @@ def _vt_generate_samples(
     num_hops: int = 4,
     tokens_to_generate: int = VT_CONFIG["tokens_to_generate"],
 ) -> list[dict]:
-    budget = max_seq_length
+    budget = max_seq_length - PROMPT_SAFETY_MARGIN
 
     # --- Step 1: Generate ICL example within a 500-token budget (matches reference) ---
     # Reference: get_dataset() calls sys_vartrack_w_noise_random(max_seq_length=500, incremental=5)
@@ -608,26 +650,38 @@ def _vt_generate_samples(
     num_noises = max(incremental, num_noises)
 
     write_jsons = []
-    for index in tqdm(
-        range(num_samples), desc=f"Generating VT samples | {max_seq_length}"
-    ):
+    index = 0
+    pbar = tqdm(total=num_samples, desc=f"Generating VT samples | {max_seq_length}")
+    MAX_ATTEMPTS = num_samples * 10
+    while len(write_jsons) < num_samples:
+        if index >= MAX_ATTEMPTS:
+            logger.warning(
+                f"Reached max attempts ({MAX_ATTEMPTS}) for VT at length {max_seq_length}, "
+                f"got {len(write_jsons)}/{num_samples} samples"
+            )
+            break
         # Per-sample seeding for reproducibility and diversity
         random.seed(RANDOM_SEED + index)
         np.random.seed(RANDOM_SEED + index)
         used_noises = num_noises
-        input_text = answer = length = None
+        input_text = answer = cached_input = cached_gen_prefix = length = None
         while True:
             try:
-                input_text, answer = _vt_generate_input_output(
+                cand_text, cand_answer = _vt_generate_input_output(
                     used_noises, num_chains, num_hops
                 )
-                cached_input, cached_gen_prefix = _vt_build_cached_sample(
-                    input_text, _vt_randomize_icl(icl_str)
+                cand_cached_input, cand_cached_gen_prefix = _vt_build_cached_sample(
+                    cand_text, _vt_randomize_icl(icl_str)
                 )
-                length = _runtime_prompt_budget_length(
-                    tokenizer, cached_input, cached_gen_prefix, tokens_to_generate
+                cand_length = _runtime_prompt_budget_length(
+                    tokenizer, cand_cached_input, cand_cached_gen_prefix, tokens_to_generate
                 )
-                assert length <= budget
+                if cand_length > budget:
+                    raise RuntimeError(f"length {cand_length} exceeds budget {budget}")
+                # Commit only after validation passes
+                input_text, answer = cand_text, cand_answer
+                cached_input, cached_gen_prefix = cand_cached_input, cand_cached_gen_prefix
+                length = cand_length
                 break
             except Exception:
                 if used_noises > incremental:
@@ -636,6 +690,7 @@ def _vt_generate_samples(
                     break
 
         if answer is None:
+            index += 1
             continue
 
         write_jsons.append(
@@ -648,6 +703,9 @@ def _vt_generate_samples(
                 "gen_prefix": cached_gen_prefix,
             }
         )
+        pbar.update(1)
+        index += 1
+    pbar.close()
 
     return write_jsons
 
@@ -665,7 +723,7 @@ CWE_CONFIG = {
         "Memorize the ones that appear most often.\n{context}\n"
         "Question: What are the 10 most common words in the above list?"
     ),
-    "answer_prefix": " Answer: The top 10 words that appear most often in the list are:",
+    "answer_prefix": "Answer: The top 10 words that appear most often in the list are:",
 }
 CWE_TEMPLATE = CWE_CONFIG["template"] + CWE_CONFIG["answer_prefix"]
 _CWE_RNG = random.Random(RANDOM_SEED)
@@ -708,12 +766,8 @@ def _cwe_get_example(
 
 
 def _cwe_generate_input_output(num_words: int, max_seq_length: int, words: list[str]):
-    if max_seq_length < 4096:
-        ctx_ex, ans_ex = _cwe_get_example(20, words, 3, 1, 10)
-        context, answer = _cwe_get_example(num_words, words, 6, 1, 10)
-    else:
-        ctx_ex, ans_ex = _cwe_get_example(40, words, 10, 3, 10)
-        context, answer = _cwe_get_example(num_words, words, 30, 3, 10)
+    ctx_ex, ans_ex = _cwe_get_example(40, words, 10, 3, 10)
+    context, answer = _cwe_get_example(num_words, words, 30, 3, 10)
 
     input_example = CWE_TEMPLATE.format(context=ctx_ex, query="") + " ".join(
         [f"{i + 1}. {w}" for i, w in enumerate(ans_ex)]
@@ -730,7 +784,7 @@ def _cwe_generate_samples(
     tokens_to_generate: int = CWE_CONFIG["tokens_to_generate"],
 ) -> list[dict]:
     words = _get_cwe_words()
-    budget = max_seq_length
+    budget = max_seq_length - PROMPT_SAFETY_MARGIN
 
     num_words = incremental
     total_tokens = 0
@@ -753,27 +807,40 @@ def _cwe_generate_samples(
     num_words = max(incremental, num_words)
 
     write_jsons = []
-    for index in tqdm(
-        range(num_samples), desc=f"Generating CWE samples | {max_seq_length}"
-    ):
+    write_jsons = []
+    index = 0
+    pbar = tqdm(total=num_samples, desc=f"Generating CWE samples | {max_seq_length}")
+    MAX_ATTEMPTS = num_samples * 10
+    while len(write_jsons) < num_samples:
+        if index >= MAX_ATTEMPTS:
+            logger.warning(
+                f"Reached max attempts ({MAX_ATTEMPTS}) for CWE at length {max_seq_length}, "
+                f"got {len(write_jsons)}/{num_samples} samples"
+            )
+            break
         # Per-sample seeding for reproducibility and diversity
         random.seed(RANDOM_SEED + index)
         np.random.seed(RANDOM_SEED + index)
         _CWE_RNG.seed(RANDOM_SEED + index)
         used_words = num_words
-        input_example = input_text = answer = length = None
+        input_text = answer = full_input = gen_prefix = length = None
         while True:
             try:
-                input_example, input_text, answer = _cwe_generate_input_output(
+                cand_example, cand_text, cand_answer = _cwe_generate_input_output(
                     used_words, max_seq_length, words
                 )
-                full_input, gen_prefix = _cwe_build_cached_sample(
-                    input_example, input_text
+                cand_full_input, cand_gen_prefix = _cwe_build_cached_sample(
+                    cand_example, cand_text
                 )
-                length = _runtime_prompt_budget_length(
-                    tokenizer, full_input, gen_prefix, tokens_to_generate
+                cand_length = _runtime_prompt_budget_length(
+                    tokenizer, cand_full_input, cand_gen_prefix, tokens_to_generate
                 )
-                assert length <= budget
+                if cand_length > budget:
+                    raise RuntimeError(f"length {cand_length} exceeds budget {budget}")
+                # Commit only after validation passes
+                input_text, answer = cand_text, cand_answer
+                full_input, gen_prefix = cand_full_input, cand_gen_prefix
+                length = cand_length
                 break
             except Exception:
                 if used_words > incremental:
@@ -782,6 +849,7 @@ def _cwe_generate_samples(
                     break
 
         if answer is None:
+            index += 1
             continue
 
         write_jsons.append(
@@ -794,6 +862,9 @@ def _cwe_generate_samples(
                 "gen_prefix": gen_prefix,
             }
         )
+        pbar.update(1)
+        index += 1
+    pbar.close()
 
     return write_jsons
 
@@ -812,7 +883,7 @@ FWE_CONFIG = {
         "Question: Do not provide any explanation. Please ignore the dots '....'. "
         "What are the three most frequently appeared words in the above coded text?"
     ),
-    "answer_prefix": " Answer: According to the coded text above, the three most frequently appeared words are:",
+    "answer_prefix": "Answer: According to the coded text above, the three most frequently appeared words are:",
 }
 FWE_TEMPLATE = FWE_CONFIG["template"] + FWE_CONFIG["answer_prefix"]
 FWE_SEED = RANDOM_SEED
@@ -876,42 +947,67 @@ def _fwe_generate_samples(
     alpha: float = 2.0,
     tokens_to_generate: int = 50,
 ) -> list[dict]:
-    budget = max_seq_length
+    budget = max_seq_length - PROMPT_SAFETY_MARGIN
     input_max_len = budget - tokens_to_generate
     vs = max_seq_length // 50 if vocab_size == -1 else vocab_size
+    fwe_incremental = input_max_len // 32
 
     _, _, num_example_words = _fwe_generate_input_output(
         input_max_len,
         tokenizer,
         coded_wordlen=coded_wordlen,
         vocab_size=vs,
-        incremental=input_max_len // 32,
+        incremental=fwe_incremental,
         alpha=alpha,
     )
 
     write_jsons = []
-    for index in tqdm(
-        range(num_samples), desc=f"Generating FWE samples | {max_seq_length}"
-    ):
+    index = 0
+    pbar = tqdm(total=num_samples, desc=f"Generating FWE samples | {max_seq_length}")
+    MAX_ATTEMPTS = num_samples * 10
+    while len(write_jsons) < num_samples:
+        if index >= MAX_ATTEMPTS:
+            logger.warning(
+                f"Reached max attempts ({MAX_ATTEMPTS}) for FWE at length {max_seq_length}, "
+                f"got {len(write_jsons)}/{num_samples} samples"
+            )
+            break
         # Per-sample seeding for reproducibility and diversity
         sample_seed = RANDOM_SEED + index
         random.seed(sample_seed)
         np.random.seed(sample_seed)
-        input_text, answer, _ = _fwe_generate_input_output(
-            input_max_len,
-            tokenizer,
-            num_words=num_example_words,
-            coded_wordlen=coded_wordlen,
-            vocab_size=vs,
-            incremental=input_max_len // 32,
-            alpha=alpha,
-            sample_seed=sample_seed,
-        )
-        input_text_clean, gen_prefix = _fwe_build_cached_sample(input_text)
-        length = _runtime_prompt_budget_length(
-            tokenizer, input_text_clean, gen_prefix, tokens_to_generate
-        )
-        assert length <= budget
+        used_words = num_example_words
+        input_text_clean = answer = gen_prefix = length = None
+        while True:
+            try:
+                cand_text, cand_answer, _ = _fwe_generate_input_output(
+                    input_max_len,
+                    tokenizer,
+                    num_words=used_words,
+                    coded_wordlen=coded_wordlen,
+                    vocab_size=vs,
+                    incremental=fwe_incremental,
+                    alpha=alpha,
+                    sample_seed=sample_seed,
+                )
+                cand_clean, cand_prefix = _fwe_build_cached_sample(cand_text)
+                cand_length = _runtime_prompt_budget_length(
+                    tokenizer, cand_clean, cand_prefix, tokens_to_generate
+                )
+                if cand_length > budget:
+                    raise RuntimeError(f"length {cand_length} exceeds budget {budget}")
+                input_text_clean, answer = cand_clean, cand_answer
+                gen_prefix, length = cand_prefix, cand_length
+                break
+            except Exception:
+                if used_words > fwe_incremental:
+                    used_words -= fwe_incremental
+                else:
+                    break
+
+        if answer is None:
+            index += 1
+            continue
 
         write_jsons.append(
             {
@@ -923,6 +1019,9 @@ def _fwe_generate_samples(
                 "gen_prefix": gen_prefix,
             }
         )
+        pbar.update(1)
+        index += 1
+    pbar.close()
 
     return write_jsons
 
@@ -1066,7 +1165,7 @@ def _qa_generate_samples(
     tokens_to_generate: int = QA_CONFIG["tokens_to_generate"],
     incremental: int = 10,
 ) -> list[dict]:
-    budget = max_seq_length
+    budget = max_seq_length - PROMPT_SAFETY_MARGIN
     gen_prefix = QA_CONFIG["answer_prefix"]
 
     num_docs = incremental
@@ -1086,9 +1185,16 @@ def _qa_generate_samples(
     num_docs = max(incremental, num_docs)
 
     write_jsons = []
-    for index in tqdm(
-        range(num_samples), desc=f"Generating QA samples | {max_seq_length}"
-    ):
+    index = 0
+    pbar = tqdm(total=num_samples, desc=f"Generating QA samples | {max_seq_length}")
+    MAX_ATTEMPTS = num_samples * 10
+    while len(write_jsons) < num_samples:
+        if index >= MAX_ATTEMPTS:
+            logger.warning(
+                f"Reached max attempts ({MAX_ATTEMPTS}) for QA at length {max_seq_length}, "
+                f"got {len(write_jsons)}/{num_samples} samples"
+            )
+            break
         # Per-sample seeding for reproducibility and diversity
         random.seed(RANDOM_SEED + index)
         np.random.seed(RANDOM_SEED + index)
@@ -1096,12 +1202,16 @@ def _qa_generate_samples(
         input_text = answer = length = None
         while True:
             try:
-                input_text, answer = _qa_generate_input_output(
+                cand_text, cand_answer = _qa_generate_input_output(
                     index, used_docs, qas=qas, docs=docs
                 )
-                prompt = _build_runtime_prompt(input_text, gen_prefix)
-                length = len(tokenizer(prompt).input_ids) + tokens_to_generate
-                assert length <= budget
+                cand_prompt = _build_runtime_prompt(cand_text, gen_prefix)
+                cand_length = len(tokenizer(cand_prompt).input_ids) + tokens_to_generate
+                if cand_length > budget:
+                    raise RuntimeError(f"length {cand_length} exceeds budget {budget}")
+                # Commit only after validation passes
+                input_text, answer = cand_text, cand_answer
+                length = cand_length
                 break
             except Exception:
                 if used_docs > incremental:
@@ -1110,6 +1220,7 @@ def _qa_generate_samples(
                     break
 
         if answer is None:
+            index += 1
             continue
 
         write_jsons.append(
@@ -1122,6 +1233,9 @@ def _qa_generate_samples(
                 "gen_prefix": gen_prefix,
             }
         )
+        pbar.update(1)
+        index += 1
+    pbar.close()
 
     return write_jsons
 
@@ -1223,7 +1337,7 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
             type_needle_v="numbers",
             num_needle_v=4,
             template=NIAH_TEMPLATE_MULTI,
-            tokens_to_generate=300 if length == 4096 else 250,
+            tokens_to_generate=300 if length <= 4096 else 250,
         )
     elif subset == "vt":
         return _vt_generate_samples(tokenizer, max_seq_length=length)
@@ -1254,6 +1368,7 @@ def ensure_ruler_cache(
     tokenizer_name: str,
     lengths: list[int] | None = None,
     subsets: list[str] | None = None,
+    allow_partial: bool = False,
 ) -> Path:
     """Generate and cache RULER data for the given tokenizer.
 
@@ -1263,7 +1378,7 @@ def ensure_ruler_cache(
 
     Returns the cache base directory.
     """
-    lengths = lengths or DEFAULT_LENGTHS
+    lengths = _validate_lengths(lengths or DEFAULT_LENGTHS)
     subsets = subsets or SUBSETS
     cache_base = _get_cache_dir(tokenizer_name)
     cache_base.mkdir(parents=True, exist_ok=True)
@@ -1282,6 +1397,7 @@ def ensure_ruler_cache(
     )
     tokenizer = _load_tokenizer(tokenizer_name)
 
+    failed = []
     for length, subset in missing:
         logger.info(f"Generating RULER data: length={length} subset={subset} ...")
         try:
@@ -1295,7 +1411,13 @@ def ensure_ruler_cache(
             )
             logger.info(f"Saved {len(samples)} samples to {subset_dir}")
         except Exception as e:
+            failed.append((length, subset, str(e)))
             logger.warning(f"Skipping subset {subset} at length {length}: {e}")
+
+    if failed and not allow_partial:
+        raise RuntimeError(
+            f"RULER cache generation failed for {len(failed)} subset(s): {failed}"
+        )
 
     return cache_base
 
@@ -1344,7 +1466,7 @@ def get_ruler_tasks(
     Data is generated on demand in download_dataset_worker (keyed off
     TOKENIZER_PATH) so only the lengths actually evaluated are generated.
     """
-    lengths = lengths or DEFAULT_LENGTHS
+    lengths = _validate_lengths(lengths or DEFAULT_LENGTHS)
     subsets = subsets or SUBSETS
 
     cache_base = _get_cache_dir(tokenizer_name)
@@ -1359,7 +1481,6 @@ def get_ruler_tasks(
             _niah_gen_sizes = {
                 "niah_multikey_3": 100,
                 "niah_multiquery": 100,
-                "niah_multivalue": 300 if length == 4096 else 250,
             }
             gen_size = (
                 _niah_gen_sizes.get(subset, 50)
@@ -1368,6 +1489,8 @@ def get_ruler_tasks(
                     50 if subset == "vt" else 100 if subset == "cwe" else 50
                 )  # fwe and qa
             )
+            if subset == "niah_multivalue":
+                gen_size = 300 if length <= 4096 else 250
             tasks.append(
                 LightevalTaskConfig(
                     name=f"ruler_{length}:{subset}",

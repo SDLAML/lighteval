@@ -67,13 +67,16 @@ if is_package_available("litellm"):
     # SLURM jobs run concurrently.
     import tempfile as _tempfile
 
-    _cache_dir = os.environ.get("LITELLM_CACHE_DIR")
-    if _cache_dir:
-        _cache_dir = os.path.expandvars(os.path.expanduser(_cache_dir))
-        os.makedirs(_cache_dir, exist_ok=True)
+    if os.environ.get("LITELLM_DISABLE_CACHE", "0").strip().lower() in ("1", "true", "yes"):
+        litellm.disable_cache()
     else:
-        _cache_dir = _tempfile.mkdtemp(prefix="litellm_cache_")
-    litellm.cache = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=_cache_dir)
+        _cache_dir = os.environ.get("LITELLM_CACHE_DIR")
+        if _cache_dir:
+            _cache_dir = os.path.expandvars(os.path.expanduser(_cache_dir))
+            os.makedirs(_cache_dir, exist_ok=True)
+        else:
+            _cache_dir = _tempfile.mkdtemp(prefix="litellm_cache_")
+        litellm.cache = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=_cache_dir)
 else:
     from unittest.mock import Mock
 
@@ -882,9 +885,11 @@ class LiteLLMClient(LightevalModel):
         for doc, context, pairs in zip(doc_list, context_list, scored):
             logprobs = [lp for lp, _ in pairs]
             argmax = [g for _, g in pairs]
+            output_tokens = [[0] * _unique_choices[choice] for choice in doc.choices]
             results.append(
                 ModelResponse(
-                    input=context, logprobs=logprobs, argmax_logits_eq_gold=argmax
+                    input=context, logprobs=logprobs, argmax_logits_eq_gold=argmax,
+                    output_tokens=output_tokens,
                 )
             )
 

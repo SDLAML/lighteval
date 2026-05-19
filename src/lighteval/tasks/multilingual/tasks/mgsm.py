@@ -390,7 +390,7 @@ TASKS_TABLE = [
         generation_size=1024,
         metrics=[
             Metrics.expr_gold_metric,
-            MultilingualQuasiExactMatchMetric(language, "full"),
+            # MultilingualQuasiExactMatchMetric(language, "full"),
         ],
         stop_sequence=mgsm_stop_sequences(language),
     )
