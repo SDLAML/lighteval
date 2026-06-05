@@ -18,19 +18,17 @@ from lighteval.tasks.requests import Doc
 
 
 def mbpp_bpb_prompt(line, task_name=None):
-    """Build a docstring prompt; gold = reference solution code."""
-    tests = "\n".join(line.get("test_list", []))
-    # Format as a Python docstring block so the model sees:
-    #   """
-    #   <task description>
-    #   <assert statements>
-    #   """
-    #   def function_name(...):   ← start of gold continuation
-    prompt = f'"""\n{line["prompt"]}\n{tests}\n"""\n'
+    """Prompt = task description + function header; gold = full code with leading space.
+
+    Matches OLMO's default MBPP format: query ends at the function header colon
+    so the model predicts the entire function (signature + body) as the gold.
+    Leading space matches OLMO's perplexity_leading_space=True.
+    """
+    query = line["prompt"] + line["code"].split(":")[0] + ":"
     return Doc(
         task_name=task_name,
-        query=prompt,
-        choices=[line["code"]],
+        query=query,
+        choices=[" " + line["code"]],
         gold_index=0,
     )
 

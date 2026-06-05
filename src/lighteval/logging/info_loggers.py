@@ -364,9 +364,10 @@ class MetricsLogger:
                     )
                 else:
                     stderr = get_stderr_function(aggregation=aggregation, number_experiments=bootstrap_iters)
-                if stderr is not None and len(metric_values) > 1:
+                stderr_values = [v for v in metric_values if v is not None]
+                if stderr is not None and len(stderr_values) > 1:
                     try:
-                        self.metric_aggregated[task_name][f"{metric_name}_stderr"] = stderr(metric_values)
+                        self.metric_aggregated[task_name][f"{metric_name}_stderr"] = stderr(stderr_values)
                     except OverflowError:
                         # Is this need or should we just pass?
                         self.metric_aggregated[task_name][f"{metric_name}_stderr"] = float("nan")

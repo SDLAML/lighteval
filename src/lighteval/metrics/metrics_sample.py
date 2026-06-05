@@ -27,6 +27,7 @@ using simple function (min, mean, max, ...) at the corpus level. Most metrics fa
 import inspect
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Callable, Literal, Union
 
@@ -35,7 +36,6 @@ import numpy as np
 from huggingface_hub import HfApi
 from nltk.metrics.distance import edit_distance
 from nltk.tokenize import word_tokenize
-from nltk.tokenize.treebank import TreebankWordTokenizer
 from nltk.translate.bleu_score import sentence_bleu
 from pydantic import BaseModel
 from scipy.stats import hypergeom
@@ -47,10 +47,12 @@ from lighteval.metrics.imports.summac import SummaCZS
 from lighteval.metrics.normalizations import (
     LogProbNormalization,
     LogProbTokenNorm,
+    helm_normalizer,
     normalize_log_probs,
     remove_braces,
     remove_braces_and_strip,
 )
+from lighteval.metrics.utils.nltk_resources import ensure_nltk_resource
 from lighteval.metrics.utils.judge_utils import (
     get_judge_prompt_simpleqa,
     process_judge_response_simpleqa,
@@ -870,9 +872,7 @@ class BLEU(SampleLevelComputation):
         Returns:
             float: Score over the current sample's items.
         """
-        import nltk
-
-        nltk.download("punkt_tab")
+        ensure_nltk_resource("tokenizers/punkt_tab", "punkt_tab")
         golds = doc.get_golds()
         predictions = model_response.final_text
         return np.mean([self._bleu_score(golds, p) for p in predictions])
@@ -889,7 +889,9 @@ class BLEU(SampleLevelComputation):
         """
         weights = [1 if ix == self.n_gram else 0 for ix in range(1, 5)]
         return sentence_bleu(
-            [word_tokenize(g) for g in gold], word_tokenize(pred), weights=weights
+            [word_tokenize(g) for g in gold],
+            word_tokenize(pred),
+            weights=weights,
         )
 
 
@@ -1562,14 +1564,11 @@ class RulerStringMatchAll(SampleLevelComputation):
     """
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
-        pred = (
-            model_response.final_text[0].strip().lower()
-            if model_response.final_text
-            else ""
-        )
+        pred = model_response.final_text[0] if model_response.final_text else ""
         golds = doc.get_golds()
         if not golds:
             return 0.0
+        pred = pred.strip().lower()
         return sum(g.lower() in pred for g in golds) / len(golds)
 
 
@@ -1582,15 +1581,38 @@ class RulerStringMatchAny(SampleLevelComputation):
     """
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
-        pred = (
-            model_response.final_text[0].strip().lower()
-            if model_response.final_text
-            else ""
-        )
+        pred = model_response.final_text[0] if model_response.final_text else ""
         golds = doc.get_golds()
         if not golds:
             return 0.0
-        return float(any(g.lower() in pred for g in golds))
+        return float(self._has_match(pred, golds))
+
+    @staticmethod
+    def _parse_output(output: str, prefix: str = "Answer:") -> str | None:
+        def _lstrip_prefix(text: str, sub: str) -> str:
+            return re.sub(f"^{re.escape(sub)}", "", text, flags=re.IGNORECASE)
+
+        patterns = [
+            re.compile(f"(?:{re.escape(prefix)})(.*)(?:\\n|$)", flags=re.IGNORECASE),
+            re.compile(r"(?:^)(.*)(?:\n|$)"),
+        ]
+        for pattern in patterns:
+            match = pattern.search(output)
+            if match is not None:
+                return _lstrip_prefix(match[1].strip(), prefix).strip()
+        return None
+
+    @staticmethod
+    def _normalized_substring_match(pred: str, gold: str) -> bool:
+        return helm_normalizer(gold) in helm_normalizer(pred)
+
+    @classmethod
+    def _has_match(cls, pred: str, golds: list[str]) -> bool:
+        parsed_pred = cls._parse_output(pred)
+        candidates = [pred]
+        if parsed_pred is not None:
+            candidates.append(parsed_pred)
+        return any(cls._normalized_substring_match(candidate, gold) for candidate in candidates for gold in golds)
 
 
 class RulerStringMatch(SampleLevelComputation):
@@ -1601,15 +1623,17 @@ class RulerStringMatch(SampleLevelComputation):
     """
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
-        pred = (
-            model_response.final_text[0].strip().lower()
-            if model_response.final_text
-            else ""
-        )
+        pred = model_response.final_text[0] if model_response.final_text else ""
+        # Prepend gen_prefix (answer prefix) so scoring matches olmo's behaviour:
+        # olmo does: output = doc["prepend_text"] + output
+        gen_prefix = (doc.specific or {}).get("gen_prefix", "")
+        if gen_prefix:
+            pred = gen_prefix + pred
         golds = doc.get_golds()
         if not golds:
             return 0.0
         task_name = doc.task_name or ""
         if ":qa_" in task_name:
-            return float(any(g.lower() in pred for g in golds))
+            return float(RulerStringMatchAny._has_match(pred, golds))
+        pred = pred.strip().lower()
         return sum(g.lower() in pred for g in golds) / len(golds)

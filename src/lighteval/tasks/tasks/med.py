@@ -39,11 +39,14 @@ _MCF_METRICS = [
 
 
 def med_mcqa_mcf_prompt(line, task_name: str = None):
-    """MCF variant: labeled A/B/C/D options, score label tokens via logprobs."""
-    query = f"Give a letter answer among A, B, C or D.\nQuestion: {line['question']}\n"
+    """MCF variant: labeled A/B/C/D options, score label tokens via logprobs.
+
+    Matches OLMO's MedMCQAMC: plain Question + options, no instruction prefix.
+    """
+    query = f"Question: {line['question']}\n"
     query += "".join(
         [
-            f"{key}. {choice}\n"
+            f" {key}. {choice}\n"
             for key, choice in zip(ascii_uppercase, [line["opa"], line["opb"], line["opc"], line["opd"]])
         ]
     )
@@ -53,7 +56,6 @@ def med_mcqa_mcf_prompt(line, task_name: str = None):
         query=query,
         choices=[" " + c for c in list(ascii_uppercase)[:4]],
         gold_index=line["cop"] - 1,
-        instruction="Give a letter answer among A, B, C or D.\n",
     )
 
 
@@ -113,8 +115,8 @@ med_mcqa_mcf_em = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
-    few_shots_select=None,
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
     generation_size=1,
     metrics=[Metrics.exact_match],
     stop_sequence=["\n"],
@@ -129,7 +131,7 @@ med_mcqa_mcf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="train",
     few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_MCF_METRICS,
@@ -177,7 +179,7 @@ med_mcqa_cf = LightevalTaskConfig(
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
-    few_shots_split=None,
+    few_shots_split="train",
     few_shots_select="random_sampling_from_train",
     generation_size=-1,
     metrics=_CF_METRICS,

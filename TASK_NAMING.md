@@ -194,10 +194,19 @@ Dataset: `lighteval/mmlu`. Each `:cf` task reports `{acc, acc_norm, target_bpb}`
 | `piqa` | `lighteval/piqa` | validation | 5 | acc, acc_norm, bpb | acc, acc_norm |
 | `sciq` | `allenai/sciq` | test | 5 | acc, acc_norm, bpb | acc, acc_norm |
 | `med_mcqa` | `lighteval/med_mcqa` | validation | 5 | acc, acc_norm, bpb | acc, acc_norm |
+| `openbookqa` | `allenai/openbookqa` (main) | test | 5 | acc, acc_norm, bpb | acc, acc_norm |
 | `jeopardy_mc:cf` | `allenai/jeopardy_mc` | test | 0 | acc, acc_norm, bpb | — |
 | `jeopardy_mc:mcf` | `allenai/jeopardy_mc` | test | 0 | — | acc, acc_norm |
 
 Note: `siqa` and `piqa` use `lighteval/*` wrapper repos (same data as `allenai/social_i_qa` / `ybisk/piqa`); both sources require the script fallback in `download_dataset_worker`.
+
+### TruthfulQA (MC2)
+
+| Task | Dataset | Eval split | ICL | Metric |
+|------|---------|------------|-----|--------|
+| `truthfulqa:mc2:cf` | `truthfulqa/truthful_qa` (multiple_choice) | validation | 0 (built-in primer) | `truthfulqa_mc2` (single score, logprob) |
+
+MC2 = normalized probability mass on the set of true answers. Reuses the exact `truthfulqa:mc` prompt + computation but emits only mc2; the two-key `truthfulqa:mc` (`truthfulqa_mc1` + `truthfulqa_mc2`) is also available.
 
 ### Single-answer completion tasks (CF only)
 
@@ -220,10 +229,14 @@ Note: `siqa` and `piqa` use `lighteval/*` wrapper repos (same data as `allenai/s
 | Task | Dataset | Eval split | ICL | `:bpb` | `:gen` gen_size | `:gen` metrics |
 |------|---------|------------|-----|--------|-----------------|----------------|
 | `coqa` | `EleutherAI/coqa` (parquet) | validation | 0 | `target_bpb` | 50 | f1, em |
-| `drop` | `lighteval/drop_harness` | validation | 5 | `target_bpb` | 100 | f1 (DROP) |
+| `drop` | `lighteval/drop_harness` | validation | 5 | `target_bpb` | 100 | em, f1 (DROP) |
 | `jeopardy` | `soldni/jeopardy` (mosaicml_gauntlet, 2117) | train | 5 | `target_bpb` | 50 | f1, em |
 | `natural_questions` | `google-research-datasets/nq_open` | validation | 5 | `target_bpb` | 50 | f1, em |
 | `squad` | `allenai/squad` (v1.1) | validation | 5 | `target_bpb` | 50 | f1, em |
+| `squad_v2` | `rajpurkar/squad_v2` (answerable-only) | validation | 5 | `target_bpb` | 200 | f1, em |
+| `triviaqa` | `mandarjoshi/trivia_qa` (rc.nocontext) | validation | 5 | `target_bpb` | 20 | f1, em |
+| `popqa` | `akariasai/PopQA` | test | 5 | `target_bpb` | 8 | f1, em |
+| `wikifact:{subset}` (81) | `lighteval/wikifact` | test | 5 | `target_bpb` | 8 | f1, em |
 
 Prompt formats:
 - **CoQA**: `Passage: {story}\n\nFinal question:\n\nQuestion: {q}\nAnswer:` — stop `["\n\n"]`
@@ -231,6 +244,10 @@ Prompt formats:
 - **Jeopardy**: `Category: {cat}\nQuestion: {q}\nAnswer:` — stop `["\n\n", "Question:", "Category:"]`
 - **NaturalQs**: `Question: {question}\nAnswer:` — stop `["Question:", "Q:", "\n\n"]`
 - **SQuAD**: `Title: {title}\n\nBackground: {context}\n\nQuestion: {question}\n\nAnswer:` — stop `["Title:", "\n\n"]`
+- **SQuAD v2**: QA template (answerable-only via `hf_filter`) — stop `["\n", "Question:", "question:"]`
+- **TriviaQA**: `Question: {question}\nAnswer:` — stop `["\n", ".", ","]`; gold = canonical value + aliases
+- **PopQA**: `{question} ` — stop `["\n"]`; gold = `possible_answers` aliases
+- **WikiFact**: `{question} ` — stop `["\n"]`; 81 relation subsets — superset `wikifact:gen` / `wikifact:bpb`
 
 ### CoT generation tasks
 
@@ -240,6 +257,9 @@ Prompt formats:
 | `gsm_symbolic:{main,p1,p2}` | `apple/GSM-Symbolic` | 8 | 512 | `expr_gold_metric` | 3 |
 | `math_500` | `HuggingFaceH4/MATH-500` | 0 | 1024 | `expr_gold_metric` | — |
 | `bigbench_hard:{subset}` (27) | `lukaemon/bbh` | 3 | 1024 | em (after extraction) | 27 |
+| `agieval_eng_em:{subset}` (7) | `lighteval/agi_eval_en` | 0 | 512 | `gpqa_instruct` (CoT, extractive) | 7 |
+
+**AGIEval (English) subsets**: `aqua_rat`, `logiqa-en`, `lsat-ar`, `lsat-lr`, `lsat-rc`, `sat-en`, `sat-math`.
 
 ---
 

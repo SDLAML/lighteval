@@ -6,7 +6,8 @@ dataset:
 facebook/flores
 
 abstract:
-Flores200 multilingual benchmark.
+Flores200 English-centric translation benchmark.
+Few-shot evaluation uses `dev` for exemplars and `devtest` for scoring.
 
 languages:
 arabic, armenian, bengali, cyrillic, devanagari, ethiopic, georgian, greek,
@@ -20,19 +21,16 @@ multilingual, translation
 paper:
 """
 
-from itertools import permutations
-
-from lighteval.metrics.metrics import Metrics
-from lighteval.tasks.lighteval_task import LightevalTaskConfig
-from lighteval.tasks.templates.translation import get_translation_prompt_function
-from lighteval.tasks.templates.utils.formulation import (
-    CFFormulation,
+from lighteval.tasks.multilingual.utils.translation import (
+    TRANSLATION_METRICS,
+    EnglishCentricTranslationConfig,
+    build_english_centric_translation_tasks,
 )
 from lighteval.utils.language import Language, manage_duplicate_language_codes
 
 
 flores_200_languages = [
-    # "ace_Arab",
+    "ace_Arab",
     "ace_Latn",
     "acm_Arab",
     "acq_Arab",
@@ -43,7 +41,7 @@ flores_200_languages = [
     "amh_Ethi",
     "apc_Arab",
     "arb_Arab",
-    # "arb_Latn",
+    "arb_Latn",
     "ars_Arab",
     "ary_Arab",
     "arz_Arab",
@@ -60,7 +58,7 @@ flores_200_languages = [
     "bem_Latn",
     "ben_Beng",
     "bho_Deva",
-    # "bjn_Arab",
+    "bjn_Arab",
     "bjn_Latn",
     "bod_Tibt",
     "bos_Latn",
@@ -115,10 +113,10 @@ flores_200_languages = [
     "kac_Latn",
     "kam_Latn",
     "kan_Knda",
-    # "kas_Arab",
+    "kas_Arab",
     "kas_Deva",
     "kat_Geor",
-    # "knc_Arab",
+    "knc_Arab",
     "knc_Latn",
     "kaz_Cyrl",
     "kbp_Latn",
@@ -148,7 +146,7 @@ flores_200_languages = [
     "mai_Deva",
     "mal_Mlym",
     "mar_Deva",
-    # "min_Arab",
+    "min_Arab",
     "min_Latn",
     "mkd_Cyrl",
     "plt_Latn",
@@ -233,10 +231,13 @@ flores_200_languages = [
     "yor_Latn",
     "yue_Hant",
     "zho_Hans",
-    # "zho_Hant",
+    "zho_Hant",
     "zsm_Latn",
     "zul_Latn",
 ]
+
+_ENGLISH_FLORES_CODE = "eng_Latn"
+_FLORES_METRICS = TRANSLATION_METRICS
 
 
 def flores_adapter(lang1, lang2):
@@ -246,25 +247,30 @@ def flores_adapter(lang1, lang2):
     }
 
 
-TASKS_TABLE = [
-    LightevalTaskConfig(
-        name=f"flores200:{lang1}-{lang2}",
-        prompt_function=get_translation_prompt_function(
-            source_language=Language(manage_duplicate_language_codes(lang1.split("_")[0])),
-            target_language=Language(manage_duplicate_language_codes(lang2.split("_")[0])),
-            adapter=flores_adapter(lang1, lang2),
-            formulation=CFFormulation(),
-        ),
-        hf_repo="facebook/flores",
-        hf_subset=f"{lang1}-{lang2}",
-        hf_avail_splits=["dev", "devtest"],
-        evaluation_splits=["devtest"],
-        few_shots_split="dev",
-        few_shots_select=None,
-        generation_size=300,
-        metrics=[Metrics.chrf_plus, Metrics.bleu, Metrics.bleu_1, Metrics.bleu_4],
-        stop_sequence=["\n"],
-        version=0,
-    )
-    for (lang1, lang2) in permutations(flores_200_languages, 2)
-]
+def _flores_pair_subset(lang_code: str) -> str:
+    return "-".join(sorted((_ENGLISH_FLORES_CODE, lang_code)))
+
+
+TASKS_TABLE = build_english_centric_translation_tasks(
+    base_name="flores200",
+    hf_repo="facebook/flores",
+    language_configs=[
+        EnglishCentricTranslationConfig(
+            task_id=lang_code,
+            target_language=Language(
+                manage_duplicate_language_codes(lang_code.split("_")[0])
+            ),
+            forward_hf_subset=_flores_pair_subset(lang_code),
+            reverse_hf_subset=_flores_pair_subset(lang_code),
+            forward_adapter=flores_adapter(_ENGLISH_FLORES_CODE, lang_code),
+            reverse_adapter=flores_adapter(lang_code, _ENGLISH_FLORES_CODE),
+            hf_avail_splits=("dev", "devtest"),
+            evaluation_splits=("devtest",),
+            few_shots_split="dev",
+            few_shots_select="random_sampling",
+        )
+        for lang_code in flores_200_languages
+        if lang_code != _ENGLISH_FLORES_CODE
+    ],
+    metrics=_FLORES_METRICS,
+)

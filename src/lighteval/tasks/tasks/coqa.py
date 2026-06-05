@@ -43,45 +43,55 @@ def _build_query(story: str, questions: list, answers: list, turn_idx: int) -> s
 
 
 def coqa_gen_prompt(line, task_name: str = None):
-    """GenQA: evaluate all turns, build full preceding-QA context per turn."""
+    """GenQA: evaluate ALL turns, build full preceding-QA context per turn.
+
+    Returns a list of Docs (one per turn), matching OLMO's CoQA._process_doc_to_multi.
+    The lighteval_task.py extension (list-of-Docs support) handles multi-doc rows.
+    """
     questions = line["questions"]["input_text"]
     answers = line["answers"]["input_text"]
     if not questions or not answers:
         return None
-    # Evaluate all turns; return last turn with full context (lighteval calls
-    # prompt_function once per row — we evaluate first turn as primary instance).
-    # For full multi-turn eval, the dataset would need to be pre-flattened.
-    turn_idx = 0
-    gold_text = answers[turn_idx]
-    if not gold_text:
-        return None
     is_few_shots = line.get("__few_shots", False)
-    return Doc(
-        task_name=task_name,
-        query=_build_query(line["story"], questions, answers, turn_idx),
-        choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
-        gold_index=0,
-    )
+    docs = []
+    for turn_idx in range(len(questions)):
+        gold_text = answers[turn_idx]
+        if not gold_text:
+            continue
+        docs.append(Doc(
+            task_name=task_name,
+            query=_build_query(line["story"], questions, answers, turn_idx),
+            choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
+            gold_index=0,
+        ))
+    return docs if docs else None
 
 
 def coqa_bpb_prompt(line, task_name: str = None):
-    """BPB/CF: first turn with passage context."""
+    """BPB: evaluate ALL turns of a story, returning one Doc per turn.
+
+    Matches OLMO which creates one evaluation instance per (story, turn) pair.
+    The full preceding-QA context is built for each turn.
+    """
     questions = line["questions"]["input_text"]
     answers = line["answers"]["input_text"]
     if not questions or not answers:
         return None
-    turn_idx = 0
-    gold_text = answers[turn_idx]
-    if not gold_text:
-        return None
-    if not gold_text[0].isspace():
-        gold_text = " " + gold_text
-    return Doc(
-        task_name=task_name,
-        query=_build_query(line["story"], questions, answers, turn_idx),
-        choices=[gold_text],
-        gold_index=0,
-    )
+
+    docs = []
+    for turn_idx in range(len(questions)):
+        gold_text = answers[turn_idx]
+        if not gold_text:
+            continue
+        if not gold_text[0].isspace():
+            gold_text = " " + gold_text
+        docs.append(Doc(
+            task_name=task_name,
+            query=_build_query(line["story"], questions, answers, turn_idx),
+            choices=[gold_text],
+            gold_index=0,
+        ))
+    return docs if docs else None
 
 
 TASKS_TABLE = [

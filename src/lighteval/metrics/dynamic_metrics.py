@@ -33,6 +33,7 @@ from lighteval.metrics.metrics_sample import (
     Probability,
 )
 from lighteval.metrics.normalizations import (
+    LogProbCharNorm,
     LogProbNormalization,
     LogProbTokenNorm,
     get_multilingual_normalizer,
@@ -45,10 +46,11 @@ from lighteval.metrics.utils.extractive_match_utils import (  # noqa: F401
     get_extraction_regexes,
 )
 from lighteval.metrics.utils.math_comparison import compare_gold_target
-from lighteval.metrics.utils.metric_utils import SampleLevelComputation, SampleLevelMetric
+from lighteval.metrics.utils.metric_utils import SampleLevelComputation, SampleLevelMetric, SampleLevelMetricGrouping
 from lighteval.models.model_output import ModelResponse
 from lighteval.tasks.requests import Doc, SamplingMethod
 from lighteval.utils.language import Language
+from lighteval.utils.utils import as_list
 from lighteval.utils.timeout import timeout
 
 
@@ -266,3 +268,120 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
                 for pred in extracted_predictions
             ]
         )
+
+
+# ---------------------------------------------------------------------------
+# MMLU per-category accuracy metric
+# ---------------------------------------------------------------------------
+import math as _math
+
+_MMLU_STEM = frozenset([
+    "abstract_algebra", "anatomy", "astronomy", "college_biology", "college_chemistry",
+    "college_computer_science", "college_mathematics", "college_medicine", "college_physics",
+    "computer_security", "conceptual_physics", "electrical_engineering", "elementary_mathematics",
+    "high_school_biology", "high_school_chemistry", "high_school_computer_science",
+    "high_school_mathematics", "high_school_physics", "high_school_statistics", "machine_learning",
+])
+_MMLU_HUMANITIES = frozenset([
+    "formal_logic", "high_school_european_history", "high_school_us_history",
+    "high_school_world_history", "international_law", "jurisprudence", "logical_fallacies",
+    "moral_disputes", "moral_scenarios", "philosophy", "prehistory", "professional_law",
+    "world_religions",
+])
+_MMLU_SOCIAL = frozenset([
+    "econometrics", "high_school_geography", "high_school_government_and_politics",
+    "high_school_macroeconomics", "high_school_microeconomics", "high_school_psychology",
+    "human_sexuality", "professional_psychology", "public_relations", "security_studies",
+    "sociology", "us_foreign_policy",
+])
+# "Other" = any subject not in the above three sets
+
+_MMLU_CATS = ("stem", "humanities", "social", "other")
+
+
+def _subject_to_mmlu_cat(subject: str) -> str:
+    s = subject.lower()
+    if s in _MMLU_STEM:       return "stem"
+    if s in _MMLU_HUMANITIES: return "humanities"
+    if s in _MMLU_SOCIAL:     return "social"
+    return "other"
+
+
+def _mean_notnone(vals):
+    """Mean of non-None values; returns nan if all are None."""
+    filtered = [v for v in vals if v is not None]
+    return float(np.mean(filtered)) if filtered else float("nan")
+
+
+class _MMLUCategoryFn(SampleLevelComputation):
+    """Computes acc, acc_norm (char), and optionally per-sample BPB, routed to
+    the correct MMLU category (stem/humanities/social/other) via
+    ``doc.specific["subject"]``."""
+
+    def __init__(self, include_bpb: bool = False):
+        self._acc_fn      = LoglikelihoodAcc(logprob_normalization=None)
+        self._acc_norm_fn = LoglikelihoodAcc(logprob_normalization=LogProbCharNorm())
+        self.include_bpb  = include_bpb
+
+    def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> dict:
+        acc      = self._acc_fn.compute(doc=doc, model_response=model_response)
+        acc_norm = self._acc_norm_fn.compute(doc=doc, model_response=model_response)
+
+        subject = (doc.specific or {}).get("subject", "")
+        cat = _subject_to_mmlu_cat(subject)
+
+        result: dict = {"acc": acc, "acc_norm": acc_norm}
+        for c in _MMLU_CATS:
+            result[f"acc_{c}"]      = acc      if c == cat else None
+            result[f"acc_norm_{c}"] = acc_norm if c == cat else None
+
+        if self.include_bpb:
+            gold_ix      = as_list(doc.gold_index)[0]
+            gold_logprob = model_response.logprobs[gold_ix]
+            gold_bytes   = max(len(doc.choices[gold_ix].encode("utf-8")), 1)
+            bpb = -gold_logprob / _math.log(2) / gold_bytes
+            result["bpb"] = bpb
+            for c in _MMLU_CATS:
+                result[f"bpb_{c}"] = bpb if c == cat else None
+
+        return result
+
+
+def _make_mmlu_category_grouping(include_bpb: bool) -> SampleLevelMetricGrouping:
+    keys_acc = (
+        ["acc", "acc_norm"]
+        + [f"acc_{c}" for c in _MMLU_CATS]
+        + [f"acc_norm_{c}" for c in _MMLU_CATS]
+    )
+    keys_bpb = ["bpb"] + [f"bpb_{c}" for c in _MMLU_CATS] if include_bpb else []
+    all_keys = keys_acc + keys_bpb
+
+    corpus_fns: dict = {
+        "acc":      np.mean,
+        "acc_norm": np.mean,
+        **{f"acc_{c}":      _mean_notnone for c in _MMLU_CATS},
+        **{f"acc_norm_{c}": _mean_notnone for c in _MMLU_CATS},
+    }
+    if include_bpb:
+        corpus_fns["bpb"] = np.mean
+        corpus_fns.update({f"bpb_{c}": _mean_notnone for c in _MMLU_CATS})
+
+    higher_is_better = {
+        **{k: True  for k in keys_acc},
+        **{k: False for k in keys_bpb},
+    }
+
+    return SampleLevelMetricGrouping(
+        metric_name=all_keys,
+        sample_level_fn=_MMLUCategoryFn(include_bpb=include_bpb),
+        corpus_level_fn=corpus_fns,
+        category=SamplingMethod.LOGPROBS,
+        higher_is_better=higher_is_better,
+    )
+
+
+MMLUCategoryGroupingCF  = _make_mmlu_category_grouping(include_bpb=True)
+"""CF variant: reports acc, acc_norm, bpb — overall and per MMLU category (stem/humanities/social/other)."""
+
+MMLUCategoryGroupingMCF = _make_mmlu_category_grouping(include_bpb=False)
+"""MCF variant: reports acc, acc_norm — overall and per MMLU category (no BPB for label-token scoring)."""

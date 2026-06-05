@@ -125,6 +125,7 @@ multilingual = [
     "spacy[ja,ko,th]>=3.8.0",
     "jieba", # for chinese tokenizer
     "pyvi", # for vietnamese tokenizer
+    "unbabel-comet>=2.0.0",  # COMET-22 metric for translation tasks
 ]
 math = ["latex2sympy2_extended==1.0.6"]
 wandb = ["wandb"]

@@ -32,6 +32,7 @@ from lighteval.metrics.dynamic_metrics import MultilingualExtractiveMatchMetric
 from lighteval.metrics.harness_compatibility.drop import DropMetrics
 from lighteval.metrics.harness_compatibility.truthful_qa import TruthfulqaMCMetrics
 from lighteval.metrics.metrics_corpus import (
+    CorpusLevelCOMETMetric,
     CorpusLevelF1Score,
     CorpusLevelPerplexityMetric,
     CorpusLevelTranslationMetric,
@@ -66,6 +67,7 @@ from lighteval.metrics.normalizations import (
     remove_braces_and_strip,
 )
 from lighteval.metrics.sample_preparator import (
+    COMETPreparator,
     GenerativePreparator,
     LoglikelihoodPreparator,
     PerplexityPreparator,
@@ -290,6 +292,13 @@ class Metrics(Enum):
         corpus_level_fn=CorpusLevelTranslationMetric("chrf++"),
         higher_is_better=True,
     )
+    comet22 = CorpusLevelMetric(
+        metric_name="comet22",
+        sample_level_fn=COMETPreparator(),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=CorpusLevelCOMETMetric("Unbabel/wmt22-comet-da"),
+        higher_is_better=True,
+    )
     copyright = SampleLevelMetricGrouping(
         metric_name=[
             "longest_common_prefix_length",
@@ -320,7 +329,7 @@ class Metrics(Enum):
         metric_name=["em", "f1"],
         sample_level_fn=DropMetrics(),
         category=SamplingMethod.GENERATIVE,
-        corpus_level_fn={"em": max, "f1": max},
+        corpus_level_fn={"em": np.mean, "f1": np.mean},
         higher_is_better={"em": True, "f1": True},
     )
     exact_match = SampleLevelMetric(
