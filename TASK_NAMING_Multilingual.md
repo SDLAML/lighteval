@@ -30,7 +30,7 @@ corresponding English task file instead (e.g., `arc.py`, `mmlu.py`, `hellaswag.p
 | `mlmm_arc:cf\|5` | all 26 languages, CF variant |
 | `mmlu_prox:cf\|5` | all 28 multilingual languages, CF variant |
 | `mlmm_hellaswag:cf\|5` | all 32 languages |
-| `mgsm:gen\|8` | all 10 languages |
+| `mgsm:gen\|8` | all 40 languages |
 | `wmt24pp\|0` | all ~24 English-centric language slices (both directions each) |
 | `wmt24pp:de_DE\|0` | German slice only: en→de_DE + de_DE→en |
 | `flores200\|0` | all English-centric FLORES language slices |
@@ -306,23 +306,32 @@ mlmm_hellaswag:zho:mcf_em|5
 
 | Task pattern | Dataset | Eval | FS split | ICL | Metrics |
 |---|---|---|---|---|---|
-| `mgsm:{lang}:gen\|8` | `juletxara/mgsm` | test | train | 8 | expr_gold_metric, multilingual_quasi_em |
+| `mgsm:{lang}:gen\|8` | `CohereLabs/global-mgsm` | test | train | 8 | expr_gold_metric, multilingual_quasi_em |
 
 Both `expr_gold_metric` (math expression parser, for Arabic-numeral answers) and
 `MultilingualQuasiExactMatchMetric` (language-aware fuzzy match, for non-ASCII digit systems)
-are reported in the same pass.
+are reported in the same pass. English is excluded — use `gsm8k` instead.
 
-**10 languages** (English excluded): bengali, french, german, japanese, russian, spanish,
-swahili, telugu, thai, chinese.
+**40 languages** (English excluded):
 
-**Language codes**:
-`ben`, `fra`, `deu`, `jpn`, `rus`, `spa`, `swa`, `tel`, `tha`, `zho`.
+| Code | Language | Code | Language | Code | Language | Code | Language |
+|---|---|---|---|---|---|---|---|
+| `amh` | Amharic | `ara` | Arabic | `ben` | Bengali | `cat` | Catalan |
+| `ces` | Czech | `cym` | Welsh | `deu` | German | `ell` | Greek |
+| `eus` | Basque | `fra` | French | `glg` | Galician | `guj` | Gujarati |
+| `hau` | Hausa | `hun` | Hungarian | `jpn` | Japanese | `kan` | Kannada |
+| `khm` | Khmer | `kir` | Kyrgyz | `kor` | Korean | `lug` | Ganda |
+| `mya` | Burmese | `nep` | Nepali | `rus` | Russian | `sin` | Sinhala |
+| `sna` | Shona | `sot` | Southern Sotho | `spa` | Spanish | `srp` | Serbian |
+| `swa` | Swahili | `tam` | Tamil | `tel` | Telugu | `tha` | Thai |
+| `urd` | Urdu | `uzb` | Uzbek | `vie` | Vietnamese | `wol` | Wolof |
+| `xho` | Xhosa | `yor` | Yoruba | `zho` | Chinese | `zul` | Zulu |
 
 File: `multilingual/tasks/mgsm.py`
 
 **Copy-pasteable examples:**
 ```
-# All 10 languages
+# All 40 languages
 mgsm:gen|8
 
 # Single language
@@ -449,6 +458,108 @@ included) + Chinese `zho_cn`/`zho_tw` + Portuguese `por_pt`/`por_br`.
 
 ---
 
+### CMMLU — `cmmlu` (Chinese, no lang suffix)
+
+| Task pattern | Dataset | Eval | FS split | ICL | Metrics |
+|---|---|---|---|---|---|
+| `cmmlu:{subset}:cf\|5` | `haonan-li/cmmlu` | test | dev | 5 | acc, acc_norm, bpb |
+| `cmmlu:{subset}:mcf\|5` | same | test | dev | 5 | acc, acc_norm |
+| `cmmlu:{subset}:mcf_em\|5` | same | test | dev | 5 | em |
+
+**67 subjects** (Chinese-language MMLU). Use `cmmlu:cf|5` as superset over all subjects.
+File: `multilingual/tasks/cmmlu.py`
+
+### TurkishMMLU — `turkishmmlu` (Turkish, no lang suffix)
+
+| Task pattern | Dataset | Eval | FS split | ICL | Metrics |
+|---|---|---|---|---|---|
+| `turkishmmlu:{subset}:cf\|5` | `AYueksel/TurkishMMLU` | test | dev | 5 | acc, acc_norm, bpb |
+| `turkishmmlu:{subset}:mcf\|5` | same | test | dev | 5 | acc, acc_norm |
+| `turkishmmlu:{subset}:mcf_em\|5` | same | test | dev | 5 | em |
+
+**9 subjects**: biology, chemistry, geography, history, mathematics, philosophy, physics, religion_and_ethics, turkish_language_and_literature.
+File: `multilingual/tasks/turkish_mmlu.py`
+
+### EXAMS — `exams` (multilingual, per-language aggregate)
+
+| Task pattern | Dataset | Eval | FS split | ICL | Metrics |
+|---|---|---|---|---|---|
+| `exams:{lang}:cf\|0` | `mhardalov/exams` | test | train | 0 | acc, acc_norm, bpb |
+| `exams:{lang}:mcf\|0` | same | test | train | 0 | acc, acc_norm |
+| `exams:{lang}:mcf_em\|0` | same | test | train | 0 | em |
+
+**16 languages**: albanian, arabic, bulgarian, croatian, french, german, hungarian, italian, lithuanian, macedonian, polish, portuguese, serbian, spanish, turkish, vietnamese. Each language aggregates all subjects. File: `multilingual/tasks/exams.py`
+
+### MedExpQA — `medexpqa` (multilingual medical)
+
+| Task pattern | Dataset | Eval | FS split | ICL | Metrics |
+|---|---|---|---|---|---|
+| `medexpqa:{lang}:cf\|0` | `HiTZ/MedExpQA` | test | test | 0 | acc, acc_norm, bpb |
+| `medexpqa:{lang}:mcf\|0` | same | test | test | 0 | acc, acc_norm |
+| `medexpqa:{lang}:mcf_em\|0` | same | test | test | 0 | em |
+
+**4 languages**: `spa`, `fra`, `ita`, `eng`. File: `multilingual/tasks/medexpqa.py`
+
+### Chinese domain tasks (no lang suffix — single-language Chinese)
+
+| Task | Dataset | Eval | ICL | Notes |
+|---|---|---|---|---|
+| `agrieval:cf\|5` | `PaperHarvester/AgriEval` | train | 5 | Agriculture; single-choice only (`hf_filter`) |
+| `crop:cf\|5` | `AI4Agr/CROP-benchmark` | test | 5 | Crop science |
+| `fineval:cf\|5` | `SUFE-AIFLM-Lab/FinEval` | train | 5 | Finance; Chinese MMLU-style |
+
+All three get cf/mcf/mcf_em. Files: `multilingual/tasks/agrieval.py`, `multilingual/tasks/fineval.py`
+
+### TitanEval Multilingual Domain Tasks
+
+Loaded from local parquet (`data/titaneval/`). No public HF repo; data bundled in repo.
+Each task has its own file: `multilingual/tasks/{task}.py` (e.g., `multilingual/tasks/camb.py`).
+All expose `:cf` (acc + acc_norm_char + **BPB merged**), `:mcf` (acc + acc_norm_char), `:mcf_em` (exact match, greedy decode).
+
+> **Few-shot note:** These tasks have **test split only** — no dedicated few-shot split exists.
+> The config sets `few_shots_split="test"`, `few_shots_select="random_sampling"` to allow
+> CLI-level overrides, but running with `|N` (N > 0) draws examples from the test set itself
+> (leakage risk). **Recommended: use `|0` (0-shot) for all TitanEval tasks.**
+
+**Chinese (zh) — uses `Language.CHINESE` prompt template:**
+
+| Task | Domain | Rows | ICL |
+|---|---|---|---|
+| `camb` | Civil aviation maintenance | 7,969 | 0 |
+| `jecqa` | Chinese law exam | 1,998 | 0 |
+| `lexeval` | Legal evaluation | 10,920 | 0 |
+| `aecbench` | Architectural / civil engineering | 6,386 | 0 |
+
+**French (fr) — uses `Language.FRENCH` prompt template:**
+
+| Task | Domain | Rows | ICL |
+|---|---|---|---|
+| `frenchmedmcqa` | French medical licensing exam | 3,105 | 0 |
+| `mediqal` | French medical QA | 27,634 | 0 |
+
+**Arabic (ar) — uses `Language.ARABIC` prompt template:**
+
+| Task | Domain | Rows | ICL |
+|---|---|---|---|
+| `arabicmmlu` | Arabic MMLU | 14,455 | 0 |
+| `arastem` | Arabic STEM | 10,819 | 0 |
+
+```bash
+# Requires --load-multilingual; 0-shot recommended (test-only split)
+camb:cf|0
+camb:mcf|0
+camb:mcf_em|0
+jecqa:cf|0
+lexeval:cf|0
+aecbench:cf|0
+frenchmedmcqa:cf|0
+mediqal:cf|0
+arabicmmlu:cf|0
+arastem:cf|0
+```
+
+---
+
 ## Two-level averaging
 
 ### Level 1 — per-language average (automatic)
@@ -539,6 +650,37 @@ xquad:gen|5                     # XQuAD extractive QA, all 12 langs (incl. eng)
 xquad:bpb|5                     # XQuAD, all 12 langs, BPB
 multi_wiki_qa:gen|0             # MultiWikiQA, all 54 slices (incl. eng)
 multi_wiki_qa:bpb|0             # MultiWikiQA, all 54 slices, BPB
+
+# --- Multilingual / single-language MMLU-style ---
+cmmlu:cf|5                      # Chinese MMLU, all 67 subjects, CF (acc+norm+bpb)
+cmmlu:mcf|5                     # Chinese MMLU, all 67 subjects, MCF
+cmmlu:mcf_em|5                  # Chinese MMLU, all 67 subjects, greedy
+cmmlu:agronomy:cf|5             # single subject
+
+turkishmmlu:cf|5                # Turkish MMLU, all 9 subjects, CF
+turkishmmlu:mcf|5
+turkishmmlu:mcf_em|5
+turkishmmlu:biology:cf|5        # single subject
+
+exams:cf|0                      # EXAMS multilingual, all 16 langs, CF
+exams:mcf|0
+exams:mcf_em|0
+exams:fra:cf|0                  # single language
+
+medexpqa:cf|0                   # MedExpQA, all 4 langs (spa/fra/ita/eng), CF
+medexpqa:mcf|0
+medexpqa:mcf_em|0
+medexpqa:spa:cf|0               # single language
+
+agrieval:cf|5                   # AgriEval Chinese agriculture, CF
+agrieval:mcf|5
+agrieval:mcf_em|5
+crop:cf|5                       # CROP Chinese crop science, CF
+crop:mcf|5
+crop:mcf_em|5
+fineval:cf|5                    # FinEval Chinese finance, CF
+fineval:mcf|5
+fineval:mcf_em|5
 
 # --- Translation ---
 wmt24pp|0                       # WMT24++, all English-centric language slices

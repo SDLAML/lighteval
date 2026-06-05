@@ -122,7 +122,7 @@ TASKS_TABLE = [
         few_shots_select=None,
         generation_size=50,
         stop_sequence=["\n\n"],
-        metrics=[Metrics.f1_score, Metrics.exact_match],
+        metrics=[Metrics.qa_f1, Metrics.qa_em],
         version=1,
     ),
 ]

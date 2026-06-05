@@ -6,7 +6,8 @@ dataset:
 AYueksel/TurkishMMLU
 
 abstract:
-Turkish Mmlu multilingual benchmark.
+TurkishMMLU is a Turkish-language multiple-choice benchmark modelled after
+MMLU, covering 9 school subjects.
 
 languages:
 turkish
@@ -19,22 +20,27 @@ paper:
 
 from string import ascii_uppercase
 
-from lighteval.metrics.dynamic_metrics import (
-    LogLikelihoodAccMetric,
-)
-from lighteval.metrics.normalizations import LogProbCharNorm, LogProbPMINorm, LogProbTokenNorm
+from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
+from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
-from lighteval.tasks.multilingual.utils.task_utils import get_metrics_for_formulation, normalize_subset
 from lighteval.tasks.templates.multichoice import get_mcq_prompt_function
-from lighteval.tasks.templates.utils.formulation import (
-    CFFormulation,
-    HybridFormulation,
-    MCFFormulation,
-)
+from lighteval.tasks.templates.utils.formulation import CFFormulation, MCFFormulation
 from lighteval.utils.language import Language
 
+_CF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    Metrics.target_bits_per_byte,
+]
 
-TURKISH_MMLU_SUBSET = [
+_MCF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+]
+
+# HF subset names (capitalized); task names use lowercase.
+TURKISH_MMLU_SUBSETS = [
     "Biology",
     "Chemistry",
     "Geography",
@@ -47,35 +53,31 @@ TURKISH_MMLU_SUBSET = [
 ]
 
 
+def _adapter(line):
+    return {
+        "question": line["question"],
+        "choices": line["choices"],
+        "gold_idx": ascii_uppercase.index(line["answer"]),
+    }
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
-        name=f"mmlu_{Language.TURKISH.value}_{formulation.name.lower()}:{normalize_subset(subset)}",
-        prompt_function=get_mcq_prompt_function(
-            Language.TURKISH,
-            lambda line: {
-                "question": line["question"],
-                "choices": line["choices"],
-                "gold_idx": ascii_uppercase.index(line["answer"]),
-            },
-            formulation=formulation,
-        ),
+        name=f"turkishmmlu:{subset.lower()}:{suffix}",
+        prompt_function=get_mcq_prompt_function(Language.TURKISH, _adapter, formulation=formulation),
         hf_repo="AYueksel/TurkishMMLU",
         hf_subset=subset,
         evaluation_splits=("test",),
         few_shots_split="dev",
-        metrics=get_metrics_for_formulation(
-            formulation,
-            [
-                LogLikelihoodAccMetric(normalization=LogProbTokenNorm()),
-                LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
-                LogLikelihoodAccMetric(normalization=LogProbPMINorm()),
-            ],
-        ),
+        generation_size=gen_size,
+        metrics=metrics,
+        stop_sequence=["\n"],
+        version=1,
     )
-    for subset in TURKISH_MMLU_SUBSET
-    for formulation in [
-        MCFFormulation(),
-        CFFormulation(),
-        HybridFormulation(),
+    for subset in TURKISH_MMLU_SUBSETS
+    for suffix, formulation, metrics, gen_size in [
+        ("cf",     CFFormulation(),  _CF_METRICS,             -1),
+        ("mcf",    MCFFormulation(), _MCF_METRICS,            -1),
+        ("mcf_em", MCFFormulation(), [Metrics.exact_match],    1),
     ]
 ]

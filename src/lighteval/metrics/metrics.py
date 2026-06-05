@@ -63,6 +63,7 @@ from lighteval.metrics.metrics_sample import (
 )
 from lighteval.metrics.normalizations import (
     bigbench_normalizer,
+    harness_triviaqa_normalizer,
     remove_braces,
     remove_braces_and_strip,
 )
@@ -339,6 +340,20 @@ class Metrics(Enum):
         corpus_level_fn=np.mean,
         higher_is_better=True,
     )
+    # Normalized EM for open-domain gen QA (lowercase + remove punctuation on both gold and pred).
+    # Use for free-text fact-retrieval tasks (TriviaQA, WikiFact, PopQA, SQuAD, etc.)
+    # instead of exact_match, which is case-sensitive and punctuation-sensitive.
+    qa_em = SampleLevelMetric(
+        metric_name="em",
+        sample_level_fn=ExactMatches(
+            normalize_gold=harness_triviaqa_normalizer,
+            normalize_pred=harness_triviaqa_normalizer,
+            strip_strings=True,
+        ),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
     expr_gold_metric = SampleLevelMetric(
         metric_name="extractive_match",
         sample_level_fn=MultilingualExtractiveMatchMetric(
@@ -458,6 +473,18 @@ class Metrics(Enum):
     f1_score = SampleLevelMetric(
         metric_name="f1",
         sample_level_fn=F1_score(),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    # Normalized F1 for open-domain gen QA (lowercase + remove punctuation on both gold and pred).
+    qa_f1 = SampleLevelMetric(
+        metric_name="f1",
+        sample_level_fn=F1_score(
+            normalize_gold=harness_triviaqa_normalizer,
+            normalize_pred=harness_triviaqa_normalizer,
+            strip_strings=True,
+        ),
         category=SamplingMethod.GENERATIVE,
         corpus_level_fn=np.mean,
         higher_is_better=True,

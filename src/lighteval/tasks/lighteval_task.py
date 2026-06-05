@@ -295,6 +295,18 @@ def _load_flores_dataset(config_name: str, local_files_only: bool = False) -> Da
     )
 
 
+def _load_titaneval_dataset(task_name: str) -> DatasetDict:
+    """Load a titaneval task from the local parquet copy in data/titaneval/."""
+    data_dir = Path(__file__).parent.parent.parent.parent / "data" / "titaneval"
+    parquet_path = data_dir / f"{task_name}.parquet"
+    if not parquet_path.exists():
+        raise FileNotFoundError(
+            f"titaneval_local: parquet not found at {parquet_path}. "
+            "Copy it from titaneval-mcq/benchmarks/ into data/titaneval/."
+        )
+    return load_dataset("parquet", data_files={"test": str(parquet_path)})
+
+
 @dataclass
 class LightevalTaskConfig:
     """Configuration dataclass for a LightevalTask.
@@ -800,6 +812,12 @@ class LightevalTask:
                     task.dataset_config_name,
                     local_files_only=_is_offline,
                 )
+                if task.dataset_filter is not None:
+                    dataset = dataset.filter(task.dataset_filter)
+                return dataset  # type: ignore
+
+            if task.dataset_path == "titaneval_local":
+                dataset = _load_titaneval_dataset(task.dataset_config_name)
                 if task.dataset_filter is not None:
                     dataset = dataset.filter(task.dataset_filter)
                 return dataset  # type: ignore

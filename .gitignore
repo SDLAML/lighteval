@@ -11,6 +11,7 @@ bert.pt.json
 work
 runs
 *.parquet
+!data/titaneval/*.parquet
 *.json
 cache/
 fastspeech_output

@@ -146,7 +146,7 @@ def _gen_config(subset: str) -> LightevalTaskConfig:
         # num_fewshot (not num_fewshot+1), so 5-shot doesn't overflow those tiny pools.
         few_shots_select="random_sampling_from_train",
         generation_size=8,
-        metrics=[Metrics.f1_score, Metrics.exact_match],
+        metrics=[Metrics.qa_f1, Metrics.qa_em],
         stop_sequence=["\n"],
         version=1,
     )

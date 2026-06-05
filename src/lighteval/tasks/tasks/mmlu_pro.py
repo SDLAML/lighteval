@@ -88,8 +88,19 @@ def record_to_sample(record):
     return Sample(input=record["question"], target=record["answer"], choices=record["options"])
 
 
-mmlu_pro = LightevalTaskConfig(
-    name="mmlu_pro",
+_CF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    Metrics.target_bits_per_byte,
+]
+
+_MCF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+]
+
+mmlu_pro_cot = LightevalTaskConfig(
+    name="mmlu_pro:cot",
     prompt_function=mmlu_pro_prompt_function,
     sample_fields=record_to_sample,
     solver=[multiple_choice(cache=True)],
@@ -102,8 +113,8 @@ mmlu_pro = LightevalTaskConfig(
     metrics=[Metrics.gpqa_instruct_metric],
 )
 
-mmlu_pro_mcf = LightevalTaskConfig(
-    name="mmlu_pro_mcf",
+mmlu_pro_mcf_em = LightevalTaskConfig(
+    name="mmlu_pro:mcf_em",
     prompt_function=mmlu_pro_mcf_prompt_function,
     sample_fields=record_to_sample,
     solver=[multiple_choice(cache=True)],
@@ -113,16 +124,28 @@ mmlu_pro_mcf = LightevalTaskConfig(
     hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
     evaluation_splits=("test",),
     few_shots_split="validation",
-    metrics=[
-        Metrics.exact_match,
-        # Metrics.gpqa_instruct_metric
-        ],
     generation_size=1,
-    stop_sequence=["\n", "\n\n"],
+    stop_sequence=["\n"],
+    metrics=[Metrics.exact_match],
+)
+
+mmlu_pro_mcf = LightevalTaskConfig(
+    name="mmlu_pro:mcf",
+    prompt_function=mmlu_pro_mcf_prompt_function,
+    sample_fields=record_to_sample,
+    solver=[multiple_choice(cache=True)],
+    scorer=choice(),
+    hf_repo="TIGER-Lab/MMLU-Pro",
+    hf_subset="default",
+    hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
+    evaluation_splits=("test",),
+    few_shots_split="validation",
+    generation_size=-1,
+    metrics=_MCF_METRICS,
 )
 
 mmlu_pro_cf = LightevalTaskConfig(
-    name="mmlu_pro_cf",
+    name="mmlu_pro:cf",
     prompt_function=mmlu_pro_cf_prompt_function,
     sample_fields=record_to_sample,
     solver=[multiple_choice(cache=True)],
@@ -132,11 +155,8 @@ mmlu_pro_cf = LightevalTaskConfig(
     hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
     evaluation_splits=("test",),
     few_shots_split="validation",
-    metrics=[
-        LogLikelihoodAccMetric(),
-        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
-        Metrics.target_bits_per_byte,
-        ],
+    generation_size=-1,
+    metrics=_CF_METRICS,
 )
 
-TASKS_TABLE = [mmlu_pro, mmlu_pro_mcf, mmlu_pro_cf]
+TASKS_TABLE = [mmlu_pro_cot, mmlu_pro_cf, mmlu_pro_mcf, mmlu_pro_mcf_em]

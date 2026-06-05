@@ -82,6 +82,16 @@ def med_qa_prompt(line, task_name: str = None):
     )
 
 
+def med_qa_cf_prompt(line, task_name: str = None):
+    """CF variant: completion-style prompt with full answer texts as choices."""
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['question']}\nAnswer:",
+        choices=[" " + opt["value"] for opt in line["options"]],
+        gold_index=list(ascii_uppercase).index(line["answer_idx"]),
+    )
+
+
 def med_qa_mcf_em_prompt(line, task_name: str = None):
     """Greedy variant: generate 1 token, compare with gold letter."""
     query = f"Give a letter answer among A, B, C or D.\nQuestion: {line['question']}\n"
@@ -187,10 +197,26 @@ med_mcqa_cf = LightevalTaskConfig(
     version=0,
 )
 
+med_qa_cf = LightevalTaskConfig(
+    name="med_qa:cf",
+    prompt_function=med_qa_cf_prompt,
+    hf_repo="bigbio/med_qa",
+    hf_subset="med_qa_en_source",
+    hf_avail_splits=["train", "test", "validation"],
+    evaluation_splits=["test"],
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
+    generation_size=-1,
+    metrics=_CF_METRICS,
+    stop_sequence=["\n"],
+    version=0,
+)
+
 TASKS_TABLE = [
     med_mcqa_mcf_em,
     med_mcqa_mcf,
     med_mcqa_cf,
+    med_qa_cf,
     med_qa_mcf,
     med_qa_mcf_em,
 ]
