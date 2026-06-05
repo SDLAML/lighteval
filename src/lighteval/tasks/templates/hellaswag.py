@@ -56,7 +56,7 @@ def hellaswag_preprocess(
     text = re.sub("\\[.*?\\]", "", text)
     text = text.replace("  ", " ")
     if truncate_dots:
-        text = text.replace(r"\.+", r"\.")
+        text = re.sub(r"\.+", ".", text)
     if strip_text:
         text = text.strip()
     return text

@@ -175,10 +175,10 @@ class StanzaTokenizer(WordTokenizer):
 # If you know a better tokenizer or better proxy language, please submit a PR
 TOKENIZER_FACTORY: dict[Language, Callable[[], WordTokenizer]] = {
     Language.ENGLISH: lambda: SpaCyTokenizer("en"),
-    Language.KOREAN: lambda: SpaCyTokenizer("ko"),
+    Language.KOREAN: lambda: StanzaTokenizer("ko"),
     Language.GERMAN: lambda: SpaCyTokenizer("de"),
     Language.FRENCH: lambda: SpaCyTokenizer("fr"),
-    Language.CZECH: lambda: SpaCyTokenizer("cz"),
+    Language.CZECH: lambda: SpaCyTokenizer("cs"),
     Language.DANISH: lambda: SpaCyTokenizer("da"),
     Language.DUTCH: lambda: SpaCyTokenizer("nl"),
     Language.ESTONIAN: lambda: SpaCyTokenizer("et"),

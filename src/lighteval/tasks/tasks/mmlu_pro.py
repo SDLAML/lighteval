@@ -49,13 +49,13 @@ Answer:""".strip()
 
 def mmlu_pro_mcf_prompt_function(line, task_name: str = None):
     query = f"Answer the following multiple choice question.\n\nQuestion: {line['question'].strip()}"
-    query += "".join([f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["options"])])
-    query += "\nAnswer: "
+    query += "".join([f"\n {key}. {choice}" for key, choice in zip(ascii_uppercase, line["options"])])
+    query += "\nAnswer:"
 
     return Doc(
         task_name=task_name,
         query=query,
-        choices=ascii_uppercase[: len(line["options"])],
+        choices=[" " + c for c in ascii_uppercase[:len(line["options"])]],
         gold_index=line["answer_index"],
     )
 
@@ -78,7 +78,7 @@ def mmlu_pro_prompt_function(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=query,
-        choices=ascii_uppercase[: len(choices)],
+        choices=list(ascii_uppercase[: len(line["options"])]),
         gold_index=line["answer_index"],
         instruction=query,
     )
@@ -135,6 +135,7 @@ mmlu_pro_cf = LightevalTaskConfig(
     metrics=[
         LogLikelihoodAccMetric(),
         LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+        Metrics.target_bits_per_byte,
         ],
 )
 

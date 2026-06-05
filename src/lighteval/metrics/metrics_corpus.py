@@ -35,6 +35,7 @@ import sacrebleu
 import sklearn.metrics
 
 from lighteval.metrics.sample_preparator import (
+    COMETCorpusMetricInput,
     GenerativeCorpusMetricInput,
     LogprobCorpusMetricInput,
     PerplexityCorpusMetricInput,
@@ -126,9 +127,6 @@ class CorpusLevelTranslationMetric(CorpusLevelComputation):
 
     def get_metric(self):
         if self.metric_type == "bleu":
-            import nltk
-
-            nltk.download("punkt_tab")
             return sacrebleu.BLEU(trg_lang=self.lang)
         elif self.metric_type == "chrf":
             return sacrebleu.CHRF()
@@ -190,3 +188,52 @@ class CorpusLevelPerplexityMetric(CorpusLevelComputation):
             return math.exp(-sum(logprobs) / sum(weights))
         if self.metric_type == "bits_per_byte":
             return -sum(logprobs) / sum(weights) * 1 / math.log(2)
+
+
+class CorpusLevelCOMETMetric(CorpusLevelComputation):
+    """Corpus-level COMET-22 metric using the Unbabel/wmt22-comet-da model.
+
+    Requires `unbabel-comet`: pip install lighteval[multilingual] (or pip install unbabel-comet).
+
+    The COMET model is loaded once per process (class-level cache) and reused across all
+    translation language pairs in the same evaluation run.
+
+    On multi-GPU nodes, all available GPUs are used automatically via the `gpus` parameter
+    of unbabel-comet's predict() API. batch_size_per_gpu=256 is tuned for H100 96GB;
+    reduce to 64 for A100 40GB or 32 for 16GB GPUs.
+    """
+
+    _model = None  # class-level cache: loaded once per process
+
+    def __init__(self, model_name: str = "Unbabel/wmt22-comet-da", batch_size_per_gpu: int = 256):
+        self.model_name = model_name
+        self.batch_size_per_gpu = batch_size_per_gpu
+
+    def _load_model(self):
+        if CorpusLevelCOMETMetric._model is None:
+            try:
+                from comet import download_model, load_from_checkpoint
+            except ImportError:
+                raise ImportError(
+                    "COMET metric requires `unbabel-comet`. "
+                    "Install with: pip install lighteval[multilingual]"
+                )
+            CorpusLevelCOMETMetric._model = load_from_checkpoint(download_model(self.model_name))
+        return CorpusLevelCOMETMetric._model
+
+    def compute_corpus(self, items: list[COMETCorpusMetricInput]) -> float:
+        import torch
+
+        model = self._load_model()
+        data = [
+            {"src": i.source, "mt": i.hyp, "ref": i.ref[0] if i.ref else ""}
+            for i in items
+        ]
+        num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        output = model.predict(
+            data,
+            batch_size=self.batch_size_per_gpu,
+            gpus=num_gpus,
+            progress_bar=False,
+        )
+        return float(np.mean(output.scores))

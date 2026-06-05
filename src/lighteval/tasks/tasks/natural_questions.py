@@ -30,11 +30,12 @@ def nq_gen_prompt(line, task_name: str = None):
     if not answers:
         return None
     is_few_shots = line.get("__few_shots", False)
+    prefix = " " if is_few_shots else ""
     return Doc(
         task_name=task_name,
         query=f"Question: {line['question']}\nAnswer:",
-        choices=[f"{' ' if is_few_shots else ''}{answers[0]}"],
-        gold_index=0,
+        choices=[f"{prefix}{ans}" for ans in answers],
+        gold_index=list(range(len(answers))),
     )
 
 

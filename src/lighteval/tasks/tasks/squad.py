@@ -31,12 +31,12 @@ def squad_gen_prompt(line, task_name: str = None):
     if not answers_text:
         return None
     is_few_shots = line.get("__few_shots", False)
-    gold_text = f"{' ' if is_few_shots else ''}{answers_text[0]}"
+    prefix = " " if is_few_shots else ""
     return Doc(
         task_name=task_name,
         query=f"Title: {line['title']}\n\nBackground: {line['context']}\n\nQuestion: {line['question']}\n\nAnswer:",
-        choices=[gold_text],
-        gold_index=0,
+        choices=[f"{prefix}{ans}" for ans in answers_text],
+        gold_index=list(range(len(answers_text))),
     )
 
 

@@ -13,14 +13,20 @@ from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
 
+_ANSWER_PREFIX = "Here is the completed function:\n\n```python\n"
+
+
 def humaneval_bpb_prompt(line, task_name=None):
-    """Prompt = function signature + docstring; gold = canonical solution body."""
+    """Prompt = function signature + answer_prefix; gold = canonical solution.
+
+    Matches OLMO: query = prompt + answer_prefix so the gold continuation is
+    scored in the context of the opening code fence, not the raw docstring end.
+    Leading space is added to the gold to align with OLMO's perplexity_leading_space=True.
+    """
     return Doc(
         task_name=task_name,
-        # `prompt` already ends at the opening of the function body (after the
-        # closing triple-quote of the docstring), ready for the solution to follow.
-        query=line["prompt"],
-        choices=[line["canonical_solution"]],
+        query=line["prompt"] + _ANSWER_PREFIX,
+        choices=[" " + line["canonical_solution"]],
         gold_index=0,
     )
 
