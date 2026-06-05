@@ -397,6 +397,58 @@ averaging behavior.
 
 ---
 
+### XCOPA — `xcopa`
+
+| Task pattern | Dataset | Eval | FS split | ICL | Langs | Metrics |
+|---|---|---|---|---|---|---|
+| `xcopa:{lang}:cf\|0` | `xcopa` (`OALL/AlGhafa-...` for Arabic) | test | validation | 0 | 12 | acc, acc_norm, target_bpb |
+| `xcopa:{lang}:mcf\|0` | same | test | validation | 0 | 10 | acc, acc_norm |
+| `xcopa:{lang}:mcf_em\|0` | same | test | validation | 0 | 10 | em |
+
+2-choice causal-reasoning (COPA). **CF covers all 12 languages**: arabic, chinese,
+estonian, haitian, indonesian, italian, quechua, swahili, tamil, thai, turkish,
+vietnamese. **MCF / mcf_em cover only 10** — Haitian (`hti`) and Quechua (`que`)
+are excluded because they have no localized "answer" label in
+`translation_literals.py` (MCF builds a labelled prompt; CF needs no label).
+XCOPA has no English split (use English COPA). File: `multilingual/tasks/xcopa.py`
+
+### XQuAD — `xquad`
+
+| Task pattern | Dataset | Eval | FS split | ICL | Metrics |
+|---|---|---|---|---|---|
+| `xquad:{lang}:gen\|5` | `google/xquad` | validation | validation | 5 | quasi-f1, quasi-em |
+| `xquad:{lang}:bpb\|5` | `google/xquad` | validation | validation | 5 | target_bpb |
+
+Extractive QA (SQuAD-style), gen_size 400. `:bpb` is decoupled (scores the gold continuation). **12 languages, English included**:
+`ara`, `deu`, `ell`, `eng`, `spa`, `hin`, `ron`, `rus`, `tha`, `tur`, `vie`, `zho`.
+`xquad:eng:gen` is runnable. File: `multilingual/tasks/xquad.py`
+
+### MultiWikiQA — `multi_wiki_qa`
+
+| Task pattern | Dataset | Eval | FS split | ICL | Metrics |
+|---|---|---|---|---|---|
+| `multi_wiki_qa:{lang}:gen\|0` | `alexandrainst/multi-wiki-qa` | train | (train) | 0 | quasi-f1, quasi-em |
+| `multi_wiki_qa:{lang}:bpb\|0` | `alexandrainst/multi-wiki-qa` | train | (train) | 0 | target_bpb |
+
+Extractive QA, gen_size 100. `:bpb` is decoupled (scores the gold continuation). **54 slices** = 50 standard languages (English `eng`
+included) + Chinese `zho_cn`/`zho_tw` + Portuguese `por_pt`/`por_br`.
+`multi_wiki_qa:eng:gen` is runnable. Tagalog uses dataset subset `tl` (not the
+`standardize_tag` default `fil`). File: `multilingual/tasks/multi_wiki_qa.py`
+
+> **Offline note (Korean & Belarusian):** the `:gen` quasi-f1/em metrics tokenize
+> answers per language; **Korean (`kor`)** and **Belarusian (`bel`)** use the Stanza
+> tokenizer, which downloads its models from GitHub on first use. On an offline node
+> this fails — pre-cache them while online (`python -c "import stanza; stanza.download('ko');
+> stanza.download('be')"`) and point both the download and the eval job at the same
+> `STANZA_RESOURCES_DIR`. `:bpb` is unaffected (no tokenization).
+
+> **Exception to the English-exclusion rule:** `xcopa`, `xquad`, and `multi_wiki_qa`
+> intentionally keep English (`eng`) because they have no dedicated English task file.
+> Task names use `language.value` (ISO-639-3), so English is `eng` (e.g.
+> `multi_wiki_qa:eng:gen`), not `en`.
+
+---
+
 ## Two-level averaging
 
 ### Level 1 — per-language average (automatic)
@@ -478,6 +530,15 @@ mlmm_hellaswag:cf|5             # HellaSwag, all 32 langs, CF
 mlmm_hellaswag:mcf|5            # HellaSwag, all 32 langs, MCF
 mlmm_hellaswag:mcf_em|5         # HellaSwag, all 32 langs, MCF greedy (em)
 mgsm:gen|8                      # MGSM math, all 10 langs
+
+# --- QA (English kept; single-language selectable, e.g. xquad:deu:gen|5) ---
+xcopa:cf|0                      # XCOPA causal reasoning, all 12 langs, CF (+bpb)
+xcopa:mcf|0                     # XCOPA, 10 langs (no Haitian/Quechua), MCF
+xcopa:mcf_em|0                  # XCOPA, 10 langs, MCF greedy (em)
+xquad:gen|5                     # XQuAD extractive QA, all 12 langs (incl. eng)
+xquad:bpb|5                     # XQuAD, all 12 langs, BPB
+multi_wiki_qa:gen|0             # MultiWikiQA, all 54 slices (incl. eng)
+multi_wiki_qa:bpb|0             # MultiWikiQA, all 54 slices, BPB
 
 # --- Translation ---
 wmt24pp|0                       # WMT24++, all English-centric language slices

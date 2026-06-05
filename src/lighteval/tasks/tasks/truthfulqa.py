@@ -18,9 +18,38 @@ paper:
 https://arxiv.org/abs/2109.07958
 """
 
+import numpy as np
+
+from lighteval.metrics.harness_compatibility.truthful_qa import TruthfulqaMCMetrics
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.metrics_sample import SampleLevelComputation
+from lighteval.metrics.utils.metric_utils import SampleLevelMetric, SamplingMethod
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
+
+
+class _TruthfulQAMC2(SampleLevelComputation):
+    """Surfaces only TruthfulQA MC2 as a single score.
+
+    Reuses the exact same computation as opt-g's `truthfulqa_mc_metrics`
+    (`TruthfulqaMCMetrics`), so the number is identical to opt-g's
+    `truthfulqa_mc2` — just without the `truthfulqa_mc1` companion key.
+    """
+
+    _base = TruthfulqaMCMetrics()
+
+    def compute(self, doc, model_response, **kwargs):
+        return self._base.compute(doc, model_response)["truthfulqa_mc2"]
+
+
+# Single-score MC2 metric (multi-true: normalized probability mass on the true answers).
+truthfulqa_mc2_metric = SampleLevelMetric(
+    metric_name="truthfulqa_mc2",
+    sample_level_fn=_TruthfulQAMC2(),
+    category=SamplingMethod.LOGPROBS,
+    corpus_level_fn=np.mean,
+    higher_is_better=True,
+)
 
 
 def truthful_qa_multiple_choice_prompt(line, task_name: str = None):
@@ -85,7 +114,26 @@ truthfulqa_mc = LightevalTaskConfig(
     version=0,
 )
 
+# CF / logprob variant reporting a SINGLE score: TruthfulQA MC2 (normalized total
+# probability mass over the set of true answers). Same prompt and same underlying
+# computation as opt-g's `truthfulqa:mc`, but emits only `truthfulqa_mc2`.
+truthfulqa_mc2_cf = LightevalTaskConfig(
+    name="truthfulqa:mc2:cf",
+    prompt_function=truthful_qa_multiple_choice_prompt,
+    hf_repo="truthfulqa/truthful_qa",
+    hf_subset="multiple_choice",
+    hf_avail_splits=["validation"],
+    evaluation_splits=["validation"],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=-1,
+    metrics=[truthfulqa_mc2_metric],
+    stop_sequence=["\n"],
+    version=0,
+)
+
 TASKS_TABLE = [
     truthfulqa_gen,
     truthfulqa_mc,
+    truthfulqa_mc2_cf,
 ]
