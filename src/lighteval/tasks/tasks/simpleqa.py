@@ -31,6 +31,14 @@ from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
 
+def record_to_sample(record):
+    query = record["problem"]
+    target = record["answer"]
+    return Sample(input=query, target=target)
+
+
+# ---- Original graded variant (kept for compatibility) ----
+
 def simpleqa_prompt(line, task_name: str = None):
     query = f"Question: {line['question']}\n"
     query += "".join(
@@ -43,12 +51,6 @@ def simpleqa_prompt(line, task_name: str = None):
         choices=line["choices"]["text"],
         gold_index=line["choices"]["label"].index(line["answerKey"]),
     )
-
-
-def record_to_sample(record):
-    query = record["problem"]
-    target = record["answer"]
-    return Sample(input=query, target=target)
 
 
 simpleqa = LightevalTaskConfig(
@@ -69,6 +71,67 @@ simpleqa = LightevalTaskConfig(
     scorer=model_graded_fact(),
 )
 
+# ---- GenQA variants (our convention: gen{em,f1} + decoupled bpb) ----
+
+def simpleqa_gen_prompt(line, task_name: str = None):
+    """GenQA variant: generate short answer, score with F1/EM."""
+    answer = line["answer"]
+    prefix = " " if line.get("__few_shots", False) else ""
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['problem']}\nAnswer:",
+        choices=[f"{prefix}{answer}"],
+        gold_index=0,
+    )
+
+
+def simpleqa_bpb_prompt(line, task_name: str = None):
+    """BPB variant: score the gold answer continuation."""
+    answer = line["answer"]
+    if not answer:
+        return None
+    if not answer[0].isspace():
+        answer = " " + answer
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['problem']}\nAnswer:",
+        choices=[answer],
+        gold_index=0,
+    )
+
+
+simpleqa_gen = LightevalTaskConfig(
+    name="simpleqa:gen",
+    prompt_function=simpleqa_gen_prompt,
+    hf_repo="lighteval/SimpleQA",
+    hf_subset="default",
+    hf_avail_splits=["test"],
+    evaluation_splits=["test"],
+    few_shots_split="few_shot",
+    few_shots_select="random_sampling",
+    generation_size=50,
+    metrics=[Metrics.qa_f1, Metrics.qa_em],
+    stop_sequence=["\n"],
+    version=1,
+)
+
+simpleqa_bpb = LightevalTaskConfig(
+    name="simpleqa:bpb",
+    prompt_function=simpleqa_bpb_prompt,
+    hf_repo="lighteval/SimpleQA",
+    hf_subset="default",
+    hf_avail_splits=["test"],
+    evaluation_splits=["test"],
+    few_shots_split="few_shot",
+    few_shots_select="random_sampling",
+    generation_size=-1,
+    metrics=[Metrics.target_bits_per_byte],
+    stop_sequence=["\n"],
+    version=1,
+)
+
 TASKS_TABLE = [
     simpleqa,
+    simpleqa_gen,
+    simpleqa_bpb,
 ]

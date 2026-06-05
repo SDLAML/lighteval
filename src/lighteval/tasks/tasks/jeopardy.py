@@ -125,7 +125,7 @@ TASKS_TABLE = [
         few_shots_select="random_sampling_from_train",
         generation_size=50,
         stop_sequence=["\n\n", "Question:", "Category:"],
-        metrics=[Metrics.f1_score, Metrics.exact_match],
+        metrics=[Metrics.qa_f1, Metrics.qa_em],
         version=0,
     ),
     LightevalTaskConfig(

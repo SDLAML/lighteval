@@ -1,21 +1,23 @@
 """
 name:
-Boolq
+Qasc
 
 dataset:
-lighteval/boolq_helm
+allenai/qasc
 
 abstract:
-The BoolQ benchmark for binary (yes/no) question answering.
+QASC is a question-and-answer dataset that focuses on sentence composition.
+It consists of 8-way multiple choice questions requiring combining two facts
+from a large corpus to derive an answer.
 
 languages:
 english
 
 tags:
-qa
+multiple-choice, qa, reasoning, science
 
 paper:
-https://arxiv.org/abs/1905.11946
+https://arxiv.org/abs/1910.11473
 """
 
 from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
@@ -35,41 +37,38 @@ _MCF_METRICS = [
     LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
 ]
 
-
-def _question(line) -> str:
-    q = line["question"]
-    return q[:-1] if q.endswith("??") else q
+_LABELS = list("ABCDEFGH")
 
 
-def _gold(line) -> int:
-    return 0 if line["answer"] == "Yes" else 1
-
-
-def boolq_cf_prompt(line, task_name: str = None):
-    """CF variant: score full answer text via logprobs."""
+def qasc_cf_prompt(line, task_name: str = None):
+    """CF variant: score full answer texts via logprobs."""
+    choices = line["choices"]["text"]
     return Doc(
         task_name=task_name,
-        query=f"Passage: {line['passage']}\nQuestion: {_question(line)}\nAnswer:",
-        choices=[" Yes", " No"],
-        gold_index=_gold(line),
+        query=f"Question: {line['question']}\nAnswer:",
+        choices=[" " + c for c in choices],
+        gold_index=_LABELS.index(line["answerKey"]),
     )
 
 
-def boolq_mcf_prompt(line, task_name: str = None):
-    """MCF variant: labeled A/B options, score label tokens via logprobs."""
+def qasc_mcf_prompt(line, task_name: str = None):
+    """MCF variant: labeled A-H options, score label tokens via logprobs."""
+    choices = line["choices"]["text"]
+    labels = _LABELS[: len(choices)]
+    options = "\n".join(f" {l}. {c}" for l, c in zip(labels, choices))
     return Doc(
         task_name=task_name,
-        query=f"Passage: {line['passage']}\nQuestion: {_question(line)}\n A. Yes\n B. No\nAnswer:",
-        choices=[" A", " B"],
-        gold_index=_gold(line),
+        query=f"Question: {line['question']}\n{options}\nAnswer:",
+        choices=[f" {l}" for l in labels],
+        gold_index=_LABELS.index(line["answerKey"]),
     )
 
 
 TASKS_TABLE = [
     LightevalTaskConfig(
-        name="boolq:cf",
-        prompt_function=boolq_cf_prompt,
-        hf_repo="lighteval/boolq_helm",
+        name="qasc:cf",
+        prompt_function=qasc_cf_prompt,
+        hf_repo="allenai/qasc",
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -78,12 +77,12 @@ TASKS_TABLE = [
         generation_size=-1,
         metrics=_CF_METRICS,
         stop_sequence=["\n"],
-        version=1,
+        version=0,
     ),
     LightevalTaskConfig(
-        name="boolq:mcf",
-        prompt_function=boolq_mcf_prompt,
-        hf_repo="lighteval/boolq_helm",
+        name="qasc:mcf",
+        prompt_function=qasc_mcf_prompt,
+        hf_repo="allenai/qasc",
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -92,12 +91,12 @@ TASKS_TABLE = [
         generation_size=-1,
         metrics=_MCF_METRICS,
         stop_sequence=["\n"],
-        version=1,
+        version=0,
     ),
     LightevalTaskConfig(
-        name="boolq:mcf_em",
-        prompt_function=boolq_mcf_prompt,
-        hf_repo="lighteval/boolq_helm",
+        name="qasc:mcf_em",
+        prompt_function=qasc_mcf_prompt,
+        hf_repo="allenai/qasc",
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -106,6 +105,6 @@ TASKS_TABLE = [
         generation_size=1,
         metrics=[Metrics.exact_match],
         stop_sequence=["\n"],
-        version=1,
+        version=0,
     ),
 ]

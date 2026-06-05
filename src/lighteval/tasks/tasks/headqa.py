@@ -22,12 +22,26 @@ paper:
 https://arxiv.org/abs/1906.04701
 """
 
+from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
+_CF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+    Metrics.target_bits_per_byte,
+]
 
-def headqa_prompt(line, task_name: str = None):
+_MCF_METRICS = [
+    LogLikelihoodAccMetric(),
+    LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+]
+
+
+def headqa_cf_prompt(line, task_name: str = None):
+    """CF variant: score full answer texts via logprobs."""
     return Doc(
         task_name=task_name,
         query=f"Question: {line['qtext']}\nAnswer:",
@@ -36,42 +50,63 @@ def headqa_prompt(line, task_name: str = None):
     )
 
 
-headqa_en = LightevalTaskConfig(
-    name="headqa:en",
-    prompt_function=headqa_prompt,
-    hf_repo="lighteval/headqa_harness",
-    hf_subset="en",
-    hf_avail_splits=["train", "test", "validation"],
-    evaluation_splits=["test"],
-    few_shots_split=None,
-    few_shots_select=None,
-    generation_size=-1,
-    metrics=[
-        Metrics.loglikelihood_acc,
-    ],
-    stop_sequence=["\n"],
-    version=0,
-)
+def headqa_mcf_prompt(line, task_name: str = None):
+    """MCF variant: labeled options, score label tokens via logprobs."""
+    labels = list("ABCDE")[: len(line["answers"])]
+    options = "\n".join(f" {l}. {a['atext']}" for l, a in zip(labels, line["answers"]))
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['qtext']}\n{options}\nAnswer:",
+        choices=[f" {l}" for l in labels],
+        gold_index=int(line["ra"]) - 1,
+    )
 
 
-headqa_es = LightevalTaskConfig(
-    name="headqa:es",
-    prompt_function=headqa_prompt,
-    hf_repo="lighteval/headqa_harness",
-    hf_subset="es",
-    hf_avail_splits=["train", "test", "validation"],
-    evaluation_splits=["test"],
-    few_shots_split=None,
-    few_shots_select=None,
-    generation_size=-1,
-    metrics=[
-        Metrics.loglikelihood_acc,
-    ],
-    stop_sequence=["\n"],
-    version=0,
-)
+def _configs(lang: str):
+    return [
+        LightevalTaskConfig(
+            name=f"headqa:{lang}:cf",
+            prompt_function=headqa_cf_prompt,
+            hf_repo="lighteval/headqa_harness",
+            hf_subset=lang,
+            hf_avail_splits=["train", "test", "validation"],
+            evaluation_splits=["test"],
+            few_shots_split="train",
+            few_shots_select="random_sampling_from_train",
+            generation_size=-1,
+            metrics=_CF_METRICS,
+            stop_sequence=["\n"],
+            version=1,
+        ),
+        LightevalTaskConfig(
+            name=f"headqa:{lang}:mcf",
+            prompt_function=headqa_mcf_prompt,
+            hf_repo="lighteval/headqa_harness",
+            hf_subset=lang,
+            hf_avail_splits=["train", "test", "validation"],
+            evaluation_splits=["test"],
+            few_shots_split="train",
+            few_shots_select="random_sampling_from_train",
+            generation_size=-1,
+            metrics=_MCF_METRICS,
+            stop_sequence=["\n"],
+            version=1,
+        ),
+        LightevalTaskConfig(
+            name=f"headqa:{lang}:mcf_em",
+            prompt_function=headqa_mcf_prompt,
+            hf_repo="lighteval/headqa_harness",
+            hf_subset=lang,
+            hf_avail_splits=["train", "test", "validation"],
+            evaluation_splits=["test"],
+            few_shots_split="train",
+            few_shots_select="random_sampling_from_train",
+            generation_size=1,
+            metrics=[Metrics.exact_match],
+            stop_sequence=["\n"],
+            version=1,
+        ),
+    ]
 
-TASKS_TABLE = [
-    headqa_en,
-    headqa_es,
-]
+
+TASKS_TABLE = _configs("en") + _configs("es")

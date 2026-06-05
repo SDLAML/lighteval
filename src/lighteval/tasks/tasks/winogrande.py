@@ -164,6 +164,8 @@ winogrande_cf = LightevalTaskConfig(
     generation_size=-1,
     metrics=[
         LogLikelihoodAccMetric(),
+        LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
+        Metrics.target_bits_per_byte,
     ],
     stop_sequence=["\n"],
     version=0,
