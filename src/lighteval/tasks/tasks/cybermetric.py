@@ -148,8 +148,57 @@ def _secqa_configs(version: str):
     ]
 
 
+# ── cybermetric: titaneval_local (cached parquet, pre-flattened) ──
+
+def _cybermetric_titaneval_cf_prompt(line, task_name: str = None):
+    """CF variant: completion-style, logprob on full answer text."""
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['question']}\nAnswer:",
+        choices=[" " + c for c in line["choices"]],
+        gold_index=line["answer_index"],
+    )
+
+
+def _cybermetric_titaneval_mcf_prompt(line, task_name: str = None):
+    """MCF variant: labeled options, score label tokens via logprobs."""
+    labels = list("ABCD")[: len(line["choices"])]
+    options = "\n".join(f" {l}. {c}" for l, c in zip(labels, line["choices"]))
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['question']}\n{options}\nAnswer:",
+        choices=[f" {l}" for l in labels],
+        gold_index=line["answer_index"],
+    )
+
+
+def _cybermetric_titaneval_configs():
+    return [
+        LightevalTaskConfig(
+            name=f"cybermetric:{suffix}",
+            prompt_function=fn,
+            hf_repo="titaneval_local",
+            hf_subset="cybermetric",
+            hf_avail_splits=["test"],
+            evaluation_splits=["test"],
+            few_shots_split="test",
+            few_shots_select="random_sampling",
+            generation_size=gen,
+            metrics=metrics,
+            stop_sequence=["\n"],
+            version=1,
+        )
+        for suffix, fn, metrics, gen in [
+            ("cf",     _cybermetric_titaneval_cf_prompt,  _CF_METRICS,             -1),
+            ("mcf",    _cybermetric_titaneval_mcf_prompt, _MCF_METRICS,            -1),
+            ("mcf_em", _cybermetric_titaneval_mcf_prompt, [Metrics.exact_match],    1),
+        ]
+    ]
+
+
 TASKS_TABLE = (
     _cybermetric_configs()
     + _secqa_configs("v1")
     + _secqa_configs("v2")
+    + _cybermetric_titaneval_configs()
 )

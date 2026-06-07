@@ -197,26 +197,89 @@ med_mcqa_cf = LightevalTaskConfig(
     version=0,
 )
 
-med_qa_cf = LightevalTaskConfig(
+# ── med_qa: titaneval_local (cached parquet) ──
+
+def _med_qa_titaneval_cf_prompt(line, task_name: str = None):
+    """CF variant: completion-style, logprob on full answer text."""
+    return Doc(
+        task_name=task_name,
+        query=f"Question: {line['question']}\nAnswer:",
+        choices=[" " + c for c in line["choices"]],
+        gold_index=line["answer_index"],
+    )
+
+
+def _med_qa_titaneval_mcf_prompt(line, task_name: str = None):
+    """MCF variant: labeled A/B/C/D options, score label tokens via logprobs."""
+    labels = list(ascii_uppercase)[: len(line["choices"])]
+    options = "\n".join(f" {l}. {c}" for l, c in zip(labels, line["choices"]))
+    return Doc(
+        task_name=task_name,
+        query=f"Give a letter answer among A, B, C or D.\nQuestion: {line['question']}\n{options}\nAnswer:",
+        choices=[" " + l for l in labels],
+        gold_index=line["answer_index"],
+        instruction="Give a letter answer among A, B, C or D.\n",
+    )
+
+
+med_qa_titaneval_cf = LightevalTaskConfig(
     name="med_qa:cf",
-    prompt_function=med_qa_cf_prompt,
-    hf_repo="bigbio/med_qa",
-    hf_subset="med_qa_en_source",
-    hf_avail_splits=["train", "test", "validation"],
+    prompt_function=_med_qa_titaneval_cf_prompt,
+    hf_repo="titaneval_local",
+    hf_subset="med_qa",
+    hf_avail_splits=["test"],
     evaluation_splits=["test"],
-    few_shots_split="train",
-    few_shots_select="random_sampling_from_train",
+    few_shots_split="test",
+    few_shots_select="random_sampling",
     generation_size=-1,
     metrics=_CF_METRICS,
     stop_sequence=["\n"],
-    version=0,
+    version=1,
 )
+
+med_qa_titaneval_mcf = LightevalTaskConfig(
+    name="med_qa:mcf",
+    prompt_function=_med_qa_titaneval_mcf_prompt,
+    hf_repo="titaneval_local",
+    hf_subset="med_qa",
+    hf_avail_splits=["test"],
+    evaluation_splits=["test"],
+    few_shots_split="test",
+    few_shots_select="random_sampling",
+    generation_size=-1,
+    metrics=_MCF_METRICS,
+    stop_sequence=["\n"],
+    version=1,
+)
+
+med_qa_titaneval_mcf_em = LightevalTaskConfig(
+    name="med_qa:mcf_em",
+    prompt_function=_med_qa_titaneval_mcf_prompt,
+    hf_repo="titaneval_local",
+    hf_subset="med_qa",
+    hf_avail_splits=["test"],
+    evaluation_splits=["test"],
+    few_shots_split="test",
+    few_shots_select="random_sampling",
+    generation_size=1,
+    metrics=[Metrics.exact_match],
+    stop_sequence=["\n"],
+    version=1,
+)
+
+# ── original bigbio/med_qa configs (broken: script-based dataset) ──
+# med_qa_cf = LightevalTaskConfig(
+#     name="med_qa:cf",
+#     prompt_function=med_qa_cf_prompt,
+#     hf_repo="bigbio/med_qa",
+#     ...
+# )
 
 TASKS_TABLE = [
     med_mcqa_mcf_em,
     med_mcqa_mcf,
     med_mcqa_cf,
-    med_qa_cf,
-    med_qa_mcf,
-    med_qa_mcf_em,
+    med_qa_titaneval_cf,
+    med_qa_titaneval_mcf,
+    med_qa_titaneval_mcf_em,
 ]
