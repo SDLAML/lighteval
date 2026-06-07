@@ -4,17 +4,17 @@ Every task name ends with an explicit metric-type suffix and a shot count: `{tas
 
 ## Task Overview
 
-**47 unique English tasks** (`:cf`/`:mcf`/`:gen` variants of the same task count as one):
+**48 unique English tasks** (`:cf`/`:mcf`/`:gen` variants of the same task count as one):
 
 | Category | # | Task names |
 |---|---|---|
 | Code BPB (§3) | 3 | `humaneval`, `mbpp`, `mt_mbpp` |
 | Math (§3+§4) | 2 | `math` (BPB+gen), `math_500` |
-| CoT Reasoning (§4) | 4 | `gsm8k`, `gsm_symbolic`, `bigbench_hard`, `agieval_eng_em` |
+| CoT Reasoning (§4) | 5 | `gsm8k`, `gsm_plus`, `gsm_symbolic`, `bigbench_hard`, `agieval_eng_em` |
 | English MC QA (§5) | 31 | `mmlu`, `mmlu_pro`, `arc`, `commonsenseqa`, `siqa`, `piqa`, `sciq`, `hellaswag`, `winogrande`, `swag`, `openbookqa`, `qasc`, `boolq`, `med_mcqa`, `med_qa`, `pubmedqa`, `headqa`, `gpqa`, `jeopardy_mc`, `truthfulqa`, `cybermetric`, `secqa`, `mascqa`, `formationeval`, `teleqna`, `labbench`, `preflight`, `chembench`, `esgenius`, `xfinbench`, `geobench` |
 | English GenQA (§6) | 10 | `coqa`, `drop`, `jeopardy`, `natural_questions`, `squad`, `squad_v2`, `triviaqa`, `popqa`, `wikifact`, `simpleqa` |
 | Lambada & Basic Skills (§7) | 2 | `lambada`, `basic_skills` |
-| **Total** | **52** | |
+| **Total** | **53** | |
 
 ---
 
@@ -94,14 +94,19 @@ math:algebra:bpb|4         # single subset
 
 All tasks in this section generate free text and score with extractive match metrics.
 
-| Task | Dataset | ICL | gen_size | Metric |
-|---|---|---|---|---|
-| `math:{subset}:gen` (7) | `EleutherAI/hendrycks_math` | 4 | 1024 | `expr_gold_metric` |
-| `math_500` | `HuggingFaceH4/MATH-500` | 0 | 1024 | `expr_gold_metric` |
-| `gsm8k` | `openai/gsm8k` | 8 | 512 | `expr_gold_metric` |
-| `gsm_symbolic:{main,p1,p2}` | `apple/GSM-Symbolic` | 8 | 512 | `expr_gold_metric` |
-| `bigbench_hard:{subset}` (27) | `lukaemon/bbh` | 3 | 1024 | `bbh_cot_exact_match` |
-| `agieval_eng_em:{subset}` (7) | `lighteval/agi_eval_en` | 0 | 512 | `gpqa_instruct_metric` |
+| Task | Dataset | Few-shot split | Rec. ICL | gen_size | Metric |
+|---|---|---|---|---|---|
+| `math:{subset}:gen` (7) | `EleutherAI/hendrycks_math` | `train` | 4 | 1024 | `expr_gold_metric` |
+| `math_500` | `HuggingFaceH4/MATH-500` | `test`¹ | 4 | 1024 | `expr_gold_metric` |
+| `gsm8k` | `openai/gsm8k` | `train` | 8 | 512 | `expr_gold_metric` |
+| `gsm_plus` | `qintongli/GSM-Plus` | `testmini` | 8 | 512 | `expr_gold_metric` |
+| `gsm_symbolic:{main,p1,p2}` | `apple/GSM-Symbolic` | `test`¹ | 8 | 512 | `expr_gold_metric` |
+| `bigbench_hard:{subset}` (27) | `lukaemon/bbh` | `train` | 3 | 1024 | `bbh_cot_exact_match` |
+| `agieval_eng_em:{subset}` (7) | `lighteval/agi_eval_en` | `dev` | 0 | 512 | `gpqa_instruct_metric` |
+
+¹ Test-only datasets (no train split): `math_500` (`HuggingFaceH4/MATH-500`), `gsm_symbolic` (`apple/GSM-Symbolic`). Few-shot examples are drawn from the test pool via random sampling (potential leakage). For leakage-free math few-shot, prefer `math:gen|4` (draws from `hendrycks_math` train) and `gsm8k|8` (draws from GSM8K train).
+
+> **4k context note:** `gsm8k|8` ≈ 3–4k tokens of context (borderline); `math:gen|4` ≈ 4k+ (too long). Use `gsm8k|4` and `math:gen|1` for 4k-ctx models.
 
 **`expr_gold_metric`** — extracts mathematical expressions / LaTeX (including `\boxed{}`) from model output; scores with symbolic equivalence.
 
@@ -110,10 +115,11 @@ All tasks in this section generate free text and score with extractive match met
 **`gpqa_instruct_metric`** (AGIEval) — extracts letter choice (A–E) from CoT output.
 
 ```bash
-math:gen|4                 # all 7 subsets, generation
+math:gen|4                 # all 7 subsets, 4-shot from train
 math:algebra:gen|4         # single subset
-math_500                   # 0-shot fixed in config (no |n)
-gsm8k|8
+math_500|4                 # 4-shot drawn from test pool (see ¹)
+gsm8k|8                    # 8-shot from train (standard)
+gsm_plus|8                 # 8-shot from testmini
 gsm_symbolic:main|8
 gsm_symbolic:p1|8
 gsm_symbolic:p2|8

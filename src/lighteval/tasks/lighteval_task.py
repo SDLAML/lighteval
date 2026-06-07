@@ -296,15 +296,130 @@ def _load_flores_dataset(config_name: str, local_files_only: bool = False) -> Da
 
 
 def _load_titaneval_dataset(task_name: str) -> DatasetDict:
-    """Load a titaneval task from the local parquet copy in data/titaneval/."""
+    """Load a titaneval task from the local parquet copy in data/titaneval/.
+
+    If the parquet is missing for known HF-derived benchmarks (med_qa, headqa,
+    cybermetric), attempts to auto-download and cache before raising.
+    """
     data_dir = Path(__file__).parent.parent.parent.parent / "data" / "titaneval"
     parquet_path = data_dir / f"{task_name}.parquet"
+
+    if not parquet_path.exists():
+        _try_cache_titaneval(task_name, parquet_path)
+
     if not parquet_path.exists():
         raise FileNotFoundError(
             f"titaneval_local: parquet not found at {parquet_path}. "
-            "Copy it from titaneval-mcq/benchmarks/ into data/titaneval/."
+            "Copy it from titaneval-mcq/benchmarks/ into data/titaneval/ "
+            "or run scripts/cache_broken_hf_to_titaneval.py."
         )
     return load_dataset("parquet", data_files={"test": str(parquet_path)})
+
+
+def _try_cache_titaneval(task_name: str, target: Path) -> None:
+    """Auto-download known HF datasets if the titaneval parquet doesn't exist."""
+    import json
+    import zipfile
+
+    import pandas as pd
+    from huggingface_hub import hf_hub_download
+
+    COLUMNS = ["benchmark", "domain", "question", "choices", "answer_index", "answer_text"]
+
+    def _save(rows, name):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows, columns=COLUMNS).to_parquet(target, index=False)
+
+    try:
+        if task_name == "med_qa":
+            zip_path = hf_hub_download("bigbio/med_qa", "data_clean.zip", repo_type="dataset")
+            rows = []
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for arc in [
+                    "data_clean/questions/US/4_options/phrases_no_exclude_train.jsonl",
+                    "data_clean/questions/US/4_options/phrases_no_exclude_dev.jsonl",
+                    "data_clean/questions/US/4_options/phrases_no_exclude_test.jsonl",
+                ]:
+                    with zf.open(arc) as fh:
+                        for line in fh.read().decode("utf-8").strip().split("\n"):
+                            obj = json.loads(line)
+                            opts = obj["options"]
+                            labels = sorted(opts.keys())
+                            rows.append({
+                                "benchmark": "med_qa",
+                                "domain": obj.get("meta_info", ""),
+                                "question": obj["question"],
+                                "choices": [opts[k] for k in labels],
+                                "answer_index": labels.index(obj["answer_idx"]),
+                                "answer_text": opts[obj["answer_idx"]],
+                            })
+            _save(rows, "med_qa")
+            logger.info(f"Auto-cached {len(rows)} rows → {target}")
+
+        elif task_name == "headqa":
+            rows = []
+            for lang in ("en", "es"):
+                data_files = {
+                    s: f"https://huggingface.co/datasets/EleutherAI/headqa/resolve/main/{lang}/{s}.parquet"
+                    for s in ("train", "validation", "test")
+                }
+                ds = load_dataset("parquet", data_files=data_files)
+                for split_ds in ds.values():
+                    for item in split_ds:
+                        answers = item["answers"]
+                        choices = [a["atext"] for a in answers]
+                        aid = item["ra"]
+                        idx = next((i for i, a in enumerate(answers) if a["aid"] == aid), -1)
+                        if idx < 0:
+                            continue
+                        rows.append({
+                            "benchmark": "headqa",
+                            "domain": f"{item.get('category', '')}/{lang}",
+                            "question": item["qtext"],
+                            "choices": choices,
+                            "answer_index": idx,
+                            "answer_text": choices[idx],
+                        })
+            _save(rows, "headqa")
+            logger.info(f"Auto-cached {len(rows)} rows → {target}")
+
+        elif task_name == "cybermetric":
+            rows = []
+            for fname in [
+                "CyberMetric-10000-v1.json",
+                "CyberMetric-2000-v1.json",
+                "CyberMetric-500-v1.json",
+                "CyberMetric-80-v1.json",
+            ]:
+                local = hf_hub_download("tihanyin/CyberMetric", fname, repo_type="dataset")
+                with open(local) as fh:
+                    data = json.load(fh)
+                for q in data.get("questions", []):
+                    answers = q.get("answers", {})
+                    labels = sorted(answers.keys())
+                    sol = q.get("solution") or q.get("correct_solution", "")
+                    idx = labels.index(sol) if sol in labels else -1
+                    if idx < 0:
+                        continue
+                    rows.append({
+                        "benchmark": "cybermetric",
+                        "domain": "cybersecurity",
+                        "question": q["question"],
+                        "choices": [answers[k] for k in labels],
+                        "answer_index": idx,
+                        "answer_text": answers[sol],
+                    })
+                if len(rows) >= 10000:
+                    break
+            _save(rows, "cybermetric")
+            logger.info(f"Auto-cached {len(rows)} rows → {target}")
+
+    except Exception:
+        logger.warning(
+            f"Auto-cache failed for '{task_name}'. "
+            "Run scripts/cache_broken_hf_to_titaneval.py manually.",
+            exc_info=True,
+        )
 
 
 @dataclass
@@ -772,6 +887,12 @@ class LightevalTask:
             from datasets import load_from_disk
 
             dataset = load_from_disk(task.dataset_path)
+            if task.dataset_filter is not None:
+                dataset = dataset.filter(task.dataset_filter)
+            return dataset  # type: ignore
+
+        if task.dataset_path == "titaneval_local":
+            dataset = _load_titaneval_dataset(task.dataset_config_name)
             if task.dataset_filter is not None:
                 dataset = dataset.filter(task.dataset_filter)
             return dataset  # type: ignore
