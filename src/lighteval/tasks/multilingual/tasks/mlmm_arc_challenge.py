@@ -3,7 +3,7 @@ name:
 Mlmm Arc Challenge
 
 dataset:
-jon-tow/okapi_arc_challenge
+alexandrainst/m_arc
 
 abstract:
 ARC (AI2 Reasoning Challenge) is a dataset for question answering that requires
@@ -52,76 +52,62 @@ _MCF_METRICS = [
     LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
 ]
 
-# Languages covered by jon-tow/okapi_arc_challenge (English excluded)
 _LANGUAGES = [
-    Language.RUSSIAN,
-    Language.GERMAN,
-    Language.CHINESE,
-    Language.FRENCH,
-    Language.SPANISH,
-    Language.ITALIAN,
-    Language.DUTCH,
-    Language.VIETNAMESE,
-    Language.INDONESIAN,
     Language.ARABIC,
-    Language.HUNGARIAN,
-    Language.ROMANIAN,
-    Language.DANISH,
-    Language.SLOVAK,
-    Language.UKRAINIAN,
-    Language.CATALAN,
-    Language.SERBIAN,
-    Language.CROATIAN,
-    Language.HINDI,
+    Language.ARMENIAN,
+    Language.BASQUE,
     Language.BENGALI,
-    Language.TAMIL,
-    Language.NEPALI,
+    Language.CATALAN,
+    Language.CHINESE,
+    Language.CROATIAN,
+    Language.DANISH,
+    Language.DUTCH,
+    # Language.ENGLISH,
+    Language.FRENCH,
+    Language.GERMAN,
+    Language.GUJARATI,
+    Language.HINDI,
+    Language.HUNGARIAN,
+    Language.ICELANDIC,
+    Language.INDONESIAN,
+    Language.ITALIAN,
+    Language.KANNADA,
     Language.MALAYALAM,
     Language.MARATHI,
+    Language.NEPALI,
+    Language.NORWEGIAN,
+    Language.PORTUGUESE,
+    Language.ROMANIAN,
+    Language.RUSSIAN,
+    Language.SERBIAN,
+    Language.SLOVAK,
+    Language.SPANISH,
+    Language.SWEDISH,
+    Language.TAMIL,
     Language.TELUGU,
-    Language.KANNADA,
+    Language.UKRAINIAN,
+    Language.VIETNAMESE,
 ]
 
-
-def _arc_adapter(line):
-    if "question" in line and "choices" in line:
-        choices = line["choices"]["text"]
-        answer_key = line["answerKey"]
-    else:
-        choices = [
-            line[key]
-            for key in ("option_a", "option_b", "option_c", "option_d", "option_e")
-            if line.get(key)
-        ]
-        answer_key = line["answer"]
-        return {
-            "question": line["instruction"],
-            "choices": choices,
-            "gold_idx": int(answer_key) - 1
-            if answer_key.isdigit()
-            else ascii_uppercase.index(answer_key),
-        }
-
+def _m_arc_adapter(line):
+    raw_choices = [line.get(f"option_{letter}") for letter in "abcde"]
+    choices = [c for c in raw_choices if c is not None]
     return {
-        "question": line["question"],
+        "question": line["instruction"],
         "choices": choices,
-        "gold_idx": int(answer_key) - 1
-        if answer_key.isdigit()
-        else ascii_uppercase.index(answer_key),
+        "gold_idx": ascii_uppercase.index(line["answer"].strip().upper()),
     }
-
 
 TASKS_TABLE = [
     LightevalTaskConfig(
-        name=f"mlmm_arc:{language.value}:{suffix}",
+        name=f"mlmm_arc_challenge:{language.value}:{suffix}",
         prompt_function=get_mcq_prompt_function(
             language,
-            _arc_adapter,
+            _m_arc_adapter,
             formulation=formulation,
         ),
-        hf_repo="jon-tow/okapi_arc_challenge",
+        hf_repo="alexandrainst/m_arc",
         hf_subset=standardize_tag(language.value),
-        hf_revision="823d5d7bfaf8974a3ab52a825b6cf4903b35dbc4",
         evaluation_splits=("test",),
         few_shots_split="train",
         metrics=metrics,
@@ -136,15 +122,14 @@ TASKS_TABLE = [
 # Greedy variant: MCF-style prompt, generate 1 token, exact match
 TASKS_TABLE += [
     LightevalTaskConfig(
-        name=f"mlmm_arc:{language.value}:mcf_em",
+        name=f"mlmm_arc_challenge:{language.value}:mcf_em",
         prompt_function=get_mcq_prompt_function(
             language,
-            _arc_adapter,
+            _m_arc_adapter,
             formulation=MCFFormulation(),
         ),
-        hf_repo="jon-tow/okapi_arc_challenge",
+        hf_repo="alexandrainst/m_arc",
         hf_subset=standardize_tag(language.value),
-        hf_revision="823d5d7bfaf8974a3ab52a825b6cf4903b35dbc4",
         evaluation_splits=("test",),
         few_shots_split="train",
         generation_size=1,
