@@ -83,7 +83,7 @@ TASKS_TABLE = [
         evaluation_splits=("validation",),
         few_shots_split="validation",
         generation_size=400,
-        stop_sequence=("\n",),
+        stop_sequence=["\n",],
         metrics=(
             MultilingualQuasiExactMatchMetric(language, "prefix"),
             MultilingualQuasiF1ScoreMetric(language),
@@ -102,7 +102,7 @@ TASKS_TABLE += [
         evaluation_splits=("validation",),
         few_shots_split="validation",
         generation_size=-1,
-        stop_sequence=("\n",),
+        stop_sequence=["\n",],
         metrics=[Metrics.target_bits_per_byte],
     )
     for language in _LANGUAGES
