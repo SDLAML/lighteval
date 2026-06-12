@@ -75,7 +75,7 @@ def _adapter(line):
 
 
 def _hf_repo(language: Language) -> str:
-    return "OALL/AlGhafa-Arabic-LLM-Benchmark-Translated" if language == Language.ARABIC else "xcopa"
+    return "OALL/AlGhafa-Arabic-LLM-Benchmark-Translated" if language == Language.ARABIC else "cambridgeltl/xcopa"
 
 
 # Dataset subset codes that differ from standardize_tag(language.value).
