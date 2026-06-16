@@ -39,12 +39,19 @@ TOP_P = None
 MAX_MODEL_LENGTH = 4096
 MAX_NEW_TOKENS = None
 MAX_SAMPLES = None
+SKIP_SPECIAL_TOKENS = True # vllm default
+SPACES_BETWEEN_SPECIAL_TOKENS = True # vllm default
 
 # OVERRIDE_CHAT_TEMPLATE = True # False for base, don't forget to change for instruction-tuned models!
+# SEED = 1234
 # TEMPERATURE = 0.6
 # TOP_P = 0.95
-# MAX_MODEL_LENGTH = 32768
-# MAX_NEW_TOKENS = 1024
+# MAX_MODEL_LENGTH = 65536 # 65536 // 32768
+# MAX_NEW_TOKENS = 32768 # 32768 // 16384
+# MAX_SAMPLES = None
+# SKIP_SPECIAL_TOKENS = False
+# SPACES_BETWEEN_SPECIAL_TOKENS = False
+
 
 ######## MODEL NAMES  ########
 
@@ -144,6 +151,8 @@ def eval_one(model_name: str, tasks: str):
         temperature=TEMPERATURE,
         top_p=TOP_P,
         max_new_tokens=MAX_NEW_TOKENS,
+        skip_special_tokens=SKIP_SPECIAL_TOKENS,
+        spaces_between_special_tokens=SPACES_BETWEEN_SPECIAL_TOKENS,
         ),
     )
     
