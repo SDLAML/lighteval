@@ -276,7 +276,7 @@ def safe_divide(numerator: np.ndarray, denominator: float, default_value: float 
     return np.where(denominator != 0, numerator / denominator, default_value)
 
 
-def remove_reasoning_tags(text: str, tag_pairs: list[tuple[str, str]]) -> str:
+def remove_reasoning_tags(text: str, tag_pairs: list[tuple[str, str]], context: str | None = None) -> str:
     """Removes all instances of reasoning tag pairs from text.
 
     Iteratively removes content between specified start and end tag pairs.
@@ -288,6 +288,9 @@ def remove_reasoning_tags(text: str, tag_pairs: list[tuple[str, str]]) -> str:
     Args:
         text (str): The input text containing reasoning tags to remove.
         tag_pairs (list[tuple[str, str]]): List of (start_tag, end_tag) pairs to remove.
+        context (str | None): Optional preceding text, such as the prompt. If the
+            context ends inside a reasoning block, generated text before the first
+            closing tag is treated as reasoning and removed.
 
     Returns:
         str: The text with all reasoning tag content removed.
@@ -306,6 +309,14 @@ def remove_reasoning_tags(text: str, tag_pairs: list[tuple[str, str]]) -> str:
     result = text
 
     for start_tag, end_tag in tag_pairs:
+        if context is not None:
+            last_start = context.rfind(start_tag)
+            last_end = context.rfind(end_tag)
+            if last_start != -1 and last_start > last_end:
+                end = result.find(end_tag)
+                if end != -1:
+                    result = result[end + len(end_tag) :]
+
         while start_tag in result and end_tag in result:
             start = result.find(start_tag)
             end = result.find(end_tag, start)
