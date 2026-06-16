@@ -99,6 +99,7 @@ mmlu_pro = LightevalTaskConfig(
     hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
     evaluation_splits=("test",),
     few_shots_split="validation",
+    generation_size=32768,
     metrics=[Metrics.gpqa_instruct_metric],
 )
 
