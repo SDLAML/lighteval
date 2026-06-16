@@ -46,6 +46,8 @@ class GenerationParameters(BaseModel, extra="forbid"):
     min_p: NonNegativeFloat | None = None  # vllm, transformers, sglang
     top_p: NonNegativeFloat | None = None  # vllm, transformers, tgi, litellm, sglang
     truncate_prompt: bool | None = None  # vllm, tgi
+    skip_special_tokens: bool | None = None  # vllm
+    spaces_between_special_tokens: bool | None = None  # vllm
 
     cache_implementation: str | None = None  # transformers
 

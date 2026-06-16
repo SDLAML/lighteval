@@ -351,10 +351,12 @@ class Pipeline:
         if self.pipeline_parameters.remove_reasoning_tags:
             for _, responses in sampling_method_responses.items():
                 for response in responses:
+                    context = response.input if isinstance(response.input, str) else None
                     response.text_post_processed = [
                         remove_reasoning_tags(
                             text=text,
                             tag_pairs=self.pipeline_parameters.reasoning_tags,
+                            context=context,
                         )
                         for text in response.text
                     ]
