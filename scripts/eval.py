@@ -188,7 +188,8 @@ def eval_one(model_name: str, tasks: str):
             print(f"World size: {world}")
             print(f"{'='*100}\n")
         
-        out_dir = Path("results") / _safe_name(model_name) / task / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
+        task_dir = RESULTS_DIR_NAME if RESULTS_DIR_NAME else _safe_name(task)
+        out_dir = Path("results") / _safe_name(model_name) / task_dir / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
         out_dir.mkdir(parents=True, exist_ok=True)
         eval_tracker = EvaluationTracker(
             output_dir=str(out_dir), 
