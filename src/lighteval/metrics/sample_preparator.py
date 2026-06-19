@@ -21,8 +21,11 @@
 # SOFTWARE.
 
 import logging
+import math
+import os
 import re
 from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 
@@ -245,3 +248,162 @@ class PerplexityPreparator(Preparator):
             reference_text_flat = " ".join([doc.query])
 
         return PerplexityCorpusMetricInput(logprobs=logprobs_flat, weights=self.count_units(reference_text_flat))
+
+
+def _align_frontier_logprobs(frontier_logprobs: list[dict], reasoning_text: str) -> list[dict]:
+    """Trim frontier_logprobs to start at the first token covering reasoning_text.
+
+    GPT-OSS-120b prepends a thinking channel (<|channel|>analysis<|message|>...) before
+    the actual response. This finds where reasoning_text starts in the full token byte stream
+    and drops all tokens before that point.
+    """
+    if not frontier_logprobs or not reasoning_text:
+        return frontier_logprobs
+
+    target = reasoning_text.encode("utf-8")
+    probe = target[:min(32, len(target))]
+    if len(probe) < 4:
+        return frontier_logprobs
+
+    full_bytes = b"".join(
+        bytes(t["bytes"]) if t.get("bytes") else t["token"].encode("utf-8")
+        for t in frontier_logprobs
+    )
+    offset = full_bytes.rfind(probe)
+    if offset <= 0:
+        return frontier_logprobs  # already aligned or not found
+
+    cursor = 0
+    for i, tok in enumerate(frontier_logprobs):
+        tok_b = bytes(tok["bytes"]) if tok.get("bytes") else tok["token"].encode("utf-8")
+        if cursor + len(tok_b) > offset:
+            return frontier_logprobs[i:]
+        cursor += len(tok_b)
+    return frontier_logprobs
+
+
+def _build_byte_conf(frontier_logprobs: list[dict], n_bytes: int) -> list[float]:
+    """Map each byte of the reasoning span to the frontier token probability covering it.
+
+    Bytes not covered by any token get neutral weight 1.0.
+    """
+    byte_weights: list[float] = [1.0] * n_bytes
+    cursor = 0
+    for tok in frontier_logprobs:
+        tok_bytes = bytes(tok["bytes"]) if tok.get("bytes") else tok["token"].encode("utf-8")
+        prob = math.exp(tok["logprob"])
+        for b in range(cursor, min(cursor + len(tok_bytes), n_bytes)):
+            byte_weights[b] = prob
+        cursor += len(tok_bytes)
+        if cursor >= n_bytes:
+            break
+    return byte_weights
+
+
+class RBridgePreparator(Preparator):
+    """Compute the rBridge weighted NLL score (arXiv:2509.21013).
+
+    Weights each proxy token's NLL by the frontier model's average byte-level
+    confidence over the bytes that token covers, then MinMax-normalises.
+
+    Tokenizer resolution order:
+      1. Injected via ``set_tokenizer()`` (HF transformers eval — automatic via pipeline)
+      2. Loaded from ``TOKENIZER_PATH`` env var (API/litellm eval — same var used by RULER)
+      3. None → falls back to unweighted NLL (uniform weights)
+
+    If ``per_token_logprobs`` is unavailable, also falls back to unweighted NLL.
+    """
+
+    _tokenizer: Any = None
+
+    @classmethod
+    def set_tokenizer(cls, tokenizer: Any) -> None:
+        cls._tokenizer = tokenizer
+
+    @classmethod
+    def _get_tokenizer(cls) -> Any:
+        if cls._tokenizer is not None:
+            return cls._tokenizer
+        name = os.environ.get("TOKENIZER_PATH")
+        if name:
+            from transformers import AutoTokenizer
+            cls._tokenizer = AutoTokenizer.from_pretrained(name)
+            logger.info("RBridgePreparator: loaded tokenizer from TOKENIZER_PATH=%s", name)
+        return cls._tokenizer
+
+    def prepare(self, doc: Doc, model_response: ModelResponse, **kwargs) -> PerplexityCorpusMetricInput:
+        gold_ix = as_list(doc.gold_index)[0]
+
+        # Fallback: no per-token logprobs → unweighted NLL (same as target_bits_per_byte)
+        if not model_response.per_token_logprobs:
+            gold_logprob = model_response.logprobs[gold_ix]
+            reference_text = doc.choices[gold_ix]
+            n_bytes = max(len(reference_text.encode("utf-8")), 1)
+            logger.debug("rBridge: per_token_logprobs unavailable, falling back to unweighted NLL/byte")
+            return PerplexityCorpusMetricInput(logprobs=gold_logprob, weights=n_bytes)
+
+        tokenizer = self._get_tokenizer()
+        # Fallback: no tokenizer → unweighted mean NLL over reasoning tokens
+        if tokenizer is None:
+            per_token_lps = model_response.per_token_logprobs[gold_ix]
+            score = -float(np.mean(per_token_lps)) if per_token_lps else 0.0
+            logger.debug("rBridge: tokenizer unavailable, falling back to unweighted mean NLL")
+            return PerplexityCorpusMetricInput(logprobs=-score, weights=1)
+
+        specific = doc.specific or {}
+
+        frontier_logprobs = specific["frontier_logprobs"]
+        reasoning_byte_start = specific["reasoning_byte_start"]
+        reasoning_byte_end = specific["reasoning_byte_end"]
+        n_reasoning_bytes = reasoning_byte_end - reasoning_byte_start
+
+        reasoning_text = doc.choices[gold_ix]
+
+        # 1. align logprobs to reasoning_text (drops thinking-channel prefix tokens if present)
+        frontier_logprobs = _align_frontier_logprobs(frontier_logprobs, reasoning_text)
+        byte_conf = _build_byte_conf(frontier_logprobs, n_reasoning_bytes)
+
+        # 2. tokenize reasoning_text alone — matches how litellm/transformers count choice tokens
+        enc = self._tokenizer(
+            reasoning_text,
+            return_offsets_mapping=True,
+            add_special_tokens=False,
+        )
+        offset_mapping = enc["offset_mapping"]
+
+        # 3. compute per proxy-token weight
+        proxy_weights: list[float] = []
+        reasoning_token_pos: list[int] = []
+        for token_pos, (cs, ce) in enumerate(offset_mapping):
+            tb_start = len(reasoning_text[:cs].encode("utf-8"))
+            tb_end = len(reasoning_text[:ce].encode("utf-8"))
+            local_s = tb_start
+            local_e = min(tb_end, n_reasoning_bytes)
+            if local_e <= local_s:
+                continue
+            w = sum(byte_conf[local_s:local_e]) / (local_e - local_s)
+            proxy_weights.append(w)
+            reasoning_token_pos.append(token_pos)
+
+        if not proxy_weights:
+            return PerplexityCorpusMetricInput(logprobs=0.0, weights=1)
+
+        # 4. MinMax normalize weights
+        w_min, w_max = min(proxy_weights), max(proxy_weights)
+        if w_max > w_min:
+            norm_w = [(w - w_min) / (w_max - w_min) for w in proxy_weights]
+        else:
+            norm_w = [1.0] * len(proxy_weights)
+        if sum(norm_w) == 0:
+            norm_w = [1.0] * len(norm_w)
+
+        # 5. per-token proxy NLL
+        per_token_lps = model_response.per_token_logprobs[gold_ix]
+        nlls = [-lp for lp in per_token_lps]
+
+        # 6. weighted rBridge score
+        w_sum = sum(norm_w)
+        score = sum(nlls[i] * w for i, w in zip(reasoning_token_pos, norm_w)) / w_sum
+
+        # Return as negative so CorpusLevelPerplexityMetric (which negates) gives the right sign
+        return PerplexityCorpusMetricInput(logprobs=-score, weights=1)

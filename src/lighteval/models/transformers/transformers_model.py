@@ -987,6 +987,7 @@ class TransformersModel(LightevalModel):
 
                 flat_index = 0
                 batch_logits_sums = []
+                batch_per_token_logprobs = []
                 batch_max_equals = []
                 batch_tokenized_contexts_processed = []
                 batch_tokenized_continuations_processed = []
@@ -1006,6 +1007,7 @@ class TransformersModel(LightevalModel):
                     doc_logits_sums = []
                     doc_max_equals = []
                     doc_continuation_tokens = []
+                    doc_per_token_logprobs = []
 
                     for choice_logits, input_length, choice_continuation in zip(
                         doc_logits, doc_input_lengths, doc_continuations
@@ -1041,10 +1043,12 @@ class TransformersModel(LightevalModel):
 
                         # Answer: (log prob, is-exact-match)
                         doc_logits_sums.append(choice_logits.sum())
+                        doc_per_token_logprobs.append(choice_logits.squeeze(0).cpu().tolist())
                         doc_max_equals.append(is_exact_match)
                         doc_continuation_tokens.append(choice_continuation_tensor.squeeze(0))  # [seq]
 
                     batch_logits_sums.append(torch.stack(doc_logits_sums))
+                    batch_per_token_logprobs.append(doc_per_token_logprobs)
                     batch_max_equals.append(torch.stack(doc_max_equals))
                     batch_tokenized_continuations_processed.append(
                         pad_sequence(doc_continuation_tokens, batch_first=True, padding_value=-1)
@@ -1148,6 +1152,7 @@ class TransformersModel(LightevalModel):
                         logprobs=[sum.cpu().item() for sum in logits_sum_doc],
                         input_tokens=tokenized_contexts_batch,
                         output_tokens=tokenized_continuations_batch,
+                        per_token_logprobs=batch_per_token_logprobs[i],
                     )
                     all_responses.append(answer)
 

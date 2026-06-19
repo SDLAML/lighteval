@@ -72,6 +72,7 @@ from lighteval.metrics.sample_preparator import (
     GenerativePreparator,
     LoglikelihoodPreparator,
     PerplexityPreparator,
+    RBridgePreparator,
     TargetPerplexityPreparator,
 )
 from lighteval.metrics.utils.extractive_match_utils import (
@@ -733,6 +734,13 @@ class Metrics(Enum):
         sample_level_fn=TargetPerplexityPreparator(units_type="words"),
         category=SamplingMethod.LOGPROBS,
         corpus_level_fn=CorpusLevelPerplexityMetric("perplexity"),
+        higher_is_better=False,
+    )
+    rbridge = CorpusLevelMetric(
+        metric_name="rbridge",
+        sample_level_fn=RBridgePreparator(),
+        category=SamplingMethod.LOGPROBS,
+        corpus_level_fn=CorpusLevelPerplexityMetric("weighted_perplexity"),
         higher_is_better=False,
     )
     target_bits_per_byte = CorpusLevelMetric(

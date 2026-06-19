@@ -641,7 +641,7 @@ class LiteLLMClient(LightevalModel):
         keep_chars = max(1, int(len(text) * max_tokens / total))
         return text[-keep_chars:]
 
-    def _score_single(self, prompt: str, choice_len: int) -> tuple[float, bool]:
+    def _score_single(self, prompt: str, choice_len: int) -> tuple[float, bool, list[float]]:
         """Score one (context + choice) string via a single echo-based completions call.
 
         Args:
@@ -679,7 +679,7 @@ class LiteLLMClient(LightevalModel):
                 time.sleep(wait)
         else:
             logger.error("logprob call failed after all retries, returning -inf")
-            return float("-inf"), False
+            return float("-inf"), False, []
 
         logprobs_obj = response.choices[0].logprobs
         token_logprobs = logprobs_obj.token_logprobs or []
@@ -702,7 +702,7 @@ class LiteLLMClient(LightevalModel):
         if cont_top and cont_toks and len(cont_top) == len(cont_toks):
             is_greedy = all(tok in top for tok, top in zip(cont_toks, cont_top) if top)
 
-        return logprob_sum, is_greedy
+        return logprob_sum, is_greedy, cont_logprobs
 
     def _score_batch(
         self, batch: list[tuple[int, int, str, int]]
@@ -754,7 +754,7 @@ class LiteLLMClient(LightevalModel):
             logger.error(
                 "batch logprob call failed after all retries, returning -inf for all items"
             )
-            return [(di, ci, (float("-inf"), False)) for di, ci, _, _ in batch]
+            return [(di, ci, (float("-inf"), False, [])) for di, ci, _, _ in batch]
 
         # choices[i].index == i when prompt is a list with n=1 (OpenAI completions API).
         choices_by_idx = {c.index: c for c in response.choices}
@@ -766,7 +766,7 @@ class LiteLLMClient(LightevalModel):
                 logger.warning(
                     f"Missing response for batch item {seq_idx}, returning -inf"
                 )
-                results.append((di, ci, (float("-inf"), False)))
+                results.append((di, ci, (float("-inf"), False, [])))
                 continue
 
             logprobs_obj = choice.logprobs
@@ -788,7 +788,7 @@ class LiteLLMClient(LightevalModel):
                     tok in top for tok, top in zip(cont_toks, cont_top) if top
                 )
 
-            results.append((di, ci, (logprob_sum, is_greedy)))
+            results.append((di, ci, (logprob_sum, is_greedy, cont_logprobs)))
 
         return results
 
@@ -825,9 +825,9 @@ class LiteLLMClient(LightevalModel):
                 doc_list.append(doc)
                 context_list.append(context)
 
-        # scored[doc_idx][choice_idx] = (logprob_sum, is_greedy)
-        scored: list[list[tuple[float, bool]]] = [
-            [(0.0, False)] * len(doc.choices) for doc in doc_list
+        # scored[doc_idx][choice_idx] = (logprob_sum, is_greedy, per_token_logprobs)
+        scored: list[list[tuple[float, bool, list[float]]]] = [
+            [(0.0, False, [])] * len(doc.choices) for doc in doc_list
         ]
 
         # Pre-compute token lengths once per context (not 4× per context via choices)
@@ -883,13 +883,14 @@ class LiteLLMClient(LightevalModel):
 
         results: list[ModelResponse] = []
         for doc, context, pairs in zip(doc_list, context_list, scored):
-            logprobs = [lp for lp, _ in pairs]
-            argmax = [g for _, g in pairs]
+            logprobs = [lp for lp, _, _ in pairs]
+            argmax = [g for _, g, _ in pairs]
+            per_token_logprobs = [ptl for _, _, ptl in pairs]
             output_tokens = [[0] * _unique_choices[choice] for choice in doc.choices]
             results.append(
                 ModelResponse(
                     input=context, logprobs=logprobs, argmax_logits_eq_gold=argmax,
-                    output_tokens=output_tokens,
+                    output_tokens=output_tokens, per_token_logprobs=per_token_logprobs,
                 )
             )
 
