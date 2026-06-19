@@ -295,6 +295,18 @@ def _load_flores_dataset(config_name: str, local_files_only: bool = False) -> Da
     )
 
 
+def _load_rbridge_dataset(task_name: str) -> DatasetDict:
+    """Load an rBridge trace file from data/titaneval/rbridge_data/<task_name>_traces.jsonl."""
+    data_dir = Path(__file__).parent.parent.parent.parent / "data" / "titaneval" / "rbridge_data"
+    jsonl_path = data_dir / f"{task_name}_traces.jsonl"
+    if not jsonl_path.exists():
+        raise FileNotFoundError(
+            f"rbridge_local: trace file not found at {jsonl_path}. "
+            "Run generate_traces.py and rsync results to data/titaneval/rbridge_data/."
+        )
+    return load_dataset("json", data_files={"test": str(jsonl_path)})
+
+
 def _load_titaneval_dataset(task_name: str) -> DatasetDict:
     """Load a titaneval task from the local parquet copy in data/titaneval/.
 
@@ -893,6 +905,12 @@ class LightevalTask:
 
         if task.dataset_path == "titaneval_local":
             dataset = _load_titaneval_dataset(task.dataset_config_name)
+            if task.dataset_filter is not None:
+                dataset = dataset.filter(task.dataset_filter)
+            return dataset  # type: ignore
+
+        if task.dataset_path == "rbridge_local":
+            dataset = _load_rbridge_dataset(task.dataset_config_name)
             if task.dataset_filter is not None:
                 dataset = dataset.filter(task.dataset_filter)
             return dataset  # type: ignore

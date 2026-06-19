@@ -583,6 +583,7 @@ class VLLMModel(LightevalModel):
                 argmax_doc = []
                 output_tokens_doc = []
                 input_tokens_doc = []
+                per_token_logprobs_doc = []
 
                 for output, context, continuation in zip(
                     outputs_doc, tokenized_contexts_doc, tokenized_continuations_doc
@@ -593,6 +594,7 @@ class VLLMModel(LightevalModel):
 
                     bool_score = all(logprob.rank == 1 for logprob in continuation_logprobs)
                     continuation_logprobs = [logprob.logprob for logprob in continuation_logprobs]
+                    per_token_logprobs_doc.append(list(reversed(continuation_logprobs)))
                     continuation_logprobs = sum(continuation_logprobs)
                     logprobs_doc.append(continuation_logprobs)
                     argmax_doc.append(bool_score)
@@ -605,6 +607,7 @@ class VLLMModel(LightevalModel):
                     output_tokens=output_tokens_doc,
                     logprobs=logprobs_doc,
                     argmax_logits_eq_gold=argmax_doc,
+                    per_token_logprobs=per_token_logprobs_doc,
                 )
                 res.append(answer)
                 flat_index += len(doc.choices)
@@ -765,11 +768,13 @@ class AsyncVLLMModel(VLLMModel):
                 continuation_logprobs.append(logprobs[token])
             bool_score = all(logprob.rank == 1 for logprob in continuation_logprobs)
             continuation_logprobs = [logprob.logprob for logprob in continuation_logprobs]
+            per_token_logprobs = list(reversed(continuation_logprobs))
             answer = ModelResponse(
                 input_tokens=input.tokenized_context + input.tokenized_continuation,
                 output_tokens=input.tokenized_continuation,
                 logprobs=sum(continuation_logprobs),
                 argmax_logits_eq_gold=bool_score,
+                per_token_logprobs=[per_token_logprobs],
             )
             results.append(answer)
 

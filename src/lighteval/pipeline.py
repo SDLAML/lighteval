@@ -374,6 +374,22 @@ class Pipeline:
         #             (doc1, response1), (doc2, response2), ...,
         #         ]
         logger.info("--- COMPUTING METRICS ---")
+        # Inject proxy tokenizer for rBridge metric (no-op if not used)
+        try:
+            from transformers import PreTrainedTokenizerBase
+            from lighteval.metrics.sample_preparator import RBridgePreparator
+            if hasattr(self, "model"):
+                # litellm exposes _hf_tokenizer (a real HF tok) and tokenizer (litellm.encode).
+                # transformers exposes tokenizer directly as a HF tok.
+                tok = getattr(self.model, "_hf_tokenizer", None)
+                if tok is None:
+                    raw = getattr(self.model, "tokenizer", None)
+                    if isinstance(raw, PreTrainedTokenizerBase):
+                        tok = raw
+                if tok is not None:
+                    RBridgePreparator.set_tokenizer(tok)
+        except Exception:
+            pass
         task_metric_category_groups = collections.defaultdict(lambda: collections.defaultdict(list))
 
         for sampling_method, model_responses in sampling_method_responses.items():

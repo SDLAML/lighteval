@@ -133,6 +133,8 @@ class ModelResponse:
     argmax_logits_eq_gold: list[bool] = field(default_factory=list)  # Whether the argmax logits match the gold text
     logits: list[list[float]] | None = None  # Logits of the response, if applicable
     unconditioned_logprobs: list[float] | None = None  # Log probabilities of the unconditioned model (if applicable)
+    # Per-token logprobs, one list per choice (populated only when requested, e.g. rBridge metric)
+    per_token_logprobs: list[list[float]] | None = None
 
     # Other metadata
     truncated_tokens_count: int = 0  # How many tokens truncated
@@ -154,6 +156,7 @@ class ModelResponse:
             argmax_logits_eq_gold=[self.argmax_logits_eq_gold[index]] if self.argmax_logits_eq_gold else [],
             logits=[self.logits[index]] if self.logits else None,
             unconditioned_logprobs=[self.unconditioned_logprobs[index]] if self.unconditioned_logprobs else None,
+            per_token_logprobs=[self.per_token_logprobs[index]] if self.per_token_logprobs else None,
             truncated_tokens_count=self.truncated_tokens_count,
             padded_tokens_count=self.padded_tokens_count,
         )
