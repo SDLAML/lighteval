@@ -1,6 +1,5 @@
 import os
 
-from lighteval.utils.language import Language
 os.environ["LIGHTEVAL_DISABLE_PREDICTION_CACHE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
 # os.environ["GIT_PYTHON_GIT_EXECUTABLE"] = "" # set wherever module load git points to
@@ -14,6 +13,7 @@ from pathlib import Path
 
 from langcodes import standardize_tag
 
+from lighteval.utils.language import Language
 from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.models.abstract_model import GenerationParameters
 from lighteval.models.vllm.vllm_model import VLLMModelConfig
