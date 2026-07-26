@@ -90,16 +90,19 @@ class TinyCorpusAggregator(SampleLevelComputation, CorpusLevelComputation):
         self.num_samples = 0
 
     def download(self):
-        # Likely to crash in // processes if we don't include the pkl
-        path_dld = os.path.join(pathlib.Path(__file__).parent.resolve(), "tinyBenchmarks.pkl")
-        # Downloading files
+        path_dld = os.path.join(
+            pathlib.Path(__file__).parent.resolve(),
+            "tinyBenchmarks.pkl",
+        )
         if not os.path.isfile(path_dld):
+            if os.environ.get("HF_HUB_OFFLINE") == "1":
+                return
+
             url = "https://raw.githubusercontent.com/felipemaiapolo/tinyBenchmarks/main/tinyBenchmarks/tinyBenchmarks.pkl"
-            response = requests.get(url)
-            if response.status_code == 200:
-                # Write the content to a file
-                with open(path_dld, "wb") as file:
-                    file.write(response.content)
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            with open(path_dld, "wb") as file:
+                file.write(response.content)
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
         if self.task == "gsm8k":
