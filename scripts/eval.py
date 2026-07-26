@@ -1,13 +1,18 @@
 import os
+
+from lighteval.utils.language import Language
 os.environ["LIGHTEVAL_DISABLE_PREDICTION_CACHE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
 # os.environ["GIT_PYTHON_GIT_EXECUTABLE"] = "" # set wherever module load git points to
-os.environ["VLLM_PLUGINS"] = "register_staging_moellama"
+# os.environ["VLLM_PLUGINS"] = "register_staging_moellama"
+os.environ["VLLM_PLUGINS"] = "register_opt_moe"
 
 import gc
 import re
 import subprocess
 from pathlib import Path
+
+from langcodes import standardize_tag
 
 from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.models.abstract_model import GenerationParameters
@@ -24,9 +29,10 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ######## GENERAL CONFIGURATION  ########
 
-SUBDIR_PREFIX = "test-"
-ENFORCE_EAGER_MODELS = ['Trinity']
-HF_BACKEND_MODELS = ['granite', 'Ministral', 'Falcon', 'Apertus']
+SUBDIR_PREFIX = ""
+RESULTS_DIR_NAME = None  # Override the task name in the results path (e.g. "global_mmlu_multilingual")
+ENFORCE_EAGER_MODELS = ['Trinity', 'granite', 'LFM2'] # models for which we want to enforce eager mode in vLLM (e.g. due to OOMs in non-eager mode)
+HF_BACKEND_MODELS = ['Ministral'] # 'Ministral', 'OLMoE', 'granite', 'Falcon', 'Apertus' , 'marin', 'salamandra', 'EuroLLM', 'Gaperon'
 BATCH_SIZE = 32 # only used for HF backend
 DP_SIZE = 4 # only used for vLLM backend
 
@@ -39,6 +45,7 @@ TOP_P = None
 MAX_MODEL_LENGTH = 4096
 MAX_NEW_TOKENS = None
 MAX_SAMPLES = None
+BOOTSTRAP_ITERS = 0 # Set >0 to compute stderr via bootstrap.
 SKIP_SPECIAL_TOKENS = True # vllm default
 SPACES_BETWEEN_SPECIAL_TOKENS = True # vllm default
 
@@ -140,6 +147,7 @@ def eval_one(model_name: str, tasks: str):
         launcher_type= ParallelismManager.VLLM if backend == "vllm" else ParallelismManager.ACCELERATE,
         load_tasks_multilingual=True,
         max_samples=MAX_SAMPLES,
+        bootstrap_iters=BOOTSTRAP_ITERS,
     )
 
     model_cfg_kwargs = dict(
