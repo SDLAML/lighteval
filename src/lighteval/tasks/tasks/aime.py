@@ -56,7 +56,9 @@ def aime_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=MATH_PROMPT_TEMPLATE.format(prompt=line["problem"]),
-        choices=[line["answer"]],
+        # MathArena's AIME-2026 answers are integers, while lighteval's
+        # generation metrics normalize answer choices as strings.
+        choices=[str(line["answer"])],
         gold_index=0,
     )
 
@@ -155,9 +157,27 @@ aime25_gpassk = LightevalTaskConfig(
     version=1,
 )
 
+aime26 = LightevalTaskConfig(
+    name="aime26",
+    prompt_function=aime_prompt,
+    sample_fields=record_to_sample,
+    solver=[prompt_template(MATH_PROMPT_TEMPLATE), generate(cache=True)],
+    scorer=math_scorer(),
+    hf_repo="MathArena/aime_2026",
+    hf_subset="default",
+    hf_avail_splits=["train"],
+    evaluation_splits=["train"],
+    few_shots_split=None,
+    few_shots_select=None,
+    generation_size=None,
+    metrics=[Metrics.pass_at_k_math(sample_params={"k": 1, "n": 10})],
+    version=1,
+)
+
 TASKS_TABLE = [
     aime24,
     aime24_gpassk,
     aime25,
     aime25_gpassk,
+    aime26,
 ]
