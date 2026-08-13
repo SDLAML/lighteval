@@ -169,7 +169,7 @@ aime26 = LightevalTaskConfig(
     evaluation_splits=["train"],
     few_shots_split=None,
     few_shots_select=None,
-    generation_size=None,
+    generation_size=32768,
     metrics=[Metrics.pass_at_k_math(sample_params={"k": 1, "n": 10})],
     version=1,
 )
