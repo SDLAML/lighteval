@@ -89,6 +89,20 @@ _LANGUAGES = [
     Language.VIETNAMESE,
 ]
 
+
+# m_arc uses the ISO 639-1 code for Norwegian Bokmål (``nb``), whereas
+# ``standardize_tag(Language.NORWEGIAN.value)`` produces the generic
+# Norwegian code (``no``). Keep the LightEval task identifier as ``nor`` and
+# only override the dataset configuration passed to Hugging Face.
+_M_ARC_SUBSET_OVERRIDES = {
+    Language.NORWEGIAN: "nb",
+}
+
+
+def _m_arc_subset(language: Language) -> str:
+    return _M_ARC_SUBSET_OVERRIDES.get(language, standardize_tag(language.value))
+
+
 def _m_arc_adapter(line):
     raw_choices = [line.get(f"option_{letter}") for letter in "abcde"]
     choices = [c for c in raw_choices if c is not None]
@@ -107,7 +121,7 @@ TASKS_TABLE = [
             formulation=formulation,
         ),
         hf_repo="alexandrainst/m_arc",
-        hf_subset=standardize_tag(language.value),
+        hf_subset=_m_arc_subset(language),
         evaluation_splits=("test",),
         few_shots_split="train",
         metrics=metrics,
@@ -129,7 +143,7 @@ TASKS_TABLE += [
             formulation=MCFFormulation(),
         ),
         hf_repo="alexandrainst/m_arc",
-        hf_subset=standardize_tag(language.value),
+        hf_subset=_m_arc_subset(language),
         evaluation_splits=("test",),
         few_shots_split="train",
         generation_size=1,
