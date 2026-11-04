@@ -66,13 +66,16 @@ def truthful_qa_multiple_choice_prompt(line, task_name: str = None):
 
 
 def truthful_qa_generative_prompt(line, task_name: str = None):
+    """Generate an answer and score normalized F1/EM against dataset-provided correct references."""
     correct_answers = [
-        answer.strip() + "" if answer[-1] == "." else "." for answer in line["correct_answers"] if answer != ""
+        answer.strip() + ("" if answer.strip().endswith(".") else ".")
+        for answer in line["correct_answers"]
+        if answer.strip()
     ]
-    if "I have no comment." not in correct_answers:
-        correct_answers.append("I have no comment.")
     incorrect_answers = [
-        answer.strip() + "" if answer[-1] == "." else "." for answer in line["incorrect_answers"] if answer != ""
+        answer.strip() + ("" if answer.strip().endswith(".") else ".")
+        for answer in line["incorrect_answers"]
+        if answer.strip()
     ]
 
     return Doc(
@@ -94,9 +97,9 @@ truthfulqa_gen = LightevalTaskConfig(
     few_shots_split=None,
     few_shots_select=None,
     generation_size=200,
-    metrics=[Metrics.exact_match],
+    metrics=[Metrics.qa_f1, Metrics.qa_em],
     stop_sequence=["\n"],
-    version=0,
+    version=1,
 )
 
 truthfulqa_mc = LightevalTaskConfig(
