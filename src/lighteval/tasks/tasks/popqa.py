@@ -37,7 +37,7 @@ def popqa_gen_prompt(line, task_name: str = None):
     # query already ends with a space, so the gold continuation needs no extra prefix
     return Doc(
         task_name=task_name,
-        query=f"{line['question']} ",
+        query=f"Question: {line['question']}\nAnswer: ",
         choices=list(answers),
         gold_index=list(range(len(answers))),
     )
