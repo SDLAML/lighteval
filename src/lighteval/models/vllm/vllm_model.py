@@ -40,8 +40,6 @@ from lighteval.tasks.requests import Doc, SamplingMethod
 from lighteval.utils.cache_management import SampleCache, cached
 from lighteval.utils.imports import is_package_available, requires
 
-from vllm.inputs.data import TokensPrompt
-
 logger = logging.getLogger(__name__)
 
 
@@ -54,8 +52,14 @@ if is_package_available("vllm"):
         destroy_distributed_environment,
         destroy_model_parallel,
     )
-    from vllm.transformers_utils.tokenizer import get_tokenizer
-    from vllm.v1.engine.async_llm import AsyncEngineArgs, AsyncLLM
+    from vllm.engine.arg_utils import AsyncEngineArgs
+    from vllm.inputs import TokensPrompt
+    from vllm.v1.engine.async_llm import AsyncLLM
+
+    try:
+        from vllm.tokenizers import get_tokenizer
+    except ImportError:  # vLLM < 0.19
+        from vllm.transformers_utils.tokenizer import get_tokenizer
 
     logging.getLogger("vllm").propagate = True
     logging.getLogger("vllm").handlers.clear()
@@ -69,7 +73,7 @@ else:
     LLM = SamplingParams = get_tokenizer = distribute = destroy_distributed_environment = (
         destroy_model_parallel
     ) = Mock()
-    AsyncLLM = AsyncEngineArgs = RequestOutput = ray = Mock()
+    AsyncLLM = AsyncEngineArgs = RequestOutput = TokensPrompt = ray = Mock()
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -126,7 +130,7 @@ class VLLMModelConfig(ModelConfig):
         load_format (str | None):
             The format of the model weights to load. choices: auto, pt, safetensors, npcache, dummy, tensorizer, sharded_state, gguf, bitsandbytes, mistral, runai_streamer.
         swap_space (PositiveInt):
-            CPU swap space size in GiB per GPU. Defaults to 4.
+            Legacy option retained for configuration compatibility. Unused by the V1 engine.
         seed (NonNegativeInt):
             Random seed for reproducibility. Defaults to 1234.
         trust_remote_code (bool):
@@ -186,7 +190,7 @@ class VLLMModelConfig(ModelConfig):
     )
     quantization: str | None = None
     load_format: str | None = None
-    swap_space: PositiveInt = 4  # CPU swap space size (GiB) per GPU.
+    swap_space: PositiveInt = 4  # Legacy option; unused by the V1 engine.
     seed: NonNegativeInt = 1234
     trust_remote_code: bool = False
     add_special_tokens: bool = True
@@ -288,7 +292,6 @@ class VLLMModel(LightevalModel):
             "tensor_parallel_size": config.tensor_parallel_size,
             "pipeline_parallel_size": config.pipeline_parallel_size,
             "max_model_len": self._max_length,
-            "swap_space": 4,
             "seed": int(config.seed),
             "max_num_seqs": int(config.max_num_seqs),
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
@@ -320,7 +323,7 @@ class VLLMModel(LightevalModel):
         # Inferring from the tokenizer will cause vllm to bug for models with mismatches between model
         # config and tk config, like mistralai/Mistral-7B-v0.1
         if self._max_length is None:
-            self._max_length = model.llm_engine.model_config.max_seq_len_to_capture
+            self._max_length = model.llm_engine.model_config.max_model_len
 
         return model
 
@@ -446,22 +449,24 @@ class VLLMModel(LightevalModel):
         """Contains the actual logic of the generation."""
         # Wrap inputs with TokensPrompt to make compatible with VLLM >= 0.10.2
         inputs = [TokensPrompt(prompt_token_ids=token_ids) for token_ids in inputs]
-        sampling_params = SamplingParams(**self.config.generation_parameters.to_vllm_dict())
+        sampling_kwargs = self.config.generation_parameters.to_vllm_dict()
 
         if generate:
-            sampling_params.n = num_samples
-            sampling_params.max_tokens = max_new_tokens
-            sampling_params.stop = stop_tokens
-            sampling_params.logprobs = 1 if returns_logits else 0
-            if num_samples > 1 and sampling_params.temperature == 0:
+            sampling_kwargs.update(
+                n=num_samples, max_tokens=max_new_tokens, stop=stop_tokens, logprobs=1 if returns_logits else 0
+            )
+            if num_samples > 1 and sampling_kwargs.get("temperature", 0) == 0:
                 raise ValueError(
                     "num_samples > 1 is not supported with temperature=0, please set temperature > 0 or use non sampling metrics."
                 )
         else:
-            sampling_params.temperature = 0
-            sampling_params.prompt_logprobs = 1
-            sampling_params.max_tokens = 1
-            sampling_params.detokenize = False
+            sampling_kwargs.update(
+                temperature=0, prompt_logprobs=1, max_tokens=1, min_tokens=0, detokenize=False, stop=None
+            )
+
+        # vLLM derives stop-string buffering and prefix-cache behavior in __post_init__.
+        # Set all request options before constructing SamplingParams.
+        sampling_params = SamplingParams(**sampling_kwargs)
 
         if self.data_parallel_size > 1:
             # dispatch requests to all self.data_parallel_size workers, in interleaved fashion
@@ -627,6 +632,9 @@ class AsyncVLLMModel(VLLMModel):
     is_async = True
 
     def cleanup(self):
+        if self.model is not None:
+            self.model.shutdown()
+            self.model = None
         gc.collect()
         destroy_distributed_environment()
         torch.cuda.empty_cache()
@@ -647,7 +655,6 @@ class AsyncVLLMModel(VLLMModel):
             "data_parallel_size": config.data_parallel_size,
             "pipeline_parallel_size": config.pipeline_parallel_size,
             "max_model_len": self._max_length,
-            "swap_space": 4,
             "seed": int(config.seed),
             "max_num_seqs": int(config.max_num_seqs),
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
@@ -661,7 +668,7 @@ class AsyncVLLMModel(VLLMModel):
 
         # If the max_length can't get extracted from the config, it will be inferred from the model
         if self._max_length is None:
-            self._max_length = model.model_config.max_seq_len_to_capture
+            self._max_length = model.model_config.max_model_len
 
         return model
 
@@ -672,28 +679,28 @@ class AsyncVLLMModel(VLLMModel):
         generative: bool,
     ) -> Coroutine[None, list, str]:
         """Contains the actual logic of the generation."""
-        sampling_params = SamplingParams(**self.config.generation_parameters.to_vllm_dict())
+        sampling_kwargs = self.config.generation_parameters.to_vllm_dict()
 
         if not generative:
-            sampling_params.temperature = 0
-            sampling_params.prompt_logprobs = 1
-            sampling_params.max_tokens = 1
-            sampling_params.detokenize = False
+            sampling_kwargs.update(
+                temperature=0, prompt_logprobs=1, max_tokens=1, min_tokens=0, detokenize=False, stop=None
+            )
             prompt = self.prompt_manager.prepare_prompt(doc) + doc.choice
             index_str = f"logprob_{index}"
         else:
-            sampling_params.n = doc.num_samples
-            if sampling_params.n > 1:
+            sampling_kwargs["n"] = doc.num_samples
+            if doc.num_samples > 1:
                 # Todo clementine: investigate more
                 logger.warning(
                     "Careful, there can be unexpected behavior when using sampling evals with the async vllm model"
                 )
-            sampling_params.max_tokens = self.config.generation_parameters.max_new_tokens or doc.generation_size
-            sampling_params.stop = [] if self.use_chat_template else doc.stop_sequences
-            sampling_params.logprobs = int(doc.use_logits)
+            sampling_kwargs["max_tokens"] = self.config.generation_parameters.max_new_tokens or doc.generation_size
+            sampling_kwargs["stop"] = [] if self.use_chat_template else doc.stop_sequences
+            sampling_kwargs["logprobs"] = int(doc.use_logits)
             prompt = self.prompt_manager.prepare_prompt(doc)
             index_str = f"generative_{index}"
 
+        sampling_params = SamplingParams(**sampling_kwargs)
         generator = self.model.generate(request_id=index_str, prompt=prompt, sampling_params=sampling_params)
         try:
             while output := await anext(generator):

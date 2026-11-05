@@ -168,11 +168,10 @@ class JudgeLM:
                 raise_if_package_not_available("vllm")
                 if self.pipe is None:
                     from vllm import LLM, SamplingParams
-                    from vllm.transformers_utils.tokenizer import get_tokenizer
 
                     self.sampling_params = SamplingParams(temperature=0.8, top_p=0.95, max_tokens=self.max_tokens)
-                    self.tokenizer = get_tokenizer(self.model, tokenizer_mode="auto")
                     self.pipe = LLM(model=self.model, gpu_memory_utilization=0.8, dtype="float16")
+                    self.tokenizer = self.pipe.get_tokenizer()
                 return self.__call_vllm
 
             case "transformers":
@@ -295,8 +294,10 @@ class JudgeLM:
         return response
 
     def __call_vllm(self, prompt):
-        tokenized = [self.tokenizer.apply_chat_template(p) for p in prompt]
-        output = self.pipe.generate(prompt_token_ids=tokenized, sampling_params=self.sampling_params, use_tqdm=True)
+        from vllm.inputs import TokensPrompt
+
+        tokenized = [TokensPrompt(prompt_token_ids=self.tokenizer.apply_chat_template(p)) for p in prompt]
+        output = self.pipe.generate(tokenized, sampling_params=self.sampling_params, use_tqdm=True)
         outputs = [output.outputs[0].text for output in output]
         return outputs
 
