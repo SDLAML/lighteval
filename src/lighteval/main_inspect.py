@@ -81,8 +81,11 @@ def get_inspect_ai_task(
             sample_fields=sample_fields,
             shuffle=True,
             seed=42,
-            limit=lighteval_task_config.num_fewshots,
+            # Filter before limiting so examples come from the selected subtask.
+            limit=None if lighteval_task_config.filter is not None else lighteval_task_config.num_fewshots,
         )
+        if lighteval_task_config.filter is not None:
+            fewshots = fewshots.filter(lighteval_task_config.filter)[: lighteval_task_config.num_fewshots]
         solver.insert(
             0,
             system_message("\n\n".join([lighteval_task_config.sample_to_fewshot(sample) for sample in fewshots])),

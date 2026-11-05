@@ -297,17 +297,21 @@ class Registry:
             ``mmlu``                  → all mmlu tasks  (all subsets × all metrics)
             ``mmlu:abstract_algebra`` → all metrics for that subset
             ``mmlu:cf``               → all subsets for that metric
+
+        Deeper names expose every hierarchy prefix and the same variant alias,
+        e.g. ``supergpqa:engineering:hard:cf`` belongs to ``supergpqa``,
+        ``supergpqa:engineering``, ``supergpqa:engineering:hard``, and ``supergpqa:cf``.
         """
         superset_dict: dict[str, list[str]] = collections.defaultdict(list)
 
         for task in sorted(self._task_registry.keys()):
             parts = task.split(":")
-            # top-level prefix always gets a key (works for 2-part and 3-part)
             superset_dict[parts[0]].append(task)
-            if len(parts) == 3:
-                a, b, c = parts
-                superset_dict[f"{a}:{b}"].append(task)  # e.g. mmlu:abstract_algebra
-                superset_dict[f"{a}:{c}"].append(task)  # e.g. mmlu:cf
+            if len(parts) >= 3:
+                keys = {":".join(parts[:depth]) for depth in range(2, len(parts))}
+                keys.add(f"{parts[0]}:{parts[-1]}")  # e.g. mmlu:cf
+                for key in keys:
+                    superset_dict[key].append(task)
 
         # Only expose keys that map to more than one task
         return {k: v for k, v in superset_dict.items() if len(v) > 1}
