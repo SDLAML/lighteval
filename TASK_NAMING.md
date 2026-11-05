@@ -161,6 +161,30 @@ mmlu:abstract_algebra:cf|5        # single subject
 mmlu|5                            # all 57 × 3 variants
 ```
 
+### MMLU-CF
+
+| Dataset | Eval | FS | ICL |
+|---|---|---|---|
+| `microsoft/MMLU-CF` (default) | `{Category}_val` | `{Category}_dev` | 5 |
+
+Uses the dataset's 14 category splits: `biology`, `business`, `chemistry`,
+`computer_science`, `economics`, `engineering`, `health`, `history`, `law`,
+`math`, `other`, `philosophy`, `physics`, `psychology`.
+Evaluation uses the public validation questions; the test set is private.
+The published category development splits all contain the same five examples.
+The `mmlu_cf` task prefix identifies the dataset; the `:cf` suffix still means
+completion-format scoring, as with other multiple-choice tasks.
+
+```bash
+mmlu_cf:cf|5                       # all 14 categories
+mmlu_cf:mcf|5
+mmlu_cf:mcf_em|5
+mmlu_cf:chat|0                     # MMLU-style reasoning + answer extraction
+mmlu_cf:biology:cf|5               # single category
+mmlu_cf:computer_science:mcf|5
+mmlu_cf|5                          # all 14 categories x 4 variants
+```
+
 ### MMLU-Pro
 
 | Dataset | Eval | FS | ICL | Notes |
@@ -173,6 +197,27 @@ mmlu_pro:mcf|5
 mmlu_pro:mcf_em|5
 mmlu_pro:cot|5                    # chain-of-thought + extractive match (separate config)
 ```
+
+### R-Bench (text only)
+
+Dataset: [R-Bench/R-Bench](https://huggingface.co/datasets/R-Bench/R-Bench).
+`rbench:en` uses `rbench-t_en`; `rbench:zh` uses `rbench-t_zh`. Both are
+available without `--load-multilingual`. No multimodal subsets are registered.
+
+Each subset has 1,094 test rows with six options (A–F). Rows without a single
+valid answer letter are excluded in both LightEval and Inspect: question 236
+is labeled `E\n\nF` in both subsets, leaving 1,093 evaluation questions per
+language in the current release. Use `|0`; requesting few-shots draws from
+the same test split because no separate few-shot split exists.
+
+```bash
+rbench:en:cf|0             # answer-text logprobs: acc, acc_norm, target_bpb
+rbench:zh:mcf|0            # answer-letter logprobs: acc, acc_norm
+rbench:en:mcf_em|0         # generate a letter: exact match
+rbench:zh:cot|0            # reasoning + final Answer: LETTER: extractive match
+rbench:mcf|0               # both text subsets, one variant
+```
+
 
 ### ARC
 
