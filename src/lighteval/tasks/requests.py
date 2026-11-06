@@ -214,6 +214,10 @@ class Doc:
     num_samples: int = 1  # number of samples to generate for each sample
     generation_grammar: None = None
 
+    # Dataset split and row index within a task, independent of evaluation/few-shot formatting.
+    # All documents from a multi-turn row share this identity to avoid leaking later turns.
+    source_id: tuple[str, int] | None = field(default=None, compare=False)
+
     def get_golds(self):
         """Return gold targets extracted from the target dict"""
         gold_indices = as_list(self.gold_index)

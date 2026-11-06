@@ -236,8 +236,22 @@ class FewShotSampler:
         self._init_fewshot_pool(num_fewshot=num_fewshot, variance_seed=variance_seed)
         samples = self._sample_from_pool(num_fewshot=num_fewshot, variance_seed=variance_seed, sampler=sampler)
 
-        # get rid of the doc that's the one we're evaluating, if it's in the fewshot
-        return [x for x in samples if x != formatted_doc][:num_fewshot]
+        # Source identity survives task metadata changes and different few-shot formatting.
+        # Also reject matching content, including duplicates at different dataset positions.
+        return [
+            sample
+            for sample in samples
+            if formatted_doc is None or not self._is_same_example(sample, formatted_doc)
+        ][:num_fewshot]
+
+    @staticmethod
+    def _is_same_example(sample: Doc, formatted_doc: Doc) -> bool:
+        if sample.source_id is not None and sample.source_id == formatted_doc.source_id:
+            return True
+        # Answer prefixes often differ only by whitespace between evaluation and few-shots.
+        return sample.query.strip() == formatted_doc.query.strip() and [
+            choice.strip() for choice in sample.choices
+        ] == [choice.strip() for choice in formatted_doc.choices]
 
     def _init_fewshot_pool(
         self,
@@ -257,13 +271,19 @@ class FewShotSampler:
 
     def _sample_from_pool(self, variance_seed: int, num_fewshot: int, sampler: random.Random) -> list:
         if self.few_shots_select.value.with_sampling and sampler is not None:
-            if self.few_shots_select.value.fewshotpool_unique:
+            if (
+                self.few_shots_select.value.fewshotpool_unique
+                and self.few_shots_split is not None
+                and self.few_shots_split not in self.task.evaluation_split
+            ):
                 # This functionality is here for compatibility with the harness few shot system.
                 # It assumes (in some cases) that there is no intersection between the few shot pool and the actual
                 # eval examples, and therefore samples only `num_fewshot` (see Task.fewshot_examples)
                 return sampler.sample(self._fewshot_cache[variance_seed], num_fewshot)
-            else:  # we don't reach this yet but let's add it for future use cases
-                return sampler.sample(self._fewshot_cache[variance_seed], num_fewshot + 1)
+            else:
+                # Draw an extra candidate for exclusion only when the pool is large enough.
+                pool = self._fewshot_cache[variance_seed]
+                return sampler.sample(pool, min(num_fewshot + 1, len(pool)))
         else:
             return self._fewshot_cache[variance_seed]
 

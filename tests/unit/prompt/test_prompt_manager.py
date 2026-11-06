@@ -57,3 +57,79 @@ def test_fewshot_sampler(fewshot_select: str):
             task_docs = task.fewshot_docs()
             rnd.shuffle(task_docs)
             assert docs == task_docs[:20]
+
+
+@pytest.mark.parametrize("pool_size", [0, 1, 4, 5, 6, 20])
+@pytest.mark.parametrize("eval_in_pool", [False, True])
+def test_random_fewshot_sampler_small_pools(pool_size: int, eval_in_pool: bool):
+    config = LightevalTaskConfig(
+        name="test_fewshot_task",
+        prompt_function=lambda _, __: None,
+        hf_repo="",
+        hf_subset="default",
+        metrics=[],
+        few_shots_split="test",
+        few_shots_select="random_sampling",
+    )
+    task = LightevalTask(config)
+    task._fewshot_docs = [Doc(str(i), ["A", "B"], 0) for i in range(pool_size)]
+    eval_doc = Doc("0" if eval_in_pool else "evaluation", ["A", "B"], 0)
+    sampler = FewShotSampler(task)
+
+    samples = sampler.sample_fewshot_examples(5, 0, sampler=random.Random(42), formatted_doc=eval_doc)
+
+    eligible = [doc for doc in task._fewshot_docs if doc != eval_doc]
+    assert len(samples) == min(5, len(eligible))
+    assert eval_doc not in samples
+    assert all(doc in eligible for doc in samples)
+    assert len({doc.query for doc in samples}) == len(samples)
+    assert samples == sampler.sample_fewshot_examples(5, 0, sampler=random.Random(42), formatted_doc=eval_doc)
+
+    # Preserve the existing seeded draw for pools that already have enough candidates.
+    if pool_size >= 6:
+        candidates = random.Random(42).sample(task._fewshot_docs, 6)
+        assert samples == [doc for doc in candidates if doc != eval_doc][:5]
+
+
+@pytest.mark.parametrize("pool_size", [1, 3, 4, 6, 20])
+@pytest.mark.parametrize("fewshot_select", ["random_sampling", "balanced", "sequential", "random"])
+def test_get_docs_excludes_current_question(pool_size: int, fewshot_select: str):
+    config = LightevalTaskConfig(
+        name="test_fewshot_task",
+        prompt_function=lambda row, task_name: Doc(row["question"], ["A", "B"], 0, task_name=task_name),
+        hf_repo="",
+        hf_subset="default",
+        metrics=[],
+        evaluation_splits=["test"],
+        few_shots_split="test",
+        few_shots_select=fewshot_select,
+        num_fewshots=5,
+    )
+    task = LightevalTask(config)
+    task.dataset = {"test": [{"question": str(i)} for i in range(pool_size)]}
+
+    # Repeated preparation also changes metadata such as fewshot_samples.
+    for _ in range(2):
+        docs = task.get_docs()
+        for doc in docs:
+            assert len(doc.fewshot_samples) == min(5, pool_size - 1)
+            assert all(sample.query != doc.query for sample in doc.fewshot_samples)
+
+
+def test_fewshot_exclusion_preserves_different_choices():
+    config = LightevalTaskConfig(
+        name="test_fewshot_task",
+        prompt_function=lambda _, __: None,
+        hf_repo="",
+        hf_subset="default",
+        metrics=[],
+        few_shots_split="test",
+        few_shots_select="random_sampling",
+    )
+    task = LightevalTask(config)
+    candidate = Doc("Pick the correct option", ["A", "B"], 0)
+    task._fewshot_docs = [candidate]
+    eval_doc = Doc("Pick the correct option", ["C", "D"], 0)
+    assert task.fewshot_sampler.sample_fewshot_examples(
+        1, 0, sampler=random.Random(42), formatted_doc=eval_doc
+    ) == [candidate]
