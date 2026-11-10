@@ -218,6 +218,37 @@ rbench:zh:cot|0            # reasoning + final Answer: LETTER: extractive match
 rbench:mcf|0               # both text subsets, one variant
 ```
 
+### KINA
+
+Dataset: [2077AIDataFoundation/KINA](https://huggingface.co/datasets/2077AIDataFoundation/KINA)
+(`default` config, `test` split). All 899 questions have ten choices (A–J).
+Prompts use the question and option answers; option explanations are excluded.
+Use `|0`; requesting few-shots draws from the same test split because there is
+no separate few-shot split.
+
+```bash
+kina:cf|0                 # all 12 disciplines: acc, acc_norm, target_bpb
+kina:mcf|0                # all 12 disciplines: answer-letter acc, acc_norm
+kina:mcf_em|0             # all 12 disciplines: generate a letter, exact match
+kina:cot|0                # all 12 disciplines: reasoning + answer extraction
+kina:engineering:mcf|0    # single root discipline and variant
+kina:law:cot|0
+kina:literature_and_arts:cf|0
+kina:engineering|0        # all four variants for Engineering
+```
+
+Tasks are split by the first component of the dataset's `discipline` path.
+The 12 roots are `agronomy`, `economics`, `education`, `engineering`, `history`,
+`law`, `literature_and_arts`, `management`, `medicine`, `philosophy`, `science`,
+and `sociology`. LightEval and Inspect filter evaluation and optional few-shot
+examples to the selected root. Selectors such as `kina:mcf` expand to all 12
+discipline tasks, following the MMLU naming convention.
+
+LightEval's CoT variant uses a 32,768-token output limit and single-response accuracy.
+The paper's AVG@4 results use four samples per question and different sampling
+settings, so a default run does not reproduce that evaluation protocol.
+Inspect uses its generative multiple-choice solver and choice scorer for all
+four variants, with reasoning enabled for `:cot`.
 
 ### ARC
 

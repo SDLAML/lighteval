@@ -98,6 +98,16 @@ class EnhancedJSONEncoder(json.JSONEncoder):
             return type(o).__name__
 
 
+def _detail_dict_factory(fields):
+    """Represent source identities as Arrow structs, including nested few-shot docs."""
+    result = dict(fields)
+    source_id = result.get("source_id")
+    if source_id is not None:
+        # Arrow lists cannot contain both a split name (str) and a row index (int).
+        result["source_id"] = {"split": source_id[0], "row_index": source_id[1]}
+    return result
+
+
 class EvaluationTracker:
     """Tracks and manages evaluation results, metrics, and logging for model evaluations.
 
@@ -266,8 +276,10 @@ class EvaluationTracker:
         # Create the details datasets for later upload
         details_datasets: dict[str, Dataset] = {}
         for task_name, task_details in self.details_logger.details.items():
-            # Create a dataset from the dictionary - we force cast to str to avoid formatting problems for nested objects
-            dataset = Dataset.from_list([asdict(detail) for detail in task_details])
+            # Convert source identities recursively without changing the live documents.
+            dataset = Dataset.from_list(
+                [asdict(detail, dict_factory=_detail_dict_factory) for detail in task_details]
+            )
 
             # We don't keep 'id' around if it's there
             column_names = dataset.column_names
