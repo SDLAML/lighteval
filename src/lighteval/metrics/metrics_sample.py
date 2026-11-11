@@ -74,7 +74,7 @@ class SampleLevelComputation(ABC):
         attrs = vars(self)
         attr_strs = []
         for k, v in attrs.items():
-            if callable(v):
+            if callable(v) and hasattr(v, "__name__"):
                 val_str = v.__name__
             else:
                 val_str = str(v)

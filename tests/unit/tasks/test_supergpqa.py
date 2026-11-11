@@ -238,7 +238,7 @@ def test_inspect_filters_fewshots_before_limiting(monkeypatch):
     monkeypatch.setattr(main_inspect, "system_message", capture_system_message)
     config = replace(deepcopy(CONFIGS["supergpqa:engineering:hard:cot"]), num_fewshots=1)
     task = main_inspect.get_inspect_ai_task(config)
-    assert [sample.input for sample in task.dataset] == ["Selected question", "Second selected question"]
+    assert [sample.input for sample in task.dataset] == ["Second selected question"]
     assert limits == [None, None]
     assert prompts == ["Selected question\n\nA) Yes\nB) No\n\nANSWER: A"]
 

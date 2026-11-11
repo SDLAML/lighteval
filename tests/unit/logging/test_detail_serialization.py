@@ -9,6 +9,7 @@ from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.models.dummy.dummy_model import DummyModelConfig
 from lighteval.models.model_output import ModelResponse
 from lighteval.tasks.lighteval_task import LightevalTask
+from lighteval.tasks.multilingual.tasks import simpleqa_verified
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.tasks.kina import TASKS_TABLE
 
@@ -18,6 +19,26 @@ def tracker(tmp_path):
     tracker = EvaluationTracker(output_dir=str(tmp_path), save_details=True)
     tracker.general_config_logger.log_model_info(DummyModelConfig(model_name="test-model"))
     return tracker
+
+
+@pytest.mark.parametrize(
+    "config",
+    [config for config in simpleqa_verified.TASKS_TABLE if config.name.endswith(":gen")],
+    ids=lambda config: config.name,
+)
+def test_results_save_with_partial_normalizers(tracker, tmp_path, config):
+    tracker.task_config_logger.tasks_configs = {config.name: config}
+    tracker.metrics_logger.metric_aggregated = {config.name: {metric.metric_name: 1.0 for metric in config.metrics}}
+
+    tracker.save()
+
+    result_file = next((tmp_path / "results").rglob("results_*.json"))
+    saved_results = json.loads(result_file.read_text())
+    assert saved_results["results"] == tracker.metrics_logger.metric_aggregated
+    saved_metrics = saved_results["config_tasks"][config.name]["metrics"]
+    assert len(saved_metrics) == len(config.metrics)
+    for metric in saved_metrics:
+        assert "_normalize_answer" in metric["sample_level_fn"]
 
 
 @pytest.mark.parametrize("num_fewshots", [0, 1])
