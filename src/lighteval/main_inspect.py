@@ -65,19 +65,17 @@ def get_inspect_ai_task(
     dataset = hf_dataset(dataset_repo, name=dataset_subset, split=dataset_split, sample_fields=sample_fields)
     if lighteval_task_config.filter is not None:
         dataset = dataset.filter(lighteval_task_config.filter)
-    solver = lighteval_task_config.solver or [
-        generate(cache=True),
-    ]
+    solver = list(lighteval_task_config.solver or [generate(cache=True)])
     scorers = lighteval_task_config.scorer or exact()
     # TODO: have per task epoch and epoch reducer
 
     if lighteval_task_config.num_fewshots > 0:
         name += f"_{lighteval_task_config.num_fewshots}_shots"
-        # TODO: use fewshot split
+        fewshot_split = lighteval_task_config.few_shots_split or dataset_split
         fewshots = hf_dataset(
             path=dataset_repo,
             name=dataset_subset,
-            split=dataset_split,
+            split=fewshot_split,
             sample_fields=sample_fields,
             shuffle=True,
             seed=42,
@@ -86,6 +84,15 @@ def get_inspect_ai_task(
         )
         if lighteval_task_config.filter is not None:
             fewshots = fewshots.filter(lighteval_task_config.filter)[: lighteval_task_config.num_fewshots]
+        if fewshot_split == dataset_split:
+            # A demonstration must never be evaluated with its own answer in the prompt.
+            dataset = dataset.filter(
+                lambda sample: all(
+                    sample.input != example.input or sample.choices != example.choices for example in fewshots
+                )
+            )
+            if len(dataset) == 0:
+                raise ValueError(f"Task {name} has no evaluation samples after excluding few-shot examples.")
         solver.insert(
             0,
             system_message("\n\n".join([lighteval_task_config.sample_to_fewshot(sample) for sample in fewshots])),
