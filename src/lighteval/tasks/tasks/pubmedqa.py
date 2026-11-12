@@ -40,12 +40,22 @@ _MCF_METRICS = [
 ]
 
 
+def _context(line) -> str:
+    """qiaojin/PubMedQA (the dataset this task loads) has context.contexts; the original JSON had CONTEXTS."""
+    c = line["context"]["contexts"] if "context" in line else line["CONTEXTS"]
+    return " ".join(c) if isinstance(c, list) else c
+
+
+def _question(line) -> str:
+    return line["question"] if "question" in line else line["QUESTION"]
+
+
 def pubmedqa_cf_prompt(line, task_name: str = None):
     """CF variant: score full answer text (yes/no/maybe) via logprobs."""
-    ctx = " ".join(line["CONTEXTS"]) if isinstance(line["CONTEXTS"], list) else line["CONTEXTS"]
+    ctx = _context(line)
     return Doc(
         task_name=task_name,
-        query=f"Abstract: {ctx}\nQuestion: {line['QUESTION']}\nAnswer:",
+        query=f"Abstract: {ctx}\nQuestion: {_question(line)}\nAnswer:",
         choices=[f" {c}" for c in _CHOICES],
         gold_index=_GOLD[line["final_decision"].lower()],
     )
@@ -53,11 +63,11 @@ def pubmedqa_cf_prompt(line, task_name: str = None):
 
 def pubmedqa_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled A/B/C options, score label tokens via logprobs."""
-    ctx = " ".join(line["CONTEXTS"]) if isinstance(line["CONTEXTS"], list) else line["CONTEXTS"]
+    ctx = _context(line)
     options = "\n".join(f" {l}. {c}" for l, c in zip("ABC", _CHOICES))
     return Doc(
         task_name=task_name,
-        query=f"Abstract: {ctx}\nQuestion: {line['QUESTION']}\n{options}\nAnswer:",
+        query=f"Abstract: {ctx}\nQuestion: {_question(line)}\n{options}\nAnswer:",
         choices=[" A", " B", " C"],
         gold_index=_GOLD[line["final_decision"].lower()],
     )
