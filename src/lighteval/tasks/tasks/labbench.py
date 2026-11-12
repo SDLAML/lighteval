@@ -64,9 +64,14 @@ def labbench_cf_prompt(line, task_name: str = None):
     )
 
 
+_MCF_LABELS = list("ABCDEFGH")  # rows have 4-7 options; every option gets a letter, none is dropped
+
+
 def labbench_mcf_prompt(line, task_name: str = None):
     choices, gold = _stable_choices(line)
-    labels = list("ABCD")[: len(choices)]
+    if len(choices) > len(_MCF_LABELS):
+        raise ValueError(f"labbench mcf: {len(choices)} options, only {len(_MCF_LABELS)} letters")
+    labels = _MCF_LABELS[: len(choices)]
     options = "\n".join(f" {l}. {c}" for l, c in zip(labels, choices))
     return Doc(
         task_name=task_name,

@@ -43,35 +43,51 @@ _LABELS = list("ABCDE")
 
 
 def _parse(line):
-    """Extract question and choices from embedded format '... (A) c1 (B) c2 ...'."""
+    """Extract question, choices and labels from embedded format '... (A) c1 (B) c2 ...'."""
     text = line["questions"].strip()
     m = re.search(r'\s*\(A\)', text)
     question = text[: m.start()].strip() if m else text
     raw = re.findall(r'\(([A-E])\)\s*(.*?)(?=\s*\([A-E]\)|$)', text)
     choices = [v.strip() for _, v in raw]
     labels = [k for k, _ in raw]
-    gold = labels.index(line["label"]) if line["label"] in labels else 0
-    return question, choices, labels, gold
+    return question, choices, labels
+
+
+def _has_gold(line):
+    """Keep only rows whose gold is determinable: options exist and the label names one of them.
+
+    Rows with numeric answers (no options in the text) or with a label that matches no option
+    (e.g. 'B; D') are dropped; their gold cannot be determined and must not default to A.
+    """
+    _, choices, labels = _parse(line)
+    # labels must be A, B, C, ... in order: stray '(X)' tokens inside the question text
+    # produce duplicate or out-of-order labels, and labels.index would then pick a wrong option.
+    return bool(choices) and labels == _LABELS[: len(labels)] and line["label"] in labels
+
+
+def _gold(line, labels):
+    # Only called on rows that passed _has_gold; labels.index raises ValueError otherwise.
+    return labels.index(line["label"])
 
 
 def mascqa_cf_prompt(line, task_name: str = None):
-    question, choices, _, gold = _parse(line)
+    question, choices, labels = _parse(line)
     return Doc(
         task_name=task_name,
         query=f"Question: {question}\nAnswer:",
         choices=[" " + c for c in choices],
-        gold_index=gold,
+        gold_index=_gold(line, labels),
     )
 
 
 def mascqa_mcf_prompt(line, task_name: str = None):
-    question, choices, labels, gold = _parse(line)
+    question, choices, labels = _parse(line)
     options = "\n".join(f" {l}. {c}" for l, c in zip(labels, choices))
     return Doc(
         task_name=task_name,
         query=f"Question: {question}\n{options}\nAnswer:",
         choices=[f" {l}" for l in labels],
-        gold_index=gold,
+        gold_index=_gold(line, labels),
     )
 
 
@@ -80,6 +96,7 @@ TASKS_TABLE = [
         name=f"mascqa:{suffix}",
         prompt_function=fn,
         hf_repo="heegyu/mascqa",
+        hf_filter=_has_gold,
         hf_subset="default",
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
