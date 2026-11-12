@@ -30,7 +30,11 @@ from inspect_ai.solver import TaskState
 
 from lighteval.metrics.dynamic_metrics import MultilingualExtractiveMatchMetric
 from lighteval.metrics.harness_compatibility.drop import DropMetrics
-from lighteval.metrics.harness_compatibility.truthful_qa import TruthfulqaMCMetrics
+from lighteval.metrics.harness_compatibility.truthful_qa import (
+    TRUTHFULQA_GEN_KEYS,
+    TruthfulqaGenMetrics,
+    TruthfulqaMCMetrics,
+)
 from lighteval.metrics.metrics_corpus import (
     CorpusLevelCOMETMetric,
     CorpusLevelF1Score,
@@ -813,6 +817,14 @@ class Metrics(Enum):
         category=SamplingMethod.LOGPROBS,
         corpus_level_fn={"truthfulqa_mc1": np.mean, "truthfulqa_mc2": np.mean},
         higher_is_better={"truthfulqa_mc1": True, "truthfulqa_mc2": True},
+    )
+    # lm-evaluation-harness truthfulqa_gen: BLEU / ROUGE-1/2/L max, acc (best correct > best incorrect), diff.
+    truthfulqa_gen_metrics = SampleLevelMetricGrouping(
+        metric_name=TRUTHFULQA_GEN_KEYS,
+        sample_level_fn=TruthfulqaGenMetrics(),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=dict.fromkeys(TRUTHFULQA_GEN_KEYS, np.mean),
+        higher_is_better=dict.fromkeys(TRUTHFULQA_GEN_KEYS, True),
     )
     word_perplexity = CorpusLevelMetric(
         metric_name="word_perplexity",
