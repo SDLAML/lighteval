@@ -76,9 +76,10 @@ TASKS_TABLE = [
         few_shots_split="train",
         few_shots_select="random_sampling_from_train",
         generation_size=200,
-        metrics=[Metrics.qa_f1, Metrics.qa_em],
+        # official SQuAD-style EM / F1 (article removal, Counter F1, max over aliases); version 2 (was qa_f1 / qa_em)
+        metrics=[Metrics.squad_official_f1, Metrics.squad_official_em],
         stop_sequence=["\n", ".", ","],
-        version=1,
+        version=2,
     ),
     LightevalTaskConfig(
         name="triviaqa:bpb",
