@@ -416,32 +416,33 @@ class VLLMModel(LightevalModel):
             # The choice we go for here is to avoid truncating the prompt if we can, since it
             # should have been managed by the prompt creator/few shot manager if requested by the user.
             inputs = tokenized["input_ids"]
-            context_size = len(inputs[0])
 
-            # left truncate the inputs to the maximum length
+            # Left truncate EVERY prompt to the maximum length (room for max_new_tokens kept). The number of tokens cut
+            # from each prompt is recorded per request in ModelResponse.truncated_tokens_count (0 = not truncated).
+            # (Until now only the first prompt of the split was checked and nothing was recorded.)
+            truncated_tokens = [0] * len(inputs)
             if self.max_length is None:
                 logger.warning(
                     "The model max_length was not set in the model arguments, so we cannot check if we need to truncate the context."
                 )
-            elif max_new_tokens is not None:
-                if context_size + max_new_tokens > self.max_length:
-                    logger.warning(
-                        f"{context_size + max_new_tokens=} which is greater than {self.max_length=}. Truncating context to {self.max_length - max_new_tokens} tokens."
-                    )
-                    context_size = self.max_length - max_new_tokens
-                    if context_size < 0:
-                        logger.critical(
-                            f"{context_size=} is less than 0, either reduce the max_new_tokens or increase model max length."
-                        )
-                        raise ValueError("Context size is less than 0.")
-                    inputs = [input[-context_size:] for input in inputs]
             else:
-                if context_size > self.max_length:
-                    logger.warning(
-                        f"{context_size=} which is greater than {self.max_length=}. Truncating context to {self.max_length} tokens."
+                max_prompt_size = self.max_length - (max_new_tokens or 0)
+                if max_prompt_size < 0:
+                    logger.critical(
+                        f"{max_prompt_size=} is less than 0, either reduce the max_new_tokens or increase model max length."
                     )
-                    context_size = self.max_length
-                    inputs = [input[-context_size:] for input in inputs]
+                    raise ValueError("Context size is less than 0.")
+                for i, token_ids in enumerate(inputs):
+                    if len(token_ids) > max_prompt_size:
+                        truncated_tokens[i] = len(token_ids) - max_prompt_size
+                        inputs[i] = token_ids[truncated_tokens[i] :]
+                num_truncated = sum(1 for n in truncated_tokens if n > 0)
+                if num_truncated > 0:
+                    logger.warning(
+                        f"{num_truncated} of {len(inputs)} prompts are longer than {max_prompt_size} tokens "
+                        f"({self.max_length=}, {max_new_tokens=}) and were truncated from the left "
+                        f"(up to {max(truncated_tokens)} tokens cut)."
+                    )
 
             vllm_outputs = self._generate(
                 inputs=inputs,
@@ -461,6 +462,7 @@ class VLLMModel(LightevalModel):
                     text=result,
                     output_tokens=list(output_token_ids),
                     input_tokens=input_token_ids,
+                    truncated_tokens_count=truncated_tokens[i],
                 )
                 results.append(cur_response)
 
@@ -603,9 +605,16 @@ class VLLMModel(LightevalModel):
                     tokenized_continuations_batch.append(tokenized_continuation)
                     tokenized_contexts_batch.append(tokenized_context)
 
-            # Left truncate the inputs to the maximum length
+            # Left truncate the inputs to the maximum length; the tokens cut are counted per request (context + choice)
+            truncated_tokens = [0] * len(inputs)
             if self.max_length:  # can be None if the model is initialized with ray
+                truncated_tokens = [max(0, len(input) - self.max_length) for input in inputs]
                 inputs = [input[-self.max_length :] for input in inputs]
+                if any(truncated_tokens):
+                    logger.warning(
+                        f"{sum(1 for n in truncated_tokens if n > 0)} of {len(inputs)} requests are longer than "
+                        f"{self.max_length=} tokens and were truncated from the left (up to {max(truncated_tokens)} tokens cut)."
+                    )
             outputs = self._generate(inputs, generate=False)
 
             flat_index = 0
@@ -642,6 +651,8 @@ class VLLMModel(LightevalModel):
                     logprobs=logprobs_doc,
                     argmax_logits_eq_gold=argmax_doc,
                     per_token_logprobs=per_token_logprobs_doc,
+                    # the most cut from any (context + choice) request of this doc
+                    truncated_tokens_count=max(truncated_tokens[flat_index : flat_index + len(doc.choices)], default=0),
                 )
                 res.append(answer)
                 flat_index += len(doc.choices)
