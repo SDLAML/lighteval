@@ -81,8 +81,8 @@ def winogrande_rc_prompt(line, task_name: str = None):
 
     Context = sentence prefix before blank.
     Choices = full sentence completions with each option substituted in.
-    Approximates OLMO's RC_none (partial eval) within lighteval's Doc framework:
-    computes P(option+suffix | prefix) rather than P(suffix | prefix+option).
+    This scores P(option + suffix | prefix). It is NOT OLMES's rc ("partial evaluation", which scores
+    P(suffix | prefix + option), the reverse); the fork has no variant that reproduces the OLMES rc accuracy.
     """
     sentence = line["sentence"]
     blank_pos = sentence.index("_")
