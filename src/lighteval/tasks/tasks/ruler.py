@@ -33,7 +33,7 @@ Setup:
     export TOKENIZER_PATH=/path/to/model  # or a HF model name like "meta-llama/Llama-3.1-8B"
 
 Data is generated once per tokenizer and cached under:
-    $HF_HOME/lighteval/ruler/<architecture>_<key>/<length>/<subset>/
+    $HF_HOME/lighteval/ruler/<key>/<length>/<subset>/
 
 <key> is the first 16 hex digits of a sha256 over the tokenizer CONTENT (tokenizer.json, tokenizer.model,
 vocab.json, merges.txt, added_tokens.json, special_tokens_map.json and tokenizer_config.json without its
@@ -212,10 +212,10 @@ def _get_tokenizer_hash(tokenizer_path: str) -> str:
 
 
 def _get_cache_dir(tokenizer_path: str) -> Path:
+    """$HF_HOME/lighteval/ruler/<key>. The key alone names the folder: the same tokenizer under two architecture names
+    (OptMoEForCausalLM / OptMoeForCausalLM, a renamed fork) must share it. Older folders are called <architecture>_<8 hex>."""
     hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-    arch = _get_model_arch(tokenizer_path)
-    tok_hash = _get_tokenizer_hash(tokenizer_path)
-    return Path(hf_home) / "lighteval" / "ruler" / f"{arch}_{tok_hash}"
+    return Path(hf_home) / "lighteval" / "ruler" / _get_tokenizer_hash(tokenizer_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1598,7 +1598,7 @@ def ensure_ruler_cache(
 ) -> Path:
     """Generate and cache RULER data for the given tokenizer.
 
-    Data is stored at $HF_HOME/lighteval/ruler/<architecture>_<key>/<length>/<subset>/ (key = content hash of the
+    Data is stored at $HF_HOME/lighteval/ruler/<key>/<length>/<subset>/ (key = content hash of the
     tokenizer files, see _get_tokenizer_hash) and described by manifest.json next to the length folders.
     Each subset is saved independently so evaluating one subset does not trigger
     generation of all subsets.  Already-generated (length, subset) pairs are skipped.
