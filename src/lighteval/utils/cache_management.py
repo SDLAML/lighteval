@@ -85,7 +85,9 @@ class SampleCache:
         self.model_hash = self.get_model_hash(model_config)
 
         self.cache_dir = (
-            Path(os.path.expanduser(self.model_config.cache_dir)) / self.model_config.model_name / self.model_hash
+            Path(os.path.expanduser(self.model_config.cache_dir))
+            / str(self.model_config.model_name).lstrip("/")      # an absolute model path must not escape cache_dir
+            / self.model_hash
         )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
