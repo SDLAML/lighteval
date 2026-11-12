@@ -68,7 +68,9 @@ def get_qa_prompt_function(language: Language, adapter: Callable[[dict], QAInput
         if input_data is None:
             return None
 
-        choices = list(set(input_data["choices"]))
+        # de-duplicate keeping the first-seen order (a set() order depends on the string hash seed; the first choice is
+        # what the few-shot examples show)
+        choices = list(dict.fromkeys(input_data["choices"]))
 
         return {
             **input_data,
