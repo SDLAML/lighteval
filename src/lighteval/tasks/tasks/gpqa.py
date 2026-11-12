@@ -23,8 +23,12 @@ paper:
 https://arxiv.org/abs/2311.12022
 """
 
+import ast
 import hashlib
+import os
 import random
+from functools import lru_cache
+from pathlib import Path
 from string import ascii_uppercase
 
 from inspect_ai.dataset import Sample
@@ -230,12 +234,51 @@ def gpqa_mcf_prompt(line, task_name: str = None):
     )
 
 
+# The dataset revision these tasks are pinned to (gated dataset, cached by `titan-eval prefetch`).
+_GPQA_REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
+
+
+@lru_cache(maxsize=1)
+def _gpqa_official_demos() -> list[dict]:
+    """The 5 official GPQA few-shot examples, in the official order (OLMES FEWSHOT_SOURCES["Original:GPQA"]).
+
+    They have the fields of a GPQA row (Question, Correct Answer, Incorrect Answer 1-3; the explanation is not used) and are
+    shown by `gpqa_mcf_prompt` like an evaluated row. GPQA asks that its questions are not posted online in plain text
+    (canary string), so they are NOT copied into this repository: they are read at run time from the OLMES clone
+    (`resources/olmes/oe_eval/tasks/fewshot_sources.py` next to this clone, or the file named by $GPQA_FEWSHOT_FILE) by
+    parsing that file (`ast.literal_eval` of the "Original:GPQA" entry, nothing is executed).
+    """
+    # parents[5] = the `resources/` folder that holds this clone (resources/lighteval/src/lighteval/tasks/tasks/gpqa.py)
+    default = Path(__file__).resolve().parents[5] / "olmes" / "oe_eval" / "tasks" / "fewshot_sources.py"
+    path = Path(os.environ.get("GPQA_FEWSHOT_FILE") or default)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"GPQA few-shot examples: {path} not found. Clone allenai/olmes into resources/olmes or set GPQA_FEWSHOT_FILE "
+            "to its oe_eval/tasks/fewshot_sources.py."
+        )
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].slice, ast.Constant)
+            and node.targets[0].slice.value == "Original:GPQA"
+        ):
+            demos = ast.literal_eval(node.value)
+            assert len(demos) == 5, f"expected the 5 official GPQA demos, found {len(demos)}"
+            return [dict(demo) for demo in demos]
+    raise ValueError(f'FEWSHOT_SOURCES["Original:GPQA"] not found in {path}')
+
+
+# Shots = the 5 official GPQA examples, the first K in order for every prompt (|5 = all five), never rows of the evaluated
+# split. A demo equal to the evaluated question is excluded (one of the 5 is a question of the main and the diamond set:
+# that single item gets 4 shots).
 _GPQA_COMMON = dict(
     hf_repo="Idavidrein/gpqa",
+    hf_revision=_GPQA_REVISION,
     hf_avail_splits=["train"],
     evaluation_splits=["train"],
-    few_shots_split="train",
-    few_shots_select="random_sampling",
+    few_shots_rows=_gpqa_official_demos,
+    few_shots_select="sequential",
     stop_sequence=["\n"],
 )
 
@@ -269,6 +312,16 @@ gpqa_diamond_mcf_em = LightevalTaskConfig(
     **_GPQA_COMMON,
 )
 
+gpqa_main_mcf_em = LightevalTaskConfig(
+    name="gpqa:main:mcf_em",
+    prompt_function=gpqa_mcf_prompt,
+    hf_subset="gpqa_main",
+    generation_size=1,
+    metrics=[Metrics.exact_match],
+    version=0,
+    **_GPQA_COMMON,
+)
+
 TASKS_TABLE = [
     gpqa,
     gpqa_diamond_instruct,
@@ -277,4 +330,5 @@ TASKS_TABLE = [
     gpqa_diamond_cf,
     gpqa_diamond_mcf,
     gpqa_diamond_mcf_em,
+    gpqa_main_mcf_em,
 ]
