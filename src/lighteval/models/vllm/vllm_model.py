@@ -115,6 +115,24 @@ def _run_inference_worker(gpu_id: int, model_args: dict, sampling_params_dict: d
         result_queue.put((gpu_id, e))
 
 
+def _with_max_position_embeddings(hf_overrides, value):
+    """vLLM `hf_overrides` that also sets `hf_config.max_position_embeddings = value` (None: `hf_overrides` unchanged).
+    `hf_overrides` is None, a dict or a callable (the vLLM 0.19 callback above)."""
+    if value is None:
+        return hf_overrides
+    if hf_overrides is None:
+        return {"max_position_embeddings": value}
+    if callable(hf_overrides):
+
+        def both(config):
+            config = hf_overrides(config)
+            config.max_position_embeddings = value
+            return config
+
+        return both
+    return {**hf_overrides, "max_position_embeddings": value}
+
+
 class VLLMModelConfig(ModelConfig):
     """Configuration class for VLLM inference engine.
 
@@ -146,6 +164,11 @@ class VLLMModelConfig(ModelConfig):
         max_model_length (PositiveInt | None):
             Maximum sequence length for the model. If None, automatically inferred.
             Reduce this if encountering OOM issues (4096 is usually sufficient).
+        max_position_embeddings (PositiveInt | None):
+            If set, overrides the model config's `max_position_embeddings` (vLLM `hf_overrides`), so that `max_model_length`
+            may exceed the declared context. Needed when the model builds position tables from that value (e.g. the opt_moe
+            plugin's RoPE cache has exactly that many rows and the kernel reads it unchecked); the env flag
+            VLLM_ALLOW_LONG_MAX_MODEL_LEN alone would not resize them. Defaults to None (not changed).
         quantization (str | None):
             Quantization method.
         load_format (str | None):
@@ -208,6 +231,9 @@ class VLLMModelConfig(ModelConfig):
     enable_prefix_caching: bool = None  # whether to enable prefix caching to speed up generation. May use more memory. Should be disabled for LFM2
     max_model_length: PositiveInt | None = (
         None  # maximum length of the model, ussually infered automatically. reduce this if you encouter OOM issues, 4096 is usually enough
+    )
+    max_position_embeddings: PositiveInt | None = (
+        None  # overrides hf_config.max_position_embeddings (vLLM hf_overrides): lets max_model_length go past the model's declared context
     )
     quantization: str | None = None
     load_format: str | None = None
@@ -326,6 +352,10 @@ class VLLMModel(LightevalModel):
         # Keep the callback in model_args so spawned workers also receive it.
         if is_package_available(Requirement("vllm==0.19.*")):
             self.model_args["hf_overrides"] = _restore_vllm_019_config
+        if config.max_position_embeddings is not None:
+            self.model_args["hf_overrides"] = _with_max_position_embeddings(
+                self.model_args.get("hf_overrides"), config.max_position_embeddings
+            )
 
         if config.quantization is not None:
             self.model_args["quantization"] = config.quantization
@@ -706,6 +736,10 @@ class AsyncVLLMModel(VLLMModel):
 
         if is_package_available(Requirement("vllm==0.19.*")):
             self.model_args["hf_overrides"] = _restore_vllm_019_config
+        if config.max_position_embeddings is not None:
+            self.model_args["hf_overrides"] = _with_max_position_embeddings(
+                self.model_args.get("hf_overrides"), config.max_position_embeddings
+            )
 
         model = AsyncLLM.from_engine_args(AsyncEngineArgs(**self.model_args))
 
