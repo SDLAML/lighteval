@@ -32,23 +32,34 @@ Setup:
 
     export TOKENIZER_PATH=/path/to/model  # or a HF model name like "meta-llama/Llama-3.1-8B"
 
-Data will be generated on the first run and cached under:
-    $HF_HOME/lighteval/ruler/<tokenizer_id>/
+Data is generated once per tokenizer and cached under:
+    $HF_HOME/lighteval/ruler/<architecture>_<key>/<length>/<subset>/
 
-Subsequent runs (including ablation checkpoints sharing the same tokenizer)
-will reuse the cached data instantly.
+<key> is the first 16 hex digits of a sha256 over the tokenizer CONTENT (tokenizer.json, tokenizer.model,
+vocab.json, merges.txt, added_tokens.json, special_tokens_map.json and tokenizer_config.json without its
+path / chat template / length-limit fields), so every copy or export of the same tokenizer shares one folder.
+Each prepared folder carries a manifest.json (tokenizer, key, generator commit, seed, samples, lengths, source
+data revisions, token-length statistics per (length, subset)).
+
+Read-only mode: with RULER_PREPARED_ONLY=1 a missing folder is an error (generation never happens on a GPU node):
+    titan-eval prepare ruler --model <checkpoint> --lengths 4096,8192     # login node, generates + writes manifest.json
 
 Task names follow the pattern: ruler_{length}:{subset}
 Example: ruler_4096:niah_single_1
 """
 
+import contextlib
+import datetime
 import hashlib
 import itertools
+import json
 import logging
 import os
 import random
 import re
+import shutil
 import string
+import subprocess
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -147,19 +158,57 @@ def _get_model_arch(tokenizer_path: str) -> str:
     return f"{safe}_{h}"
 
 
+# Files that define how a tokenizer cuts text. The cache key hashes their CONTENT, not their mtimes or paths.
+_TOKENIZER_FILES = (
+    "tokenizer.json",
+    "tokenizer.model",
+    "vocab.json",
+    "merges.txt",
+    "added_tokens.json",
+    "special_tokens_map.json",
+    "tokenizer_config.json",
+)
+# tokenizer_config.json fields that do not change how text is cut (where the export was saved, a chat template, a limit)
+_VOLATILE_CONFIG_KEYS = ("name_or_path", "_name_or_path", "chat_template", "model_max_length")
+KEY_LEN = 16
+
+
+def _tokenizer_file_digests(tokenizer_path: str) -> dict[str, str]:
+    """sha256 of every tokenizer file present in a local folder ({} for a hub name or an empty folder)."""
+    out = {}
+    for name in _TOKENIZER_FILES:
+        path = os.path.join(tokenizer_path, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as f:
+            raw = f.read()
+        if name == "tokenizer_config.json":
+            try:
+                cfg = json.loads(raw)
+                raw = json.dumps(
+                    {k: v for k, v in cfg.items() if k not in _VOLATILE_CONFIG_KEYS},
+                    sort_keys=True,
+                    ensure_ascii=False,
+                ).encode()
+            except ValueError:
+                pass
+        out[name] = hashlib.sha256(raw).hexdigest()
+    return out
+
+
+def _tokenizer_key_full(tokenizer_path: str) -> str:
+    digests = _tokenizer_file_digests(tokenizer_path)
+    h = hashlib.sha256(b"ruler-tokenizer-key-v2\0")
+    if digests:
+        for name in sorted(digests):
+            h.update(name.encode() + b"\0" + digests[name].encode() + b"\0")
+    else:  # a hub name (no files to read here): the name is all we can identify it by
+        h.update(b"name\0" + str(tokenizer_path).encode())
+    return h.hexdigest()
+
+
 def _get_tokenizer_hash(tokenizer_path: str) -> str:
-    candidates = [
-        os.path.join(tokenizer_path, "tokenizer.json"),
-        os.path.join(tokenizer_path, "tokenizer.model"),
-        os.path.join(tokenizer_path, "vocab.json"),
-        os.path.join(tokenizer_path, "tokenizer_config.json"),
-    ]
-    hasher = hashlib.md5()
-    for path in candidates:
-        if os.path.isfile(path):
-            hasher.update(path.encode())
-            hasher.update(str(os.path.getmtime(path)).encode())
-    return hasher.hexdigest()[:8]
+    return _tokenizer_key_full(tokenizer_path)[:KEY_LEN]
 
 
 def _get_cache_dir(tokenizer_path: str) -> Path:
@@ -224,7 +273,7 @@ def _get_niah_words():
 def _get_essay_haystack() -> list[str]:
     import datasets as hf_datasets
 
-    essay = hf_datasets.load_dataset("baber/paul_graham_essays", split="train")["text"]
+    essay = hf_datasets.load_dataset(ESSAYS_REPO, split="train")["text"]
     text = " ".join(essay)
     text = re.sub(r"\s+", " ", text)
     return text.split(" ")
@@ -1047,6 +1096,16 @@ QA_CONFIG = {
 QA_DOCUMENT_PROMPT = "Document {i}:\n{document}"
 
 
+SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json"
+HOTPOTQA_URL = "http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json"
+ESSAYS_REPO = "baber/paul_graham_essays"
+
+
+def _qa_cache_file(url: str) -> Path:
+    hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+    return Path(hf_home) / "lighteval" / "ruler_qa_cache" / f"{hashlib.md5(url.encode()).hexdigest()}.json"
+
+
 def _qa_download_json(url: str) -> dict:
     import hashlib, json, requests  # noqa: E401
 
@@ -1071,9 +1130,7 @@ def _qa_download_json(url: str) -> dict:
 
 @lru_cache(maxsize=1)
 def _read_squad() -> tuple[list[dict], list[str]]:
-    data = _qa_download_json(
-        "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json"
-    )
+    data = _qa_download_json(SQUAD_URL)
     total_docs = [p["context"] for d in data["data"] for p in d["paragraphs"]]
     total_docs = sorted(list(set(total_docs)))
     total_docs_dict = {c: idx for idx, c in enumerate(total_docs)}
@@ -1101,9 +1158,7 @@ def _read_squad() -> tuple[list[dict], list[str]]:
 
 @lru_cache(maxsize=1)
 def _read_hotpotqa() -> tuple[list[dict], list[str]]:
-    data = _qa_download_json(
-        "http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json"
-    )
+    data = _qa_download_json(HOTPOTQA_URL)
     total_docs = [f"{t}\n{''.join(p)}" for d in data for t, p in d["context"]]
     total_docs = sorted(list(set(total_docs)))
     total_docs_dict = {c: idx for idx, c in enumerate(total_docs)}
@@ -1364,61 +1419,273 @@ def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _prepared_only() -> bool:
+    return os.environ.get("RULER_PREPARED_ONLY", "") not in ("", "0", "false", "False")
+
+
+def _missing_pairs(cache_base: Path, lengths: list[int], subsets: list[str]) -> list[tuple[int, str]]:
+    return [
+        (l, s)
+        for l in lengths
+        for s in subsets
+        if not (cache_base / str(l) / s / "dataset_dict.json").exists()
+    ]
+
+
+def prepared_status(
+    tokenizer_name: str,
+    lengths: list[int] | None = None,
+    subsets: list[str] | None = None,
+) -> dict:
+    """Which (length, subset) pairs are not prepared yet for this tokenizer. Reads files only, never generates."""
+    lengths = _validate_lengths(lengths or DEFAULT_LENGTHS)
+    subsets = subsets or SUBSETS
+    cache_base = _get_cache_dir(tokenizer_name)
+    return {
+        "tokenizer": tokenizer_name,
+        "cache_dir": cache_base,
+        "key": _get_tokenizer_hash(tokenizer_name),
+        "missing": _missing_pairs(cache_base, lengths, subsets),
+    }
+
+
+def _not_prepared_message(tokenizer_name: str, cache_base: Path, missing: list[tuple[int, str]]) -> str:
+    lens = sorted({l for l, _ in missing})
+    return (
+        f"RULER data is not prepared for tokenizer {tokenizer_name}: {len(missing)} (length, subset) pair(s) missing, "
+        f"lengths {lens}, folder {cache_base}. Generation is disabled here (RULER_PREPARED_ONLY=1). "
+        f"Run `titan-eval prepare ruler --model {tokenizer_name} --lengths {','.join(map(str, lens))}` on the login node."
+    )
+
+
+@contextlib.contextmanager
+def _generation_lock(cache_base: Path):
+    """One writer per prepared folder: a second `prepare` waits here and then finds the data done."""
+    import fcntl
+
+    cache_base.mkdir(parents=True, exist_ok=True)
+    with open(cache_base / ".prepare.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _now() -> str:
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _fork_state() -> dict:
+    """Commit of the lighteval fork this generator comes from (+ whether ruler.py has local changes, and its sha256)."""
+    me = Path(__file__).resolve()
+
+    def git(*args):
+        try:
+            r = subprocess.run(["git", "-C", str(me.parent), *args], capture_output=True, text=True, timeout=20)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except Exception:
+            return None
+
+    return {
+        "commit": git("rev-parse", "HEAD"),
+        "ruler_py_dirty": bool(git("status", "--porcelain", "--", str(me))),
+        "ruler_py_sha256": hashlib.sha256(me.read_bytes()).hexdigest(),
+    }
+
+
+def _pkg_version(name: str) -> str | None:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
+def _essays_revision() -> str | None:
+    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub"
+    )
+    ref = Path(hub) / ("datasets--" + ESSAYS_REPO.replace("/", "--")) / "refs" / "main"
+    return ref.read_text().strip() if ref.is_file() else None
+
+
+def _file_md5(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sources(subsets: list[str]) -> dict:
+    """Revisions of the external data the given subsets were built from."""
+    out = {}
+    if any(s in ("niah_single_2", "niah_single_3", "niah_multikey_1", "niah_multiquery", "niah_multivalue") for s in subsets):
+        out["essays"] = {"repo": ESSAYS_REPO, "revision": _essays_revision()}
+    for key, subset, url in (("squad_v2_dev", "qa_1", SQUAD_URL), ("hotpotqa_dev_distractor", "qa_2", HOTPOTQA_URL)):
+        if subset in subsets:
+            f = _qa_cache_file(url)
+            out[key] = {"url": url, "md5": _file_md5(f), "bytes": f.stat().st_size if f.is_file() else None}
+    return out
+
+
+def _length_stats(samples) -> dict:
+    lens = [x["length"] for x in samples if isinstance(x.get("length"), (int, float))]
+    if not lens:
+        return {"min": None, "max": None, "mean": None}
+    return {"min": min(lens), "max": max(lens), "mean": round(sum(lens) / len(lens), 1)}
+
+
+def _update_manifest(
+    cache_base: Path,
+    tokenizer_name: str,
+    stats: dict[tuple[int, str], dict | None],
+    subsets_done: list[str],
+) -> dict:
+    """Merge the (length, subset) stats just produced (None = read them from the files on disk) into manifest.json."""
+    path = cache_base / "manifest.json"
+    man = json.loads(path.read_text()) if path.is_file() else {}
+    digests = _tokenizer_file_digests(tokenizer_name)
+    key_full = _tokenizer_key_full(tokenizer_name)
+    now = _now()
+    man.update(
+        {
+            "schema": 1,
+            "tokenizer": {
+                "path": str(tokenizer_name),
+                "name": os.path.basename(os.path.normpath(str(tokenizer_name))),
+                "files_sha256": digests,
+            },
+            "key": key_full[:KEY_LEN],
+            "key_sha256": key_full,
+            "architecture": _get_model_arch(tokenizer_name),
+            "generator": {"fork_commit": _fork_state(), "module": "lighteval.tasks.tasks.ruler"},
+            "seed": RANDOM_SEED,
+            "n_samples": NUM_SAMPLES,
+            "prompt_safety_margin": PROMPT_SAFETY_MARGIN,
+            "updated": now,
+        }
+    )
+    man.setdefault("created", now)
+    man["sources"] = {**man.get("sources", {}), **_sources(subsets_done)}
+    data = man.setdefault("data", {})
+    for (length, subset), st in stats.items():
+        if st is None:
+            from datasets import load_from_disk
+
+            ds = load_from_disk(str(cache_base / str(length) / subset))["test"]
+            st = {"n": len(ds), "length": _length_stats(ds), "created": now, "adopted": True}
+        st.setdefault("gen_tokens", _gen_size(subset, length))
+        data.setdefault(str(length), {})[subset] = st
+    man["lengths"] = sorted(int(l) for l, per in data.items() if all(s in per for s in SUBSETS))
+    man["subsets"] = SUBSETS
+    tmp = path.with_suffix(f".json.tmp{os.getpid()}")
+    tmp.write_text(json.dumps(man, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+    return man
+
+
 def ensure_ruler_cache(
     tokenizer_name: str,
     lengths: list[int] | None = None,
     subsets: list[str] | None = None,
     allow_partial: bool = False,
+    prepared_only: bool | None = None,
 ) -> Path:
     """Generate and cache RULER data for the given tokenizer.
 
-    Data is stored at $HF_HOME/lighteval/ruler/<tokenizer_id>/<length>/<subset>/.
+    Data is stored at $HF_HOME/lighteval/ruler/<architecture>_<key>/<length>/<subset>/ (key = content hash of the
+    tokenizer files, see _get_tokenizer_hash) and described by manifest.json next to the length folders.
     Each subset is saved independently so evaluating one subset does not trigger
     generation of all subsets.  Already-generated (length, subset) pairs are skipped.
+
+    prepared_only (default: env RULER_PREPARED_ONLY=1): never generate; a missing pair raises RuntimeError that
+    tells to run `titan-eval prepare ruler` on the login node. Writes are atomic (temp folder, then rename) and one
+    writer at a time holds a lock on the prepared folder.
 
     Returns the cache base directory.
     """
     lengths = _validate_lengths(lengths or DEFAULT_LENGTHS)
     subsets = subsets or SUBSETS
     cache_base = _get_cache_dir(tokenizer_name)
-    cache_base.mkdir(parents=True, exist_ok=True)
-
-    missing = [
-        (l, s)
-        for l in lengths
-        for s in subsets
-        if not (cache_base / str(l) / s / "dataset_dict.json").exists()
-    ]
+    missing = _missing_pairs(cache_base, lengths, subsets)
     if not missing:
         return cache_base
+    if _prepared_only() if prepared_only is None else prepared_only:
+        raise RuntimeError(_not_prepared_message(tokenizer_name, cache_base, missing))
 
-    logger.info(
-        f"Loading tokenizer from {tokenizer_name} for RULER data generation ..."
-    )
-    tokenizer = _load_tokenizer(tokenizer_name)
+    with _generation_lock(cache_base):
+        missing = _missing_pairs(cache_base, lengths, subsets)  # another writer may have finished them while we waited
+        if not missing:
+            return cache_base
+        logger.info(f"Loading tokenizer from {tokenizer_name} for RULER data generation ...")
+        tokenizer = _load_tokenizer(tokenizer_name)
 
-    failed = []
-    for length, subset in missing:
-        logger.info(f"Generating RULER data: length={length} subset={subset} ...")
-        try:
-            samples = _generate_subset(subset, length, tokenizer)
-            if not samples:
-                raise ValueError("no samples generated (context length too small?)")
-            subset_dir = cache_base / str(length) / subset
-            subset_dir.mkdir(parents=True, exist_ok=True)
-            DatasetDict({"test": Dataset.from_list(samples)}).save_to_disk(
-                str(subset_dir)
-            )
-            logger.info(f"Saved {len(samples)} samples to {subset_dir}")
-        except Exception as e:
-            failed.append((length, subset, str(e)))
-            logger.warning(f"Skipping subset {subset} at length {length}: {e}")
+        failed, stats = [], {}
+        fork = _fork_state()
+        for length, subset in missing:
+            logger.info(f"Generating RULER data: length={length} subset={subset} ...")
+            try:
+                t0 = datetime.datetime.now()
+                samples = _generate_subset(subset, length, tokenizer)
+                if not samples:
+                    raise ValueError("no samples generated (context length too small?)")
+                subset_dir = cache_base / str(length) / subset
+                subset_dir.parent.mkdir(parents=True, exist_ok=True)
+                tmp = subset_dir.parent / f".tmp-{subset}-{os.getpid()}"
+                shutil.rmtree(tmp, ignore_errors=True)
+                DatasetDict({"test": Dataset.from_list(samples)}).save_to_disk(str(tmp))
+                if subset_dir.exists():  # a half-written folder of an interrupted run (no dataset_dict.json)
+                    shutil.rmtree(subset_dir)
+                os.rename(tmp, subset_dir)
+                stats[(length, subset)] = {
+                    "n": len(samples),
+                    "length": _length_stats(samples),
+                    "seconds": round((datetime.datetime.now() - t0).total_seconds(), 1),
+                    "created": _now(),
+                    "generator_commit": fork["commit"],
+                    "generator_ruler_py_sha256": fork["ruler_py_sha256"][:16],
+                }
+                logger.info(f"Saved {len(samples)} samples to {subset_dir}")
+            except Exception as e:
+                failed.append((length, subset, str(e)))
+                logger.warning(f"Skipping subset {subset} at length {length}: {e}")
+
+        _update_manifest(cache_base, tokenizer_name, stats, subsets)
 
     if failed and not allow_partial:
         raise RuntimeError(
             f"RULER cache generation failed for {len(failed)} subset(s): {failed}"
         )
 
+    return cache_base
+
+
+def prepare(
+    tokenizer_name: str,
+    lengths: list[int] | None = None,
+    subsets: list[str] | None = None,
+) -> Path:
+    """Login-node entry point (`titan-eval prepare ruler`): generate whatever is missing, ignoring RULER_PREPARED_ONLY,
+    and make sure manifest.json describes every requested (length, subset) that is on disk (also data copied in)."""
+    lengths = _validate_lengths(lengths or DEFAULT_LENGTHS)
+    subsets = subsets or SUBSETS
+    cache_base = ensure_ruler_cache(tokenizer_name, lengths, subsets, prepared_only=False)
+    path = cache_base / "manifest.json"
+    known = json.loads(path.read_text()).get("data", {}) if path.is_file() else {}
+    undescribed = {
+        (l, s): None
+        for l in lengths
+        for s in subsets
+        if s not in known.get(str(l), {}) and (cache_base / str(l) / s / "dataset_dict.json").exists()
+    }
+    if undescribed or not path.is_file():
+        with _generation_lock(cache_base):
+            _update_manifest(cache_base, tokenizer_name, undescribed, subsets)
     return cache_base
 
 
@@ -1456,6 +1723,15 @@ def ruler_prompt(line: dict, task_name: str = None) -> Doc:
 # ---------------------------------------------------------------------------
 
 
+def _gen_size(subset: str, length: int) -> int:
+    """Generation budget (tokens) of a subset: the same number the generator reserved for the answer."""
+    if subset == "niah_multivalue":
+        return 300 if length <= 4096 else 250
+    if "niah" in subset:
+        return {"niah_multikey_3": 100, "niah_multiquery": 100}.get(subset, 50)
+    return 100 if subset == "cwe" else 50  # vt, fwe and qa: 50
+
+
 def get_ruler_tasks(
     tokenizer_name: str,
     lengths: list[int] | None = None,
@@ -1478,19 +1754,7 @@ def get_ruler_tasks(
             # subset never triggers generation of all subsets.
             cache_path = cache_base / str(length) / subset
             metric = [Metrics.ruler_match]
-            _niah_gen_sizes = {
-                "niah_multikey_3": 100,
-                "niah_multiquery": 100,
-            }
-            gen_size = (
-                _niah_gen_sizes.get(subset, 50)
-                if "niah" in subset
-                else (
-                    50 if subset == "vt" else 100 if subset == "cwe" else 50
-                )  # fwe and qa
-            )
-            if subset == "niah_multivalue":
-                gen_size = 300 if length <= 4096 else 250
+            gen_size = _gen_size(subset, length)
             tasks.append(
                 LightevalTaskConfig(
                     name=f"ruler_{length}:{subset}",
