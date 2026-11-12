@@ -28,6 +28,7 @@ import os
 from typing import Coroutine, Optional
 
 import torch
+from packaging.requirements import Requirement
 from pydantic import Field, NonNegativeFloat, NonNegativeInt, PositiveInt
 from tqdm import tqdm
 
@@ -78,6 +79,16 @@ else:
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 STARTING_BATCH_SIZE = 512
+
+
+def _restore_granite_layer_types(config):
+    """Restore the Granite layer names expected by vLLM 0.19 after Transformers config loading."""
+    if getattr(config, "model_type", None) == "granitemoehybrid":
+        layer_types = getattr(config, "layer_types", None)
+        if layer_types is not None:
+            legacy_names = {"full_attention": "attention", "linear_attention": "mamba"}
+            config.layer_types = [legacy_names.get(layer_type, layer_type) for layer_type in layer_types]
+    return config
 
 
 def _run_inference_worker(gpu_id: int, model_args: dict, sampling_params_dict: dict, requests: list, result_queue):
@@ -297,6 +308,12 @@ class VLLMModel(LightevalModel):
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
             "enforce_eager": config.enforce_eager,
         }
+
+        # Transformers 5 renames Granite's layer types, but vLLM 0.19 still
+        # uses legacy names for decoder selection and hybrid cache layer counts.
+        # Keep the callback in model_args so spawned workers also receive it.
+        if is_package_available(Requirement("vllm==0.19.*")):
+            self.model_args["hf_overrides"] = _restore_granite_layer_types
 
         if config.quantization is not None:
             self.model_args["quantization"] = config.quantization
@@ -663,6 +680,9 @@ class AsyncVLLMModel(VLLMModel):
 
         if config.data_parallel_size > 1:
             self._batch_size = "auto"
+
+        if is_package_available(Requirement("vllm==0.19.*")):
+            self.model_args["hf_overrides"] = _restore_granite_layer_types
 
         model = AsyncLLM.from_engine_args(AsyncEngineArgs(**self.model_args))
 

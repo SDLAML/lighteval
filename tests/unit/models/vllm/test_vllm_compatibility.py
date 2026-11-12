@@ -8,6 +8,7 @@
 import asyncio
 import inspect
 import os
+import pickle
 import queue
 import subprocess
 import sys
@@ -26,8 +27,9 @@ if not is_package_available(Requirement("vllm>=0.19")):
 
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from transformers import GPT2Config, PreTrainedTokenizerFast
+from transformers import GPT2Config, GraniteMoeHybridConfig, PreTrainedTokenizerFast
 from vllm import LLM, SamplingParams
+from vllm.config import ParallelConfig
 from vllm.logprobs import Logprob
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.v1.engine.async_llm import AsyncLLM
@@ -98,6 +100,43 @@ with patch.object(imports, "is_package_available", side_effect=lambda p: False i
             model_config = AsyncEngineArgs(**model.model_args).create_model_config()
             self.assertEqual(model_config.max_model_len, 128)
 
+    @unittest.skipUnless(is_package_available(Requirement("vllm==0.19.*")), "Override applies to vLLM 0.19")
+    def test_granite_layer_selection_and_cache_counts_after_config_loading(self):
+        from vllm.model_executor.models.granitemoehybrid import ALL_DECODER_LAYER_TYPES
+
+        legacy_layer_types = ["mamba", "attention", "mamba", "attention"]
+        with tempfile.TemporaryDirectory() as directory:
+            GraniteMoeHybridConfig(
+                architectures=["GraniteMoeHybridForCausalLM"],
+                num_hidden_layers=4,
+                layer_types=legacy_layer_types,
+                max_position_embeddings=128,
+            ).save_pretrained(directory)
+            for model_class, parallel_size in ((VLLMModel, 1), (VLLMModel, 2), (AsyncVLLMModel, 1)):
+                with self.subTest(model_class=model_class, parallel_size=parallel_size):
+                    model = self.make_model(model_class)
+                    model.config.model_name = directory
+                    model.config.data_parallel_size = parallel_size
+                    model._max_length = 128
+                    with (
+                        patch.object(backend, "LLM", return_value=object()),
+                        patch.object(backend.AsyncLLM, "from_engine_args", return_value=object()),
+                    ):
+                        model._create_auto_model(model.config)
+                    # Exercise the real config loader after serializing the worker arguments.
+                    model_args = pickle.loads(pickle.dumps(model.model_args))
+                    config = AsyncEngineArgs(**model_args).create_model_config()
+                    self.assertEqual(config.hf_config.layer_types, legacy_layer_types)
+                    self.assertTrue(all(layer in ALL_DECODER_LAYER_TYPES for layer in config.hf_config.layer_types))
+                    self.assertEqual(config.get_num_layers_by_block_type(ParallelConfig(), "attention"), 2)
+                    self.assertEqual(config.get_num_layers_by_block_type(ParallelConfig(), "mamba"), 2)
+
+    def test_granite_override_preserves_other_model_layer_types(self):
+        config = GPT2Config()
+        config.layer_types = ["linear_attention", "full_attention"]
+        self.assertIs(backend._restore_granite_layer_types(config), config)
+        self.assertEqual(config.layer_types, ["linear_attention", "full_attention"])
+
     def test_sync_engine_arguments_and_inferred_length(self):
         model = self.make_model()
         engine = SimpleNamespace(llm_engine=SimpleNamespace(model_config=SimpleNamespace(max_model_len=4096)))
@@ -107,7 +146,8 @@ with patch.object(imports, "is_package_available", side_effect=lambda p: False i
             AsyncEngineArgs(**kwargs)
             return engine
 
-        with patch.object(backend, "LLM", side_effect=create):
+        with tempfile.TemporaryDirectory() as directory, patch.object(backend, "LLM", side_effect=create):
+            model.config.model_name = directory
             self.assertIs(model._create_auto_model(model.config), engine)
         self.assertEqual(model.max_length, 4096)
         self.assertNotIn("swap_space", model.model_args)
@@ -115,7 +155,11 @@ with patch.object(imports, "is_package_available", side_effect=lambda p: False i
     def test_async_engine_arguments_and_inferred_length(self):
         model = self.make_model(AsyncVLLMModel)
         engine = SimpleNamespace(model_config=SimpleNamespace(max_model_len=4096))
-        with patch.object(backend.AsyncLLM, "from_engine_args", return_value=engine) as create:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(backend.AsyncLLM, "from_engine_args", return_value=engine) as create,
+        ):
+            model.config.model_name = directory
             self.assertIs(model._create_auto_model(model.config), engine)
         self.assertIsInstance(create.call_args.args[0], AsyncEngineArgs)
         self.assertEqual(model.max_length, 4096)
