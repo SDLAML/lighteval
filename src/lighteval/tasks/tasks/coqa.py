@@ -53,16 +53,24 @@ def coqa_gen_prompt(line, task_name: str = None):
     if not questions or not answers:
         return None
     is_few_shots = line.get("__few_shots", False)
+    # The other annotators' answers (3 per turn in CoQA, `additional_answers`): the official CoQA evaluation and OLMES take
+    # the max over all human answers of a turn. The first annotator's answer comes first: it is what the shots show and
+    # what the preceding-turn context of later turns uses.
+    additional = [v["input_text"] for v in (line.get("additional_answers") or {}).values()]
     docs = []
     for turn_idx in range(len(questions)):
         gold_text = answers[turn_idx]
         if not gold_text:
             continue
+        golds = [gold_text]
+        for other_answers in additional:
+            if len(other_answers) > turn_idx and other_answers[turn_idx] and other_answers[turn_idx] not in golds:
+                golds.append(other_answers[turn_idx])
         docs.append(Doc(
             task_name=task_name,
             query=_build_query(line["story"], questions, answers, turn_idx),
-            choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
-            gold_index=0,
+            choices=[f"{' ' if is_few_shots else ''}{gold}" for gold in golds],
+            gold_index=list(range(len(golds))),
         ))
     return docs if docs else None
 
@@ -122,7 +130,9 @@ TASKS_TABLE = [
         few_shots_select=None,
         generation_size=50,
         stop_sequence=["\n\n"],
-        metrics=[Metrics.qa_f1, Metrics.qa_em],
-        version=1,
+        # official SQuAD-style EM / F1 (CoQA's evaluate-v1.0 uses the same normaliser), max over the 4 human answers
+        # of the turn; version 2 (was qa_f1 / qa_em against the first annotator's answer only)
+        metrics=[Metrics.squad_official_f1, Metrics.squad_official_em],
+        version=2,
     ),
 ]
