@@ -81,7 +81,8 @@ TASKS_TABLE = [
         few_shots_select="random_sampling_from_train",
         generation_size=50,
         stop_sequence=["Question:", "Q:", "\n\n"],
-        metrics=[Metrics.qa_f1, Metrics.qa_em],
-        version=1,
+        # official SQuAD-style EM / F1 (article removal, Counter F1, max over the gold answers); version 2 (was qa_f1 / qa_em)
+        metrics=[Metrics.squad_official_f1, Metrics.squad_official_em],
+        version=2,
     ),
 ]
