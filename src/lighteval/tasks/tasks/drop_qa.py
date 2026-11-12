@@ -26,24 +26,49 @@ from lighteval.tasks.requests import Doc
 
 
 def drop_gen_prompt(line, task_name: str = None):
-    """GenQA variant: CF-style prompt, generate answer, score with F1."""
-    answer = line["answer"]
-    if answer["number"] != "":
-        gold_text = str(answer["number"])
-        gold_entry = [gold_text]
-    elif answer["spans"]:
-        gold_text = answer["spans"][0]
-        gold_entry = answer["spans"]  # all spans for F1
-    else:
-        gold_text = " ".join([answer["date"]["day"], answer["date"]["month"], answer["date"]["year"]]).strip()
-        gold_entry = [gold_text]
+    """GenQA variant: CF-style prompt, generate answer, score with the DROP EM / F1 (max over all reference answers).
+
+    References = the main answer + every `validated_answers` entry, de-duplicated (ported from upstream lighteval
+    `drop_qa.py` `drop_prompt`; same as lm-evaluation-harness `get_answers` and OLMES drop.py). The official DROP
+    evaluator and the harness take the max over all of them. A reference with several spans is shown joined by ", ".
+    """
+
+    def _flatten_validated_answers(validated_answers):
+        valid_answers = []
+        for i in range(len(validated_answers["number"])):
+            valid_answers.append(
+                {
+                    "number": validated_answers["number"][i],
+                    "date": validated_answers["date"][i],
+                    "spans": validated_answers["spans"][i],
+                }
+            )
+        return valid_answers
+
+    def parse_answer(answer):
+        if answer["number"] != "":
+            return (str(answer["number"]),)
+        if answer["spans"] != []:
+            return tuple(answer["spans"])
+        return (" ".join([answer["date"]["day"], answer["date"]["month"], answer["date"]["year"]]).strip(),)
+
+    answers = []
+    answers_set = set()
+    candidates = [line["answer"]] + _flatten_validated_answers(line["validated_answers"])
+    for candidate in candidates:
+        answer = parse_answer(candidate)
+        if answer in answers_set:
+            continue
+        answers.append(answer)
+        answers_set.add(answer)
+
     is_few_shots = line.get("__few_shots", False)
     return Doc(
         task_name=task_name,
         query=f"Passage: {line['passage']}\nQuestion: {line['question']}\nAnswer:",
-        choices=[f"{' ' if is_few_shots else ''}{gold_text}"],
-        gold_index=0,
-        specific={"golds_no_preprocessing": [gold_entry]},
+        choices=[f"{' ' if is_few_shots else ''}{', '.join(a)}" for a in answers],
+        gold_index=list(range(len(answers))),
+        specific={"golds_no_preprocessing": [list(a) for a in answers]},
     )
 
 
@@ -92,7 +117,7 @@ drop_gen = LightevalTaskConfig(
     generation_size=100,
     stop_sequence=["\n\n", "Passage:", "Question:"],
     metrics=[Metrics.drop],
-    version=0,
+    version=1,
 )
 
 TASKS_TABLE = [
