@@ -30,6 +30,7 @@ from lighteval.cli_args import (
     custom_tasks,
     dataset_loading_processes,
     job_id,
+    load_tasks_multilingual,
     load_responses_from_details_date_id,
     max_samples,
     model_args,
@@ -57,6 +58,7 @@ def vllm(
         Optional[str], Option(help="Use chain of thought prompt for evaluation.", rich_help_panel=HELP_PANEL_NAME_4)
     ] = None,
     dataset_loading_processes: dataset_loading_processes.type = dataset_loading_processes.default,
+    load_tasks_multilingual: load_tasks_multilingual.type = load_tasks_multilingual.default,
     custom_tasks: custom_tasks.type = custom_tasks.default,
     num_fewshot_seeds: num_fewshot_seeds.type = num_fewshot_seeds.default,
     load_responses_from_details_date_id: load_responses_from_details_date_id.type = load_responses_from_details_date_id.default,
@@ -101,6 +103,7 @@ def vllm(
         launcher_type=ParallelismManager.VLLM,
         job_id=job_id,
         dataset_loading_processes=dataset_loading_processes,
+        load_tasks_multilingual=load_tasks_multilingual,
         custom_tasks_directory=custom_tasks,
         num_fewshot_seeds=num_fewshot_seeds,
         max_samples=max_samples,
