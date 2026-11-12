@@ -7,6 +7,7 @@
 
 import asyncio
 import inspect
+import json
 import os
 import pickle
 import queue
@@ -131,11 +132,87 @@ with patch.object(imports, "is_package_available", side_effect=lambda p: False i
                     self.assertEqual(config.get_num_layers_by_block_type(ParallelConfig(), "attention"), 2)
                     self.assertEqual(config.get_num_layers_by_block_type(ParallelConfig(), "mamba"), 2)
 
-    def test_granite_override_preserves_other_model_layer_types(self):
+    @unittest.skipUnless(is_package_available(Requirement("vllm==0.19.*")), "Override applies to vLLM 0.19")
+    def test_olmo3_rope_after_config_loading(self):
+        from vllm.model_executor.models import olmo2
+
+        # Use the legacy checkpoint format so Transformers performs its real conversion.
+        full_rope = {
+            "rope_type": "yarn",
+            "rope_theta": 500000,
+            "factor": 8.0,
+            "attention_factor": 1.2079441541679836,
+            "beta_fast": 32,
+            "beta_slow": 1,
+            "original_max_position_embeddings": 8192,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "config.json"), "w") as handle:
+                json.dump(
+                    {
+                        "model_type": "olmo3",
+                        "architectures": ["Olmo3ForCausalLM"],
+                        "num_hidden_layers": 4,
+                        "hidden_size": 128,
+                        "num_attention_heads": 4,
+                        "num_key_value_heads": 4,
+                        "layer_types": ["sliding_attention"] * 3 + ["full_attention"],
+                        "max_position_embeddings": 65536,
+                        "sliding_window": 4096,
+                        "rope_theta": full_rope["rope_theta"],
+                        "rope_scaling": {key: value for key, value in full_rope.items() if key != "rope_theta"},
+                    },
+                    handle,
+                )
+            for model_class, parallel_size in ((VLLMModel, 1), (VLLMModel, 2), (AsyncVLLMModel, 1)):
+                with self.subTest(model_class=model_class, parallel_size=parallel_size):
+                    model = self.make_model(model_class)
+                    model.config.model_name = directory
+                    model.config.data_parallel_size = parallel_size
+                    model._max_length = 128
+                    with (
+                        patch.object(backend, "LLM", return_value=object()),
+                        patch.object(backend.AsyncLLM, "from_engine_args", return_value=object()),
+                    ):
+                        model._create_auto_model(model.config)
+                    model_args = pickle.loads(pickle.dumps(model.model_args))
+                    config = AsyncEngineArgs(**model_args).create_model_config()
+                    self.assertEqual(config.hf_config.rope_parameters, full_rope)
+                    # Exercise the actual consumer, replacing GPU layers and distributed state.
+                    with patch.multiple(
+                        olmo2,
+                        get_tensor_model_parallel_world_size=Mock(return_value=1),
+                        get_tensor_model_parallel_rank=Mock(return_value=0),
+                        QKVParallelLinear=Mock(),
+                        RowParallelLinear=Mock(),
+                        RMSNorm=Mock(),
+                        Attention=Mock(),
+                        get_rope=Mock(),
+                    ):
+                        vllm_config = SimpleNamespace(model_config=config, cache_config=None, quant_config=None)
+                        for layer_index, expected in (
+                            (0, {"rope_type": "default", "rope_theta": 500000}),
+                            (3, full_rope),
+                        ):
+                            olmo2.Olmo2Attention(
+                                vllm_config=vllm_config, prefix=f"model.layers.{layer_index}.self_attn"
+                            )
+                            self.assertEqual(olmo2.get_rope.call_args.kwargs["rope_parameters"], expected)
+
+    def test_config_override_preserves_other_models(self):
         config = GPT2Config()
         config.layer_types = ["linear_attention", "full_attention"]
-        self.assertIs(backend._restore_granite_layer_types(config), config)
+        rope_parameters = {"full_attention": {"rope_type": "default", "rope_theta": 10000}}
+        config.rope_parameters = rope_parameters
+        self.assertIs(backend._restore_vllm_019_config(config), config)
         self.assertEqual(config.layer_types, ["linear_attention", "full_attention"])
+        self.assertIs(config.rope_parameters, rope_parameters)
+
+    def test_olmo3_override_preserves_flat_rope(self):
+        rope_parameters = {"rope_type": "yarn", "rope_theta": 500000, "factor": 8.0}
+        config = SimpleNamespace(model_type="olmo3", rope_parameters=rope_parameters)
+        self.assertIs(backend._restore_vllm_019_config(config), config)
+        self.assertIs(config.rope_parameters, rope_parameters)
 
     def test_sync_engine_arguments_and_inferred_length(self):
         model = self.make_model()

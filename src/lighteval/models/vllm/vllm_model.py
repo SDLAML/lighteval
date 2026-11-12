@@ -81,13 +81,19 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 STARTING_BATCH_SIZE = 512
 
 
-def _restore_granite_layer_types(config):
-    """Restore the Granite layer names expected by vLLM 0.19 after Transformers config loading."""
+def _restore_vllm_019_config(config):
+    """Restore configuration formats expected by vLLM 0.19 after Transformers config loading."""
     if getattr(config, "model_type", None) == "granitemoehybrid":
         layer_types = getattr(config, "layer_types", None)
         if layer_types is not None:
             legacy_names = {"full_attention": "attention", "linear_attention": "mamba"}
             config.layer_types = [legacy_names.get(layer_type, layer_type) for layer_type in layer_types]
+    if getattr(config, "model_type", None) == "olmo3":
+        rope_parameters = getattr(config, "rope_parameters", None)
+        if isinstance(rope_parameters, dict) and isinstance(rope_parameters.get("full_attention"), dict):
+            # vLLM 0.19 reads full-attention RoPE from a flat dict and derives
+            # unscaled sliding-attention RoPE from its theta itself.
+            config.rope_parameters = rope_parameters["full_attention"].copy()
     return config
 
 
@@ -309,11 +315,11 @@ class VLLMModel(LightevalModel):
             "enforce_eager": config.enforce_eager,
         }
 
-        # Transformers 5 renames Granite's layer types, but vLLM 0.19 still
-        # uses legacy names for decoder selection and hybrid cache layer counts.
+        # Transformers 5 changes Granite layer names and nests OLMo 3 RoPE
+        # parameters, while vLLM 0.19 still consumes the earlier formats.
         # Keep the callback in model_args so spawned workers also receive it.
         if is_package_available(Requirement("vllm==0.19.*")):
-            self.model_args["hf_overrides"] = _restore_granite_layer_types
+            self.model_args["hf_overrides"] = _restore_vllm_019_config
 
         if config.quantization is not None:
             self.model_args["quantization"] = config.quantization
@@ -682,7 +688,7 @@ class AsyncVLLMModel(VLLMModel):
             self._batch_size = "auto"
 
         if is_package_available(Requirement("vllm==0.19.*")):
-            self.model_args["hf_overrides"] = _restore_granite_layer_types
+            self.model_args["hf_overrides"] = _restore_vllm_019_config
 
         model = AsyncLLM.from_engine_args(AsyncEngineArgs(**self.model_args))
 
