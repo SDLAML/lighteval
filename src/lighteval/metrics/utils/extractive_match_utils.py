@@ -101,26 +101,27 @@ ExtractionTarget = LatexExtractionConfig | ExprExtractionConfig | IndicesExtract
 def lazy_expr_regex(expr_config: ExprExtractionConfig, language: Language) -> list[tuple[re.Pattern[str], int]]:
     translation_literal = TRANSLATION_LITERALS[language]
 
-    # Basic number patterns (no LaTeX)
+    # Basic number patterns (no LaTeX). ASCII digits only ([0-9], not \d which also matches Arabic-Indic, fullwidth ... digits): the captured
+    # text is handed to sympy (Number -> sympify, parse_expr), which eval()s it; see _SAFE_EXPR / _SAFE_NUMBER below.
     number_re = (
         # Format 1: Numbers with thousand separators (e.g., "1,234.56" or "1 234.56")
         r"(?:"
-        r"(?P<integer1>-?\d{1,3}(?:[ ,]\d{3})+)(?P<decimal1>\.\d+)?|"
+        r"(?P<integer1>-?[0-9]{1,3}(?:[ ,][0-9]{3})+)(?P<decimal1>\.[0-9]+)?|"
         # Format 2: Simple numbers with decimal point or comma (e.g., "123.45" or "123,45")
-        r"(?P<integer2>-?\d+)(?P<decimal2>[.,]\d+)|"
+        r"(?P<integer2>-?[0-9]+)(?P<decimal2>[.,][0-9]+)|"
         # Format 3: Decimal part only (e.g., ".123")
-        r"(?P<decimal3>\.\d+)|"
+        r"(?P<decimal3>\.[0-9]+)|"
         # Format 4: Integer only (e.g., "123")
-        r"(?P<integer3>-?\d+)"
+        r"(?P<integer3>-?[0-9]+)"
         r")(?P<percent>\s*(?:%|[Pp]ercent|\s*[Pp]ercentage|\s*[Pp]ct))?"
     )
 
     # Expressions such as 1/2
     operators = [r"\+", r"\-", r"\*", r"\×", r"\/", r"\^", r"\(", r"\)", r"\÷"]
     operators_re = "".join(operators)
-    all_expr_chars = r"[\d\.\s" + operators_re + r"]"
+    all_expr_chars = r"[0-9\.\s" + operators_re + r"]"
     # Expression should have at minimum at least one operator and must start with a digit
-    expr_re = rf"(?P<expr>-?\(?-?\d{all_expr_chars}*[{operators_re}]{all_expr_chars}+\)?)"
+    expr_re = rf"(?P<expr>-?\(?-?[0-9]{all_expr_chars}*[{operators_re}]{all_expr_chars}+\)?)"
 
     # Punctuation regexes
     full_stop_re = rf"[{re.escape(translation_literal.full_stop)}\.]"
@@ -402,6 +403,13 @@ def get_extraction_regexes(
     return extraction_regexes
 
 
+# sympy's parse_expr eval()s its input with every builtin function in scope (__import__, open, print ...), and Number(str) goes through
+# sympify -> parse_expr. Model text must never reach them unless it is plain arithmetic: the expression regexes in lazy_expr_regex only capture
+# these characters, and extract_expr REFUSES anything else, so a future change to a regex cannot turn model output into code (reviewer finding 11-12).
+_SAFE_EXPR = re.compile(r"[0-9.\s+\-*/^()\u00d7\u00f7]*")
+_SAFE_NUMBER = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
+
+
 # Small cache, to catche repeated calls invalid parsing
 @lru_cache(maxsize=20)
 @requires("latex2sympy2_extended")
@@ -436,6 +444,8 @@ def extract_expr(match: re.Match, timeout_seconds: int) -> tuple[str | sympy.Exp
 
         decimal = decimal.replace(",", ".")
         number_str = f"{integer}{decimal}"
+        if not _SAFE_NUMBER.fullmatch(number_str):
+            return None, number_str
         try:
             number = Number(number_str)
         except Exception:
@@ -448,6 +458,8 @@ def extract_expr(match: re.Match, timeout_seconds: int) -> tuple[str | sympy.Exp
     # Otherwise just return the expression
     # Remove new lines and spaces
     if expr:
+        if not _SAFE_EXPR.fullmatch(expr):
+            return None, expr
         try:
             return parse_expr_with_timeout(expr.replace("\n", " ").replace("^", "**"), timeout_seconds), expr
         except Exception:  # noqa: E722
