@@ -25,6 +25,7 @@ https://arxiv.org/abs/2304.06364
 """
 
 import re
+from functools import partial
 from string import ascii_uppercase
 
 from inspect_ai.dataset import Sample
@@ -36,6 +37,7 @@ from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.normalizations import LogProbCharNorm
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
+from lighteval.tasks.tasks.agieval_demos import AGIEVAL_DEMOS
 
 
 _MCF_METRICS = [
@@ -173,6 +175,16 @@ TASKS_TABLE = [
     for subset in AGIEVAL_SUBSETS
 ]
 
+def _agieval_demo_rows(subset: str) -> list[dict]:
+    """The official AGIEval demos of a subset (3 or 5), in the official order (agieval_demos.py)."""
+    return AGIEVAL_DEMOS[subset.replace("_", "-")]
+
+
+# The mcf / mcf_em variants take their shots ONLY from the official demos: the first K of them, in order, K =
+# min(requested K, official count) (3 for lsat-ar, lsat-lr, lsat-rc, logiqa-en, sat-en; 5 for sat-math, aqua_rat).
+# They are never sampled from the evaluated split. A smaller pool than K logs a warning (prompt_manager.py) and the
+# `n_shots` metric / the INFO line of `get_docs` give the shots really used. A demo identical to the evaluated item
+# would be excluded (none is: checked passage + question + options).
 TASKS_TABLE += [
     LightevalTaskConfig(
         name=f"agieval_eng:{subset}:mcf",
@@ -181,9 +193,8 @@ TASKS_TABLE += [
         hf_subset=subset,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["train"],
-        # Match the CoT variant's LogiQA few-shot split correction.
-        few_shots_split="train" if subset == "logiqa-en" else "validation",
-        few_shots_select="random_sampling",
+        few_shots_rows=partial(_agieval_demo_rows, subset),
+        few_shots_select="sequential",
         generation_size=-1,
         metrics=_MCF_METRICS,
         stop_sequence=["\n"],
@@ -200,13 +211,12 @@ TASKS_TABLE += [
         hf_subset=subset,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["train"],
-        # Match the CoT variant's LogiQA few-shot split correction.
-        few_shots_split="train" if subset == "logiqa-en" else "validation",
-        few_shots_select="random_sampling",
+        few_shots_rows=partial(_agieval_demo_rows, subset),
+        few_shots_select="sequential",
         generation_size=5,
-        metrics=[Metrics.exact_match],
+        metrics=[Metrics.exact_match, Metrics.n_shots],
         stop_sequence=["\n"],
-        version=1,
+        version=2,
     )
     for subset in AGIEVAL_SUBSETS
 ]

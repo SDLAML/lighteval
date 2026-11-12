@@ -269,6 +269,13 @@ class FewShotSampler:
             else:
                 raise Exception("No correct few shot strategy selected - but this point should not be reachable.")
 
+            pool_size = len(self._fewshot_cache[variance_seed])
+            if pool_size < num_fewshot:
+                logger.warning(
+                    f"{self.task.full_name}: the few-shot pool has only {pool_size} example(s) but K={num_fewshot} "
+                    f"were requested; prompts get at most {pool_size} shot(s)."
+                )
+
     def _sample_from_pool(self, variance_seed: int, num_fewshot: int, sampler: random.Random) -> list:
         if self.few_shots_select.value.with_sampling and sampler is not None:
             if (

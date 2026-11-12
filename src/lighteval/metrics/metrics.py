@@ -55,6 +55,7 @@ from lighteval.metrics.metrics_sample import (
     JudgeLLMSimpleQA,
     LoglikelihoodAcc,
     MajAtN,
+    NumShots,
     PassAtK,
     Recall,
     RulerStringMatch,
@@ -384,6 +385,14 @@ class Metrics(Enum):
     squad_v2_official_f1 = SampleLevelMetric(
         metric_name="f1",
         sample_level_fn=SquadOfficialScore(score="f1", no_answer_string="Not in background"),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    # Mean number of few-shot examples per prompt actually used (a log, not a score).
+    n_shots = SampleLevelMetric(
+        metric_name="n_shots",
+        sample_level_fn=NumShots(),
         category=SamplingMethod.GENERATIVE,
         corpus_level_fn=np.mean,
         higher_is_better=True,

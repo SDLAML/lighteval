@@ -324,6 +324,16 @@ class EmptyPrediction(SampleLevelComputation):
         return float(not texts or not texts[0].strip())
 
 
+class NumShots(SampleLevelComputation):
+    def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
+        """The number of few-shot examples this prompt really got (can be below K: small pool, demo = evaluated item).
+
+        Returns:
+            float: len(doc.fewshot_samples)
+        """
+        return float(len(doc.fewshot_samples))
+
+
 class LoglikelihoodAcc(SampleLevelComputation):
     def __init__(self, logprob_normalization: LogProbNormalization | None = None):
         """Log likelihood accuracy class. It tests if the highest log-probability of the possible choices

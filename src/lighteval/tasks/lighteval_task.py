@@ -466,6 +466,13 @@ class LightevalTaskConfig:
             from. Defaults to None.
         few_shots_select (str | None, optional): Method for selecting few-shot
             examples. Defaults to None.
+        few_shots_rows (Callable[[], list[dict]] | None, optional): Fixed few-shot
+            demonstrations: a function returning dataset rows (same fields as the
+            evaluation rows, formatted by `prompt_function` with `__few_shots=True`)
+            in the order they are shown. They replace `few_shots_split` as the pool;
+            use `few_shots_select="sequential"` to get the first K of them, in order,
+            for every prompt. A demo identical to the evaluated item is excluded.
+            Defaults to None.
 
     Generation Parameters:
         generation_size (int | None, optional): Maximum token length for generated
@@ -521,6 +528,7 @@ class LightevalTaskConfig:
     evaluation_splits: ListLike[str] = field(default_factory=lambda: ["validation"])
     few_shots_split: str | None = None
     few_shots_select: str | None = None
+    few_shots_rows: Callable[[], list[dict]] | None = None
 
     # Generation args
     generation_size: int | None = None
@@ -627,8 +635,12 @@ class LightevalTask:
         self._docs = None
 
         self._fewshot_docs = None
+        self.fewshot_rows = config.few_shots_rows
+        # Fixed demonstration rows replace the few-shot split (no split is guessed or warned about).
         self.fewshot_split: str | None = (
-            config.few_shots_split
+            None
+            if self.fewshot_rows is not None
+            else config.few_shots_split
             or self.get_first_possible_fewshot_splits(config.hf_avail_splits or [])
         )
         self.fewshot_selection = config.few_shots_select
@@ -754,8 +766,23 @@ class LightevalTask:
         if self._fewshot_docs is None:
             self._fewshot_docs = []
 
+            if self.fewshot_rows is not None:
+                # Fixed demonstrations given as rows (e.g. the official demos of a benchmark), in their order.
+                for ix, row in enumerate(self.fewshot_rows()):
+                    row = dict(row)
+                    row["__few_shots"] = True
+                    row["__index"] = ix
+                    doc = self.formatter(row, self.name)
+                    if doc is None or doc == []:
+                        continue
+                    doc.id = f"few_shots_{ix}"
+                    doc.source_id = ("few_shots", ix)
+                    doc.generation_grammar = self.generation_grammar
+                    doc.generation_size = self.generation_size
+                    doc.stop_sequences = self.stop_sequence
+                    self._fewshot_docs.append(doc)
             # If we have no available few shot split, the few shot data is the eval data!
-            if self.fewshot_split is None:
+            elif self.fewshot_split is None:
                 self._fewshot_docs = self._get_docs_from_split(
                     self.evaluation_split, few_shots=True
                 )
@@ -820,6 +847,16 @@ class LightevalTask:
             doc.stop_sequences = self.stop_sequence
             doc.num_samples = max(self.num_samples)
             docs.append(doc)
+
+        if self.dataset_config.num_fewshots > 0 and docs:
+            # The shots a prompt really gets can be fewer than K (small pool, demos equal to the evaluated item).
+            shots_per_prompt: dict[int, int] = {}
+            for doc in docs:
+                shots_per_prompt[len(doc.fewshot_samples)] = shots_per_prompt.get(len(doc.fewshot_samples), 0) + 1
+            logger.info(
+                f"{self.full_name}: K={self.dataset_config.num_fewshots}, few-shot examples per prompt "
+                f"(number of shots: number of prompts) {dict(sorted(shots_per_prompt.items()))}"
+            )
 
         return docs
 
