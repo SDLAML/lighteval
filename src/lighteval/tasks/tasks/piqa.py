@@ -43,7 +43,12 @@ def piqa_mcf_prompt(line, task_name: str = None):
     """MCF variant: labeled A/B options in prompt, score label tokens via logprobs."""
     choices = [line["sol1"], line["sol2"]]
     options = "\n".join(f" {l}. {c}" for l, c in zip(["A", "B"], choices))
-    query = f"Goal: {line['goal']}\n{options}\nAnswer:"
+    query = (
+        "Choose the more plausible option based on everyday physical commonsense.\n"
+        "The context may describe a goal, an object, or a question.\n"
+        "Answer with A or B.\n\n"
+        f"Context: {line['goal']}\n{options}\nAnswer:"
+    )
     gold_ix = int(line["label"])
     return Doc(
         task_name=task_name,
@@ -55,7 +60,11 @@ def piqa_mcf_prompt(line, task_name: str = None):
 
 def piqa_cf_prompt(line, task_name: str = None):
     """CF variant: completion-style prompt, score full answer texts via logprobs."""
-    query = f"Goal: {line['goal']}\nAnswer:"
+    query = (
+        "Use everyday physical commonsense to provide a plausible response "
+        "to the context below.\n\n"
+        f"Context: {line['goal']}\nResponse:"
+    )
     choices = [line["sol1"], line["sol2"]]
     choices = [c if c and c[0].isspace() else " " + c for c in choices]
     gold_ix = int(line["label"])
