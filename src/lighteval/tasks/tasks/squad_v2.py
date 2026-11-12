@@ -41,16 +41,46 @@ def _squad_v2_adapter(line):
     }
 
 
-# Keep only answerable questions (matches opt-g): both gen and bpb always have a gold.
+# Keep only answerable questions. Used by the variants that need a gold continuation (:bpb) and by
+# :gen_answerable (the old answerable-only form). The official :gen keeps ALL questions (OLMES does too).
 def _answerable(line):
     return any(ans for ans in line["answers"]["text"] if len(ans) > 0)
 
 
 _qa_prompt = get_qa_prompt_function(Language.ENGLISH, _squad_v2_adapter)
 
+# OLMES squad2 (oe_eval/tasks/oe_eval_tasks/squad2.py, context_kwargs): description, no-answer string, prompt layout.
+# The description is `Doc.instruction`: the prompt manager puts it once at the top and joins it with "\n\n", which
+# gives OLMES's `description + "\n\n"`, so it carries no trailing newlines here.
+SQUAD_V2_DESCRIPTION = (
+    "Answer each question using information in the preceding background paragraph. "
+    'If there is not enough information provided, answer with "Not in background".'
+)
+SQUAD_V2_NO_ANSWER = "Not in background"
+
 
 def squad_v2_gen_prompt(line, task_name: str = None):
-    """GenQA variant: templated QA prompt, score F1/EM against all gold answers."""
+    """Official SQuAD v2 form with the OLMES squad2 prompt: ALL questions, abstention = "Not in background".
+
+    Query "Title: ..\\n\\nBackground: ..\\n\\nQuestion: ..\\n\\nAnswer:"; a question without answer has the single
+    answer "Not in background" (what the shots show) and `specific["unanswerable"]`, which the scorer
+    (`Metrics.squad_v2_official_*`) turns into the official gold "" (a prediction "Not in background" counts as "").
+    """
+    answers = list(dict.fromkeys(ans for ans in line["answers"]["text"] if len(ans) > 0))
+    unanswerable = len(answers) == 0
+    choices = [SQUAD_V2_NO_ANSWER] if unanswerable else answers
+    return Doc(
+        task_name=task_name,
+        query=f"Title: {line['title']}\n\nBackground: {line['context']}\n\nQuestion: {line['question']}\n\nAnswer:",
+        choices=choices,
+        gold_index=list(range(len(choices))),
+        instruction=SQUAD_V2_DESCRIPTION,
+        specific={"unanswerable": unanswerable},
+    )
+
+
+def squad_v2_gen_answerable_prompt(line, task_name: str = None):
+    """Old GenQA variant (answerable questions only): templated QA prompt, F1/EM against all gold answers."""
     return _qa_prompt(line, task_name)
 
 
@@ -68,9 +98,28 @@ def squad_v2_bpb_prompt(line, task_name: str = None):
     )
 
 
+# Official SQuAD v2 (all 11,873 validation questions; few-shot pool = all of train, so the shots show the abstention).
+# OLMES squad2: stop ["Title:", "\n\n"], max_gen_toks 50. Scorer = official compute_score.py (see SquadOfficialScore);
+# `empty_pred` logs the share of empty generations (an empty output is the official no-answer prediction).
 squad_v2_gen = LightevalTaskConfig(
     name="squad_v2:gen",
     prompt_function=squad_v2_gen_prompt,
+    hf_repo="rajpurkar/squad_v2",
+    hf_subset="squad_v2",
+    hf_avail_splits=["train", "validation"],
+    evaluation_splits=["validation"],
+    few_shots_split="train",
+    few_shots_select="random_sampling_from_train",
+    generation_size=50,
+    metrics=[Metrics.squad_v2_official_f1, Metrics.squad_v2_official_em, Metrics.empty_pred],
+    stop_sequence=["Title:", "\n\n"],
+    version=2,
+)
+
+# The old form: answerable questions only (5,928 of 11,873), old QA prompt, F1/EM of `qa_f1` / `qa_em`.
+squad_v2_gen_answerable = LightevalTaskConfig(
+    name="squad_v2:gen_answerable",
+    prompt_function=squad_v2_gen_answerable_prompt,
     hf_repo="rajpurkar/squad_v2",
     hf_subset="squad_v2",
     hf_filter=_answerable,
@@ -102,5 +151,6 @@ squad_v2_bpb = LightevalTaskConfig(
 
 TASKS_TABLE = [
     squad_v2_gen,
+    squad_v2_gen_answerable,
     squad_v2_bpb,
 ]

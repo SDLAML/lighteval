@@ -46,6 +46,7 @@ from lighteval.metrics.metrics_sample import (
     AccGoldLikelihood,
     AvgAtN,
     BertScore,
+    EmptyPrediction,
     ExactMatches,
     Extractiveness,
     F1_score,
@@ -59,6 +60,7 @@ from lighteval.metrics.metrics_sample import (
     RulerStringMatch,
     RulerStringMatchAll,
     RulerStringMatchAny,
+    SquadOfficialScore,
     StringDistance,
 )
 from lighteval.metrics.normalizations import (
@@ -354,6 +356,45 @@ class Metrics(Enum):
         category=SamplingMethod.GENERATIVE,
         corpus_level_fn=np.mean,
         higher_is_better=True,
+    )
+    # Official SQuAD v2 evaluation script (compute_score.py): normaliser with article removal, Counter F1,
+    # empty-answer rule, max over golds. Use for open-domain / extractive QA (TriviaQA, WikiFact, PopQA, ...).
+    squad_official_em = SampleLevelMetric(
+        metric_name="em",
+        sample_level_fn=SquadOfficialScore(score="em"),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    squad_official_f1 = SampleLevelMetric(
+        metric_name="f1",
+        sample_level_fn=SquadOfficialScore(score="f1"),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    # Same scorer for SQuAD v2 with the OLMES prompt: a prediction "Not in background" is the no-answer prediction.
+    squad_v2_official_em = SampleLevelMetric(
+        metric_name="em",
+        sample_level_fn=SquadOfficialScore(score="em", no_answer_string="Not in background"),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    squad_v2_official_f1 = SampleLevelMetric(
+        metric_name="f1",
+        sample_level_fn=SquadOfficialScore(score="f1", no_answer_string="Not in background"),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    # Share of empty generations (a log, not a score: lower is better).
+    empty_pred = SampleLevelMetric(
+        metric_name="empty_pred",
+        sample_level_fn=EmptyPrediction(),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=False,
     )
     expr_gold_metric = SampleLevelMetric(
         metric_name="extractive_match",

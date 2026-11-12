@@ -29,6 +29,7 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
+from collections import Counter
 from typing import Callable, Literal, Union
 
 import nltk
@@ -50,6 +51,7 @@ from lighteval.metrics.normalizations import (
     normalize_log_probs,
     remove_braces,
     remove_braces_and_strip,
+    squad_normalize_answer,
 )
 from lighteval.metrics.utils.nltk_resources import ensure_nltk_resource
 from lighteval.metrics.utils.judge_utils import (
@@ -242,6 +244,84 @@ class F1_score(SampleLevelComputation):
         if ret is None:
             return 0.0
         return ret
+
+
+class SquadOfficialScore(SampleLevelComputation):
+    def __init__(self, score: Literal["em", "f1"], no_answer_string: str | None = None):
+        """Exact match / F1 of the OFFICIAL SQuAD v2 evaluation script (`compute_score.py`), per sample.
+
+        Copy of `get_raw_scores`, `compute_exact` and `compute_f1` of the official script:
+        - normalisation (`squad_normalize_answer`): lower-case, delete punctuation, delete the articles a / an / the,
+          collapse whitespace;
+        - exact match: the normalised strings are equal; F1: token overlap with token COUNTS (a `Counter`
+          intersection, not a set); if the gold or the prediction has no token the score is 1 when both are empty
+          and 0 otherwise;
+        - golds whose normalised form is empty are dropped; a question without gold has the single gold ""
+          (the only correct answer to an unanswerable question is the empty string); max over the golds.
+
+        Args:
+            score (str): "em" or "f1".
+            no_answer_string (str, optional): the text a model writes to say that the question cannot be answered
+                (OLMES: "Not in background"). A prediction that normalises to this text is mapped to "" before
+                scoring (the official no-answer prediction). Leave it None for tasks without abstention
+                (TriviaQA, WikiFact, PopQA, ...): then the prediction is scored as it is.
+
+        A doc is unanswerable when `doc.specific["unanswerable"]` is true; its gold is then [""] whatever
+        `doc.choices` holds (the shots of such a doc show `choices[0]`, e.g. "Not in background").
+        As in the official script an EMPTY prediction is the no-answer prediction: it scores 1 on an unanswerable
+        question (use the `empty_pred` metric to see how often a model returns nothing).
+        """
+        if score not in ("em", "f1"):
+            raise ValueError(f"score must be 'em' or 'f1', got {score}")
+        self.score = score
+        self.no_answer = squad_normalize_answer(no_answer_string) if no_answer_string is not None else None
+
+    def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
+        if doc.specific and doc.specific.get("unanswerable"):
+            golds = [""]
+        else:
+            golds = [gold for gold in doc.get_golds() if squad_normalize_answer(gold)]
+            if not golds:
+                golds = [""]
+        results = []
+        for pred in model_response.final_text:
+            if self.no_answer is not None and squad_normalize_answer(pred) == self.no_answer:
+                pred = ""
+            for gold in golds:
+                results.append(self.compute_one_item(gold=gold, pred=pred))
+        return max(results)
+
+    def compute_one_item(self, gold: str, pred: str) -> float:
+        """Compares two strings only (official `compute_exact` / `compute_f1`).
+
+        Returns:
+            float: The score of this gold / prediction pair
+        """
+        if self.score == "em":
+            return int(squad_normalize_answer(gold) == squad_normalize_answer(pred))
+        gold_toks = squad_normalize_answer(gold).split() if gold else []
+        pred_toks = squad_normalize_answer(pred).split() if pred else []
+        common = Counter(gold_toks) & Counter(pred_toks)
+        num_same = sum(common.values())
+        if len(gold_toks) == 0 or len(pred_toks) == 0:
+            # If either is no-answer, then F1 is 1 if they agree, 0 otherwise
+            return int(gold_toks == pred_toks)
+        if num_same == 0:
+            return 0
+        precision = 1.0 * num_same / len(pred_toks)
+        recall = 1.0 * num_same / len(gold_toks)
+        return (2 * precision * recall) / (precision + recall)
+
+
+class EmptyPrediction(SampleLevelComputation):
+    def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
+        """1.0 if the (first) generated text is empty after strip, else 0.0. Averaged: the share of empty outputs.
+
+        Returns:
+            float: 1.0 for an empty generation
+        """
+        texts = model_response.final_text
+        return float(not texts or not texts[0].strip())
 
 
 class LoglikelihoodAcc(SampleLevelComputation):

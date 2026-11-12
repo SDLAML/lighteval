@@ -81,6 +81,36 @@ def harness_triviaqa_normalizer(text: str) -> str:
     return text.lower().translate(str.maketrans("", "", string.punctuation))
 
 
+_SQUAD_ARTICLES_REGEX = re.compile(r"\b(a|an|the)\b", re.UNICODE)
+
+
+def squad_normalize_answer(s: str) -> str:
+    """Lower text and remove punctuation, articles and extra whitespace.
+
+    Copy of `normalize_answer` in the official SQuAD v2 evaluation script (`compute_score.py` of the
+    HF evaluate metric `squad_v2`): lower-case, delete ASCII punctuation, replace the articles a / an / the
+    by a space, collapse whitespace (in this order).
+
+    Returns:
+        str: The normalised answer
+    """
+
+    def remove_articles(text):
+        return _SQUAD_ARTICLES_REGEX.sub(" ", text)
+
+    def white_space_fix(text):
+        return " ".join(text.split())
+
+    def remove_punc(text):
+        exclude = set(string.punctuation)
+        return "".join(ch for ch in text if ch not in exclude)
+
+    def lower(text):
+        return text.lower()
+
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
+
+
 def bigbench_normalizer(text: str):
     """Normalize text for BigBench evaluation.
 
