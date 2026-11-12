@@ -20,10 +20,14 @@ https://arxiv.org/abs/2109.07958
 
 import numpy as np
 
-from lighteval.metrics.harness_compatibility.truthful_qa import TruthfulqaMCMetrics
+from lighteval.metrics.harness_compatibility.truthful_qa import (
+    TRUTHFULQA_GEN_KEYS,
+    TruthfulqaGenMetrics,
+    TruthfulqaMCMetrics,
+)
 from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.metrics_sample import SampleLevelComputation
-from lighteval.metrics.utils.metric_utils import SampleLevelMetric, SamplingMethod
+from lighteval.metrics.utils.metric_utils import SampleLevelMetric, SampleLevelMetricGrouping, SamplingMethod
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
@@ -49,6 +53,16 @@ truthfulqa_mc2_metric = SampleLevelMetric(
     category=SamplingMethod.LOGPROBS,
     corpus_level_fn=np.mean,
     higher_is_better=True,
+)
+
+
+# BLEU / ROUGE max, acc, diff of the ANSWER inside the generation (the official protocol, see truthful_qa_generative_prompt).
+truthfulqa_gen_official_metrics = SampleLevelMetricGrouping(
+    metric_name=TRUTHFULQA_GEN_KEYS,
+    sample_level_fn=TruthfulqaGenMetrics(extract_answer=True),
+    category=SamplingMethod.GENERATIVE,
+    corpus_level_fn=dict.fromkeys(TRUTHFULQA_GEN_KEYS, np.mean),
+    higher_is_better=dict.fromkeys(TRUTHFULQA_GEN_KEYS, True),
 )
 
 
@@ -94,10 +108,21 @@ def _format_truthfulqa_answers(answers):
 
 
 def truthful_qa_generative_prompt(line, task_name: str = None):
-    """lm-evaluation-harness `truthfulqa_gen`: fixed 6-shot "Q:/A:" primer + "Q: <question>", scored by BLEU / ROUGE.
+    """TruthfulQA generation, the OFFICIAL protocol for a HF causal LM (github.com/sylinrl/TruthfulQA; the same prompt as the
+    lm-evaluation-harness `truthfulqa_gen`): fixed 6-shot "Q:/A:" primer + "\\n\\nQ: <question>", greedy, 50 new tokens, NO stop
+    string. The model continues with " \\nA: <answer>\\n\\nQ: <next question> ..."; the answer is taken out of the generation by
+    the metric (`TruthfulqaGenMetrics(extract_answer=True)` -> `official_answer`: after the first "A:", before the first "Q:",
+    stripped), then BLEU / ROUGE of it against the correct and the incorrect references.
 
-    Correct answers get "I have no comment." appended when absent (as in the harness `preprocess_function`).
-    The query ends with the question, like the harness (`{{prompt_qa + '\\n\\nQ: ' + question}}`, no "A:").
+    Where each step comes from (file:lines in the official repository):
+      - prompt: presets.py `QA_PRIMER` (identical to `_TRUTHFULQA_GEN_PRIMER`) + utilities.py:42 `format_prompt`
+        (`primer + '\\n\\nQ: ' + question`; the question is NOT stripped, one question has a trailing space);
+      - generation: models.py:220-243 `run_answers` (`top_k=1`, `max_length = prompt length + 50`, no stop, no `A:` in the prompt);
+      - answer extraction: models.py:236-243 and `find_subsequence` l.496-510 (on token ids; here on the text, see `official_answer`);
+      - references and metrics: metrics.py:176-262 `run_bleu_and_rouge` (correct = "Correct Answers" split on ';', stripped,
+        a final "." added, + "I have no comment." when absent; incorrect = "Incorrect Answers"; acc = best correct > best incorrect).
+    Differences kept: the prompt is tokenised without special tokens (no BOS, owner); an empty answer scores 0 in the mean
+    (the official code skips it, NaN); the reference lists come from the HF dataset (not split on ';').
     """
     correct_answers = _format_truthfulqa_answers(line["correct_answers"])
     incorrect_answers = _format_truthfulqa_answers(line["incorrect_answers"])
@@ -106,7 +131,7 @@ def truthful_qa_generative_prompt(line, task_name: str = None):
 
     return Doc(
         task_name=task_name,
-        query=f"{_TRUTHFULQA_GEN_PRIMER}\n\nQ: {line['question'].strip()}",
+        query=f"{_TRUTHFULQA_GEN_PRIMER}\n\nQ: {line['question']}",
         choices=correct_answers + incorrect_answers,
         gold_index=list(range(len(correct_answers))),
     )
@@ -121,12 +146,14 @@ truthfulqa_gen = LightevalTaskConfig(
     evaluation_splits=["validation"],
     few_shots_split=None,
     few_shots_select=None,
-    # harness defaults of generate_until: stop at "\n\n" (the fewshot delimiter), at most 256 new tokens. The 6 shots are in
-    # the prompt: run it with |0 (a |K > 0 would add shots drawn from the evaluated split).
-    generation_size=256,
-    metrics=[Metrics.truthfulqa_gen_metrics],
-    stop_sequence=["\n\n"],
-    version=2,
+    # Official protocol (models.py `run_answers`): 50 new tokens, greedy, NO stop string; the answer is cut out of the
+    # generation by the metric. (The lm-eval harness stops at "\n\n" and scores the raw text; that left 122 of 817 outputs empty
+    # for Qwen3-1.7B-Base because it starts with " \nA:".) The 6 shots are in the prompt: run it with |0 (a |K > 0 would add
+    # shots drawn from the evaluated split).
+    generation_size=50,
+    metrics=[truthfulqa_gen_official_metrics],
+    stop_sequence=[],
+    version=3,                      # 3: official protocol (no stop, 50 tokens, answer extraction); 2: lm-eval (stop "\n\n", raw text)
 )
 
 truthfulqa_mc = LightevalTaskConfig(
