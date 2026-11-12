@@ -106,7 +106,8 @@ nanotron = [
   "tensorboardX"
 ]
 tensorboardX = ["tensorboardX"]
-vllm = ["vllm>=0.10.0", "ray", "more_itertools"]
+vllm = ["vllm>=0.10.0", "more_itertools"]
+ray = ["ray"]  # only for distributed_backend="ray"
 sglang = ["sglang"]
 quality = ["ruff>=v0.11.0","pre-commit"]
 tests = ["pytest>=7.4.0","deepdiff","pip>=25.2"]

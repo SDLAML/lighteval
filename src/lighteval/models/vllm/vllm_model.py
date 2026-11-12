@@ -46,7 +46,11 @@ logger = logging.getLogger(__name__)
 
 if is_package_available("vllm"):
     import multiprocessing as mp
-    import ray
+
+    try:  # Ray is optional: only distributed_backend="ray" uses it (titan_eval runs data parallelism with "mp")
+        import ray
+    except ImportError:
+        ray = None
     from more_itertools import distribute
     from vllm import LLM, RequestOutput, SamplingParams
     from vllm.distributed.parallel_state import (
@@ -176,7 +180,7 @@ class VLLMModelConfig(ModelConfig):
             This prompt sets the behavior and context for the model during evaluation.
         cache_dir (str, optional, defaults to "~/.cache/huggingface/lighteval"): Directory to cache the model.
         enforce_eager (bool, optional, defaults to False): Whether to enforce eager execution mode in vllm.
-        distributed_backend (str, optional, defaults to "ray"): Backend for data parallelism: "ray" or "mp" (multiprocessing).
+        distributed_backend (str, optional, defaults to "mp"): Backend for data parallelism: "mp" (multiprocessing) or "ray" (needs ray).
 
     Example:
         ```python
@@ -222,7 +226,7 @@ class VLLMModelConfig(ModelConfig):
     override_chat_template: bool = None
     chat_template_kwargs: dict = Field(default_factory=dict)
     enforce_eager: bool = False  # Whether to enforce eager execution mode in vllm
-    distributed_backend: str = "ray"  # Backend for data parallelism: "ray" or "mp" (multiprocessing)
+    distributed_backend: str = "mp"  # Backend for data parallelism: "mp" (multiprocessing, default) or "ray" (needs ray installed)
 
 
 @requires("vllm")
@@ -239,6 +243,8 @@ class VLLMModel(LightevalModel):
         self.data_parallel_size = config.data_parallel_size
         self.tensor_parallel_size = config.tensor_parallel_size
         self.distributed_backend = config.distributed_backend
+        if self.distributed_backend == "ray" and config.data_parallel_size > 1 and ray is None:
+            raise ImportError('distributed_backend="ray" needs the ray package; use distributed_backend="mp"')
         self._add_special_tokens = config.add_special_tokens if config.add_special_tokens is not None else False
         self._tokenizer = self._create_auto_tokenizer(config)
 
