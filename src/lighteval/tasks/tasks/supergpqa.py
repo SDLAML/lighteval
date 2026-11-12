@@ -9,8 +9,9 @@ abstract:
 SuperGPQA evaluates graduate-level knowledge across 285 disciplines using
 multiple-choice questions with four to ten options. The full benchmark is
 published in the train split; all variants evaluate that split. Subtasks filter
-by discipline, optionally followed by difficulty (easy, middle, hard), with
-names such as supergpqa:engineering:cf and supergpqa:engineering:hard:cf.
+by discipline (13 tasks, all difficulties each), with names such as
+supergpqa:engineering:cf. The difficulty of each question is kept in the per-item
+details (Doc.specific["difficulty"]), not as separate tasks.
 
 languages:
 english
@@ -82,6 +83,8 @@ def supergpqa_mcf_prompt(line, task_name: str = None):
         query=f"Answer the following multiple choice question.\n\nQuestion: {line['question'].strip()}\n{options}\nAnswer:",
         choices=[f" {label}" for label in labels],
         gold_index=labels.index(line["answer_letter"]),
+        # kept in the per-item details (Doc), so a breakdown by difficulty / discipline can be computed offline
+        specific={"uuid": line["uuid"], "discipline": line["discipline"], "difficulty": line["difficulty"]},
     )
 
 
@@ -194,5 +197,9 @@ TASKS_TABLE = [
     )
     for config in [supergpqa_cf, supergpqa_mcf, supergpqa_mcf_em, supergpqa_cot]
     for discipline in _SUPERGPQA_DISCIPLINES
-    for difficulty in [None, *_SUPERGPQA_DIFFICULTIES]
+    # Only the 13 discipline tasks (all difficulties). The discipline x difficulty cells (`_SUPERGPQA_DIFFICULTIES`)
+    # are NOT registered: they re-score the same questions (53,058 evaluations for 26,529 questions) and the
+    # `supergpqa:<variant>` superset would average all 52 tasks, 1-question cells included. A difficulty breakdown
+    # comes from `Doc.specific["difficulty"]` in the per-item details.
+    for difficulty in [None]
 ]
