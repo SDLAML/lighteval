@@ -1300,7 +1300,17 @@ def _qa_generate_samples(
 # ---------------------------------------------------------------------------
 
 
+def _reseed() -> None:
+    """Start every (length, subset) from the same RNG state. The sizing loops and the VT in-context example draw from the
+    global RNGs BEFORE the per-sample seeding starts; without this the data depended on what the process had generated
+    earlier (VT differed between two runs of the same tokenizer)."""
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    _CWE_RNG.seed(RANDOM_SEED)
+
+
 def _generate_subset(subset: str, length: int, tokenizer) -> list[dict]:
+    _reseed()
     if subset == "niah_single_1":
         return _niah_generate_samples(
             "The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again.",
