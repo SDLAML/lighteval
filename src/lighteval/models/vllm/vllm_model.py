@@ -36,6 +36,7 @@ from lighteval.data import GenerativeTaskDataset, LoglikelihoodDataset
 from lighteval.models.abstract_model import LightevalModel, ModelConfig
 from lighteval.models.model_output import ModelResponse
 from lighteval.models.utils import _simplify_name, uses_chat_template
+from lighteval.models.vllm.dp_pool import DPPool, interleave, rebuild_output
 from lighteval.tasks.prompt_manager import PromptManager
 from lighteval.tasks.requests import Doc, SamplingMethod
 from lighteval.utils.cache_management import SampleCache, cached
@@ -45,8 +46,6 @@ logger = logging.getLogger(__name__)
 
 
 if is_package_available("vllm"):
-    import multiprocessing as mp
-
     try:  # Ray is optional: only distributed_backend="ray" uses it (titan_eval runs data parallelism with "mp")
         import ray
     except ImportError:
@@ -73,14 +72,16 @@ if is_package_available("vllm"):
     logging.getLogger("ray").handlers.clear()
 else:
     from unittest.mock import Mock
-    import multiprocessing as mp
 
     LLM = SamplingParams = get_tokenizer = distribute = destroy_distributed_environment = (
         destroy_model_parallel
     ) = Mock()
     AsyncLLM = AsyncEngineArgs = RequestOutput = TokensPrompt = ray = Mock()
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# TOKENIZERS_PARALLELISM is left at its default (parallel batch tokenization). It used to be forced to "false" here,
+# which made the tokenization of a long-context task (ruler_65536: 900 prompts, 14 M tokens) single threaded: 27 s
+# instead of 3 s. The data-parallel workers are spawned (not forked), so the usual fork-after-parallelism deadlock
+# cannot happen with them.
 
 STARTING_BATCH_SIZE = 512
 
@@ -99,20 +100,6 @@ def _restore_vllm_019_config(config):
             # unscaled sliding-attention RoPE from its theta itself.
             config.rope_parameters = rope_parameters["full_attention"].copy()
     return config
-
-
-def _run_inference_worker(gpu_id: int, model_args: dict, sampling_params_dict: dict, requests: list, result_queue):
-    """Worker function to run inference on a single GPU. Must be at module level for pickling."""
-    try:
-        # Set CUDA device for this worker
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        from vllm import LLM, SamplingParams
-        sampling_params = SamplingParams(**sampling_params_dict)
-        llm = LLM(**model_args)
-        results = llm.generate(requests, sampling_params=sampling_params)
-        result_queue.put((gpu_id, results))
-    except Exception as e:
-        result_queue.put((gpu_id, e))
 
 
 def _with_max_position_embeddings(hf_overrides, value):
@@ -304,7 +291,25 @@ class VLLMModel(LightevalModel):
     def tokenizer(self):
         return self._tokenizer
 
+    # Persistent data-parallel workers (distributed_backend="mp"): one engine per GPU for the whole lighteval call.
+    _dp_pool_obj: Optional[DPPool] = None
+    _dp_engine_factory: Optional[str] = None  # "module:function" building a fake engine; for the unit tests only
+
+    def _dp_pool(self) -> DPPool:
+        if self._dp_pool_obj is None:
+            self._dp_pool_obj = DPPool(
+                self.model_args, self.data_parallel_size, engine_factory=self._dp_engine_factory
+            )
+        self._dp_pool_obj.start()  # no-op when the workers are already up
+        return self._dp_pool_obj
+
+    def _dp_shutdown(self):
+        if self._dp_pool_obj is not None:
+            self._dp_pool_obj.shutdown()
+            self._dp_pool_obj = None
+
     def cleanup(self):
+        self._dp_shutdown()
         destroy_model_parallel()
         if self.model is not None:
             del self.model
@@ -492,6 +497,8 @@ class VLLMModel(LightevalModel):
                     text=result,
                     output_tokens=list(output_token_ids),
                     input_tokens=input_token_ids,
+                    # "length" = this generation was cut by the max_new_tokens cap (not by EOS / a stop sequence)
+                    finish_reasons=[getattr(output, "finish_reason", None) for output in vllm_output.outputs],
                     truncated_tokens_count=truncated_tokens[i],
                 )
                 results.append(cur_response)
@@ -506,9 +513,15 @@ class VLLMModel(LightevalModel):
         returns_logits: Optional[bool] = False,
         num_samples: int = 1,
         generate: bool = True,
+        keep_last: Optional[list[int]] = None,
     ) -> list:
-        """Contains the actual logic of the generation."""
+        """Contains the actual logic of the generation.
+
+        `keep_last` (loglikelihood only, one int per input): how many trailing prompt positions of `prompt_logprobs` the
+        caller reads. The data-parallel workers send back only those (the rest would be pickled for nothing).
+        """
         # Wrap inputs with TokensPrompt to make compatible with VLLM >= 0.10.2
+        token_id_lists = inputs
         inputs = [TokensPrompt(prompt_token_ids=token_ids) for token_ids in inputs]
         sampling_kwargs = self.config.generation_parameters.to_vllm_dict()
 
@@ -553,52 +566,16 @@ class VLLMModel(LightevalModel):
                     if x is not None
                 ]
             else:
-                # Multiprocessing-based data parallelism
-                # Convert sampling_params to dict for pickling
-                sampling_params_dict = {
-                    k: getattr(sampling_params, k)
-                    for k in ['n', 'best_of', 'presence_penalty', 'frequency_penalty',
-                              'repetition_penalty', 'temperature', 'top_p', 'top_k',
-                              'min_p', 'seed', 'stop', 'stop_token_ids', 'max_tokens',
-                              'min_tokens', 'logprobs', 'prompt_logprobs', 'detokenize',
-                              'skip_special_tokens', 'spaces_between_special_tokens',
-                              'truncate_prompt_tokens']
-                    if hasattr(sampling_params, k)
-                }
-
-                # Use multiprocessing spawn context for CUDA compatibility
-                ctx = mp.get_context("spawn")
-                result_queue = ctx.Queue()
-                processes = []
-
-                for gpu_id, req in enumerate(requests):
-                    p = ctx.Process(
-                        target=_run_inference_worker,
-                        args=(gpu_id, self.model_args, sampling_params_dict, req, result_queue)
-                    )
-                    p.start()
-                    processes.append(p)
-
-                # Collect results from all workers
-                results_dict = {}
-                for _ in range(len(processes)):
-                    gpu_id, result = result_queue.get()
-                    if isinstance(result, Exception):
-                        raise result
-                    results_dict[gpu_id] = result
-
-                # Wait for all processes to complete
-                for p in processes:
-                    p.join()
-
-                # Order results by GPU ID and flatten
-                results = [results_dict[i] for i in range(len(requests))]
-                # flatten results
-                outputs = [
-                    x
-                    for x in itertools.chain.from_iterable(itertools.zip_longest(*[list(x) for x in results]))
-                    if x is not None
-                ]
+                # Multiprocessing-based data parallelism: persistent workers (one engine per GPU, built on the first call
+                # and kept until cleanup()). Every worker gets its interleaved share; the answers come back slim.
+                keep_shares = (
+                    [list(x) for x in distribute(self.data_parallel_size, keep_last)]
+                    if keep_last is not None
+                    else None
+                )
+                per_worker = self._dp_pool().generate(requests, sampling_kwargs, keep_shares)
+                slim_outputs = interleave(per_worker)
+                outputs = [rebuild_output(slim, ids) for slim, ids in zip(slim_outputs, token_id_lists)]
         else:
             outputs = self.model.generate(
                 inputs,
@@ -645,7 +622,9 @@ class VLLMModel(LightevalModel):
                         f"{sum(1 for n in truncated_tokens if n > 0)} of {len(inputs)} requests are longer than "
                         f"{self.max_length=} tokens and were truncated from the left (up to {max(truncated_tokens)} tokens cut)."
                     )
-            outputs = self._generate(inputs, generate=False)
+            outputs = self._generate(
+                inputs, generate=False, keep_last=[len(continuation) for continuation in tokenized_continuations_batch]
+            )
 
             flat_index = 0
             for i, doc in enumerate(split):

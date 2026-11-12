@@ -136,6 +136,10 @@ class ModelResponse:
     # Per-token logprobs, one list per choice (populated only when requested, e.g. rBridge metric)
     per_token_logprobs: list[list[float]] | None = None
 
+    # Why each generation stopped (vLLM): "stop" (EOS or a stop sequence), "length" (cut by the max_new_tokens cap) or
+    # None (not recorded). One entry per element of `text`. Shows up in the details parquet as model_response.finish_reasons.
+    finish_reasons: list[str | None] = field(default_factory=list)
+
     # Other metadata
     truncated_tokens_count: int = 0  # How many tokens truncated
     padded_tokens_count: int = 0  # How many tokens of padding
@@ -157,6 +161,7 @@ class ModelResponse:
             logits=[self.logits[index]] if self.logits else None,
             unconditioned_logprobs=[self.unconditioned_logprobs[index]] if self.unconditioned_logprobs else None,
             per_token_logprobs=[self.per_token_logprobs[index]] if self.per_token_logprobs else None,
+            finish_reasons=[self.finish_reasons[index]] if self.finish_reasons else [],
             truncated_tokens_count=self.truncated_tokens_count,
             padded_tokens_count=self.padded_tokens_count,
         )
