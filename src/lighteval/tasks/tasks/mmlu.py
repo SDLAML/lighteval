@@ -18,7 +18,10 @@ paper:
 https://arxiv.org/abs/2009.03300
 """
 
+from functools import partial
 from string import ascii_uppercase
+
+from datasets import load_dataset
 
 from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
@@ -168,32 +171,37 @@ def mmlu_chat_prompt(line, task_name: str = None):
     )
 
 
-def mmlu_redux_prompt(line, task_name: str = None):
-    """MCF-style redux prompt — mirrors mmlu_prompt exactly, filters non-ok rows."""
+def mmlu_redux_prompt(line, task_name: str = None, *, subject: str):
+    """MCF redux prompt: the text of `mmlu_mcf_prompt` for the questions MMLU-Redux 2.0 marks "ok" (others -> None).
+
+    The MMLU-Redux rows have no `subject` column (it is the config name), so the subject is passed in
+    (`partial(mmlu_redux_prompt, subject=subset)`). The text comes from `mmlu_mcf_prompt` itself, so an item of this task
+    and an item of `mmlu:<subject>:mcf_em` differ only in the question (the old copy had no space before the option letters).
+    """
     if line["error_type"] != "ok":
         return None
-
-    subject = line["subject"]
-    query = f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\nQuestion: {line['question']}"
-    query += "".join(
-        [f"\n{key}. {choice}" for key, choice in zip(ascii_uppercase, line["choices"])]
-    )
-    query += "\nAnswer:"
-
-    gold_ix = (
-        ascii_uppercase.index(line["answer"])
-        if isinstance(line["answer"], str)
-        else line["answer"]
-    )
-
-    return Doc(
+    return mmlu_mcf_prompt(
+        {
+            "subject": subject,
+            "question": line["question"],
+            "choices": line["choices"],
+            "answer": line["answer"],
+        },
         task_name=task_name,
-        query=query,
-        choices=[" A", " B", " C", " D"],
-        gold_index=gold_ix,
-        fewshot_sorting_class=line["choices"][gold_ix],
-        instruction=f"The following are multiple choice questions (with answers) about {subject.replace('_', ' ')}.\n\n",
     )
+
+
+def _mmlu_dev_rows(subset: str) -> list[dict]:
+    """The dev questions of the ORIGINAL MMLU (`lighteval/mmlu`, 5 per subject), as MMLU-Redux-style rows.
+
+    MMLU-Redux has no dev split; the redux tasks take their shots from here (not from the evaluated redux rows), so they
+    get the same 5 demonstrations as `mmlu:<subject>:mcf_em`. Read from the cached / downloaded `lighteval/mmlu`.
+    """
+    dev = load_dataset("lighteval/mmlu", subset, split="dev")
+    return [
+        {"question": row["question"], "choices": row["choices"], "answer": row["answer"], "error_type": "ok"}
+        for row in dev
+    ]
 
 
 def mmlu_redux_cf_prompt(line, task_name: str = None):
@@ -328,17 +336,19 @@ TASKS_TABLE += [
 TASKS_TABLE += [
     LightevalTaskConfig(
         name=f"mmlu_redux:{subset}:mcf_em",
-        prompt_function=mmlu_redux_prompt,
+        prompt_function=partial(mmlu_redux_prompt, subject=subset),
         hf_repo="edinburgh-dawg/mmlu-redux-2.0",
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
-        few_shots_split="test",
-        few_shots_select="random_sampling_from_train",
+        # Shots = the 5 dev questions of the original MMLU, never rows of the evaluated redux split. `few_shots_select=None`
+        # is "balanced": all 5 in the same seeded order as `mmlu:<subject>:mcf_em` (same prompt text, same shots).
+        few_shots_rows=partial(_mmlu_dev_rows, subset),
+        few_shots_select=None,
         generation_size=5,
         metrics=[Metrics.exact_match],
         stop_sequence=["\n"],
-        version=0,
+        version=1,
     )
     for subset in _MMLU_SUBSETS
 ]
@@ -385,17 +395,17 @@ TASKS_TABLE += [
 TASKS_TABLE += [
     LightevalTaskConfig(
         name=f"mmlu_redux:{subset}:mcf",
-        prompt_function=mmlu_redux_prompt,
+        prompt_function=partial(mmlu_redux_prompt, subject=subset),
         hf_repo="edinburgh-dawg/mmlu-redux-2.0",
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
-        few_shots_split="test",
-        few_shots_select="random_sampling_from_train",
+        few_shots_rows=partial(_mmlu_dev_rows, subset),
+        few_shots_select=None,
         generation_size=-1,
         metrics=_MCF_METRICS,
         stop_sequence=["\n"],
-        version=0,
+        version=1,
     )
     for subset in _MMLU_SUBSETS
 ]
