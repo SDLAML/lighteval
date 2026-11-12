@@ -50,6 +50,13 @@ def sample_to_fewshot(sample):
     return f"{sample.input}\n\nReasoning:\n" + f"{sample.metadata['reasoning']}\n\n" + f"ANSWER: {sample.target}"
 
 
+def final_number(answer: str) -> str:
+    """The gold of an item: the text after the last '####' with the thousands commas removed (lm-evaluation-harness:
+    `answer.split('#### ')[-1]`). The metric must see ONLY this: given the whole worked solution, the extractor's 'answer'
+    anchor (extractive_match_utils.py, priority 200) fires on reasoning text and picked a wrong gold for 4 of 1,319 items."""
+    return answer.split("####")[-1].strip().replace(",", "")
+
+
 def gsm8k_prompt(line, task_name: str = None):
     if line.get("__few_shots"):
         answer = line["answer"].split("####")
@@ -70,7 +77,7 @@ def gsm8k_prompt(line, task_name: str = None):
     return Doc(
         task_name=task_name,
         query=MATH_PROMPT_TEMPLATE.format(prompt=line["question"]),
-        choices=[line["answer"]],
+        choices=[final_number(line["answer"])],
         gold_index=0,
     )
 
@@ -93,7 +100,7 @@ gsm8k = LightevalTaskConfig(
         Metrics.expr_gold_metric,
     ],
     stop_sequence=["Question:", "\n####", "####"],
-    version=0,
+    version=1,                      # 1: gold = the final number only (was the whole solution)
 )
 
 TASKS_TABLE = [
