@@ -27,6 +27,7 @@ paper:
 https://arxiv.org/abs/2509.07968
 """
 
+import re
 from functools import partial
 
 from lighteval.metrics.dynamic_metrics import MultilingualQuasiExactMatchMetric, MultilingualQuasiF1ScoreMetric
@@ -56,13 +57,36 @@ def _id_of(row: dict) -> str:
     return row["id"]
 
 
+# The translators appended the original grader's acceptance range to some numeric answers, e.g. "110,50 m (rango aceptable: cualquier
+# valor entre 109,39 y 111,61 m)" (at the pinned revision: 15 answers and the aliases of 5 rows; one of them, id 1202, is a
+# demonstration). An exact-match scorer can never match such a gold, and a demonstration teaches the model to add a note. The note is
+# removed from the gold answer and the aliases (version 1; 15 answers + aliases of 5 rows: cs / da / de / fr / es / pl forms); other parentheses are part of real answers ("IIT (BHU)") and stay.
+_RANGE_NOTE = re.compile(
+    r"\s*\((?:přijatelné rozmezí|acceptabel margen|acceptabelt interval|dopuszczalny zakres|akzeptabler Bereich|plage acceptable|marge acceptable|rango aceptable)\b[^)]*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_range_note(text: str) -> str:
+    return _RANGE_NOTE.sub("", text) if isinstance(text, str) else text
+
+
+def _clean(line: dict) -> dict:
+    out = dict(line)
+    out["answer"] = strip_range_note(line.get("answer"))
+    aliases = line.get("answer_aliases")
+    if isinstance(aliases, list):
+        out["answer_aliases"] = [strip_range_note(x) for x in aliases]
+    return out
+
+
 def _prompt_function(language):
     base = _get_qa_prompt_function(language, include_aliases=True)
 
     def prompt(line, task_name: str = None):
         if not line.get("__few_shots") and line["id"] in SHOT_IDS:
             return None  # held out: a demonstration only
-        return base(line, task_name)
+        return base(_clean(line), task_name)
 
     return prompt
 
@@ -96,7 +120,7 @@ TASKS_TABLE = [
         generation_size=128,
         stop_sequence=["\n"],
         metrics=_metrics(language),
-        version=0,
+        version=1,                       # 1: acceptance-range notes removed from the golds and aliases
     )
     for language in _LANGUAGES
 ]
