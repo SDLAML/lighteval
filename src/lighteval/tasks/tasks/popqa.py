@@ -56,11 +56,16 @@ def popqa_bpb_prompt(line, task_name: str = None):
     )
 
 
+# akariasai/PopQA: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "098765c79ea10a2cb19c828324e33281b8336ec0"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="popqa:gen",
         prompt_function=popqa_gen_prompt,
         hf_repo="akariasai/PopQA",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
@@ -76,6 +81,7 @@ TASKS_TABLE = [
         name="popqa:bpb",
         prompt_function=popqa_bpb_prompt,
         hf_repo="akariasai/PopQA",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["test"],
         evaluation_splits=["test"],

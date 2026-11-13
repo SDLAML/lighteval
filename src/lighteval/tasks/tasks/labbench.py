@@ -81,11 +81,16 @@ def labbench_mcf_prompt(line, task_name: str = None):
     )
 
 
+# futurehouse/LAB-Bench: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "5c77cec648430f30611808808861eb86f81d5eaa"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"labbench:{suffix}",
         prompt_function=fn,
         hf_repo="futurehouse/LAB-Bench",
+        hf_revision=_REVISION,
         hf_subset="TableQA",
         hf_avail_splits=["train"],
         evaluation_splits=["train"],

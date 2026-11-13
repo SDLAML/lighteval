@@ -81,11 +81,16 @@ def hellaswag_cf_prompt(line, task_name: str = None):
     )
 
 
+# Rowan/hellaswag: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "218ec52e09a7e7462a5400043bb9a69a41d06b76"
+
+
 # MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
 hellaswag_mcf = LightevalTaskConfig(
     name="hellaswag:mcf",
     prompt_function=hellaswag_mcf_prompt,
     hf_repo="Rowan/hellaswag",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -102,6 +107,7 @@ hellaswag_mcf_em = LightevalTaskConfig(
     name="hellaswag:mcf_em",
     prompt_function=hellaswag_mcf_prompt,
     hf_repo="Rowan/hellaswag",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -117,6 +123,7 @@ hellaswag_cf = LightevalTaskConfig(
     name="hellaswag:cf",
     prompt_function=hellaswag_cf_prompt,
     hf_repo="Rowan/hellaswag",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],

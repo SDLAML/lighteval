@@ -100,9 +100,14 @@ def sample_to_fewshot(sample):
     return f"{sample.input}\n\n{options}\n\nANSWER: {sample.target}"
 
 
+# R-Bench/R-Bench: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "c0e92a6d90dad980ea51a47af64c12ec67b670ce"
+
+
 def _configs(language):
     common = {
         "hf_repo": "R-Bench/R-Bench",
+        "hf_revision": _REVISION,
         "hf_subset": f"rbench-t_{language}",
         "hf_avail_splits": ["test"],
         "evaluation_splits": ["test"],

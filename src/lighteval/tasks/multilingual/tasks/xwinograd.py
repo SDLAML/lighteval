@@ -87,9 +87,9 @@ TASKS_TABLE = [
 
 @lru_cache(maxsize=1)
 def _english_winogrande_demos(n: int = 8) -> list[dict]:
-    from datasets import load_dataset
+    from lighteval.tasks.lighteval_task import load_dataset_pinned
 
-    train = load_dataset(_WINOGRANDE_REPO, "winogrande_xl", split="train", revision=_WINOGRANDE_REVISION)
+    train = load_dataset_pinned(_WINOGRANDE_REPO, "winogrande_xl", split="train", revision=_WINOGRANDE_REVISION)
     rng = random.Random(1234)
     by_answer = {"1": [], "2": []}
     for i in rng.sample(range(len(train)), 200):

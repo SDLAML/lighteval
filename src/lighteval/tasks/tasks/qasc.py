@@ -64,11 +64,16 @@ def qasc_mcf_prompt(line, task_name: str = None):
     )
 
 
+# allenai/qasc: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "a34ba204eb9a33b919c10cc08f4f1c8dae5ec070"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="qasc:cf",
         prompt_function=qasc_cf_prompt,
         hf_repo="allenai/qasc",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -83,6 +88,7 @@ TASKS_TABLE = [
         name="qasc:mcf",
         prompt_function=qasc_mcf_prompt,
         hf_repo="allenai/qasc",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -97,6 +103,7 @@ TASKS_TABLE = [
         name="qasc:mcf_em",
         prompt_function=qasc_mcf_prompt,
         hf_repo="allenai/qasc",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],

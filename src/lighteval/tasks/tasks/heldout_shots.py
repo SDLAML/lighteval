@@ -78,10 +78,10 @@ def select_shots(
 
 @lru_cache(maxsize=None)
 def _load_rows(repo: str, subset: str, split: str, revision: str) -> tuple:
-    from datasets import load_dataset
+    from lighteval.tasks.lighteval_task import load_dataset_pinned
 
     # The same call (path / name / revision) as lighteval's download_dataset_worker, so the cached files are reused offline.
-    return tuple(dict(row) for row in load_dataset(path=repo, name=subset, revision=revision)[split])
+    return tuple(dict(row) for row in load_dataset_pinned(repo, subset, revision=revision)[split])
 
 
 def load_rows(repo: str, subset: str, split: str, revision: str) -> list[dict]:

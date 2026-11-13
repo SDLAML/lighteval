@@ -65,11 +65,16 @@ def boolq_mcf_prompt(line, task_name: str = None):
     )
 
 
+# lighteval/boolq_helm: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "fdd8158ec36960949eb9ca6285f3c93156c07d5d"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="boolq:cf",
         prompt_function=boolq_cf_prompt,
         hf_repo="lighteval/boolq_helm",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -84,6 +89,7 @@ TASKS_TABLE = [
         name="boolq:mcf",
         prompt_function=boolq_mcf_prompt,
         hf_repo="lighteval/boolq_helm",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -98,6 +104,7 @@ TASKS_TABLE = [
         name="boolq:mcf_em",
         prompt_function=boolq_mcf_prompt,
         hf_repo="lighteval/boolq_helm",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],

@@ -73,11 +73,16 @@ def siqa_cf_prompt(line, task_name: str = None):
     )
 
 
+# lighteval/siqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "54c6a1f8cb6daf4f5abf24a601852612fb35eb25"
+
+
 # Greedy variant: MCF-style prompt, generate 1 token, exact match
 siqa_mcf_em = LightevalTaskConfig(
     name="siqa:mcf_em",
     prompt_function=siqa_mcf_prompt,
     hf_repo="lighteval/siqa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
@@ -94,6 +99,7 @@ siqa_mcf = LightevalTaskConfig(
     name="siqa:mcf",
     prompt_function=siqa_mcf_prompt,
     hf_repo="lighteval/siqa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
@@ -110,6 +116,7 @@ siqa_cf = LightevalTaskConfig(
     name="siqa:cf",
     prompt_function=siqa_cf_prompt,
     hf_repo="lighteval/siqa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],

@@ -62,11 +62,16 @@ def formationeval_mcf_prompt(line, task_name: str = None):
     )
 
 
+# AlmazErmilov/FormationEval: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "6abfc9f762486622737bd88307e62895c7633a90"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"formationeval:{suffix}",
         prompt_function=fn,
         hf_repo="AlmazErmilov/FormationEval",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["test"],
         evaluation_splits=["test"],

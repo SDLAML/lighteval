@@ -156,10 +156,15 @@ truthfulqa_empty_answer_metric = SampleLevelMetric(
     higher_is_better=False,
 )
 
+# truthfulqa/truthful_qa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "741b8276f2d1982aa3d5b832d3ee81ed3b896490"
+
+
 truthfulqa_gen = LightevalTaskConfig(
     name="truthfulqa:gen",
     prompt_function=truthful_qa_generative_prompt,
     hf_repo="truthfulqa/truthful_qa",
+    hf_revision=_REVISION,
     hf_subset="generation",
     hf_avail_splits=["validation"],
     evaluation_splits=["validation"],
@@ -179,6 +184,7 @@ truthfulqa_mc = LightevalTaskConfig(
     name="truthfulqa:mc",
     prompt_function=truthful_qa_multiple_choice_prompt,
     hf_repo="truthfulqa/truthful_qa",
+    hf_revision=_REVISION,
     hf_subset="multiple_choice",
     hf_avail_splits=["validation"],
     evaluation_splits=["validation"],
@@ -197,6 +203,7 @@ truthfulqa_mc2_cf = LightevalTaskConfig(
     name="truthfulqa:mc2:cf",
     prompt_function=truthful_qa_multiple_choice_prompt,
     hf_repo="truthfulqa/truthful_qa",
+    hf_revision=_REVISION,
     hf_subset="multiple_choice",
     hf_avail_splits=["validation"],
     evaluation_splits=["validation"],

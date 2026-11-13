@@ -91,11 +91,16 @@ def mascqa_mcf_prompt(line, task_name: str = None):
     )
 
 
+# heegyu/mascqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "7f824b750da5b09ac7fd8b7be10fc0fe3dec852c"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"mascqa:{suffix}",
         prompt_function=fn,
         hf_repo="heegyu/mascqa",
+        hf_revision=_REVISION,
         hf_filter=_has_gold,
         hf_subset="default",
         hf_avail_splits=["test"],

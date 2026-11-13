@@ -65,6 +65,10 @@ def gsm_plus_prompt(line, task_name: str = None):
     )
 
 
+# qintongli/GSM-Plus: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "3b708db57b96a16e8e3368ed2956990c0809440e"
+
+
 gsm_plus = LightevalTaskConfig(
     name="gsm_plus",
     prompt_function=gsm_plus_prompt,
@@ -73,6 +77,7 @@ gsm_plus = LightevalTaskConfig(
     solver=[prompt_template(MATH_PROMPT_TEMPLATE), generate(cache=True)],
     scorer=math_scorer(),
     hf_repo="qintongli/GSM-Plus",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["test", "testmini"],
     evaluation_splits=["test"],

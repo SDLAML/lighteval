@@ -100,12 +100,17 @@ def secqa_mcf_prompt(line, task_name: str = None):
     )
 
 
+# tihanyin/CyberMetric: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_CYBERMETRIC_REVISION = "32759c2fa90274706219e1cf946cadff93da52e3"
+
+
 def _cybermetric_configs():
     return [
         LightevalTaskConfig(
             name=f"cybermetric:{suffix}",
             prompt_function=fn,
             hf_repo="tihanyin/CyberMetric",
+            hf_revision=_CYBERMETRIC_REVISION,
             hf_subset="default",
             hf_avail_splits=["train"],
             evaluation_splits=["train"],
@@ -124,12 +129,17 @@ def _cybermetric_configs():
     ]
 
 
+# zefang-liu/secqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_SECQA_REVISION = "d00a07484283be5602e2bae36dbefdaaf555a9fb"
+
+
 def _secqa_configs(version: str):
     return [
         LightevalTaskConfig(
             name=f"secqa:{version}:{suffix}",
             prompt_function=fn,
             hf_repo="zefang-liu/secqa",
+            hf_revision=_SECQA_REVISION,
             hf_subset=f"secqa_{version}",
             hf_avail_splits=["test"],
             evaluation_splits=["test"],

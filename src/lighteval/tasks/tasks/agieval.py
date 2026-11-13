@@ -150,6 +150,10 @@ AGIEVAL_SUBSETS = [
     "sat-math",
 ]
 
+# lighteval/agi_eval_en: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "8670dcc6a5aa2c5e177b14905ec892df983446cd"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"agieval_eng:{subset}:cot",
@@ -160,6 +164,7 @@ TASKS_TABLE = [
         scorer=choice(),
         prompt_function=agieval_prompt_cot_eng,
         hf_repo="lighteval/agi_eval_en",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["train"],
@@ -190,6 +195,7 @@ TASKS_TABLE += [
         name=f"agieval_eng:{subset}:mcf",
         prompt_function=agieval_mcf_prompt,
         hf_repo="lighteval/agi_eval_en",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["train"],
@@ -208,6 +214,7 @@ TASKS_TABLE += [
         name=f"agieval_eng:{subset}:mcf_em",
         prompt_function=agieval_mcf_prompt,
         hf_repo="lighteval/agi_eval_en",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["train"],

@@ -271,9 +271,9 @@ def _get_niah_words():
 
 @lru_cache(maxsize=1)
 def _get_essay_haystack() -> list[str]:
-    import datasets as hf_datasets
+    from lighteval.tasks.lighteval_task import load_dataset_pinned
 
-    essay = hf_datasets.load_dataset(ESSAYS_REPO, split="train")["text"]
+    essay = load_dataset_pinned(ESSAYS_REPO, revision=ESSAYS_REVISION, split="train")["text"]
     text = " ".join(essay)
     text = re.sub(r"\s+", " ", text)
     return text.split(" ")
@@ -1099,6 +1099,8 @@ QA_DOCUMENT_PROMPT = "Document {i}:\n{document}"
 SQUAD_URL = "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json"
 HOTPOTQA_URL = "http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json"
 ESSAYS_REPO = "baber/paul_graham_essays"
+# the snapshot the prepared RULER data were built from (same revision as configs/datasets.lock.yaml in titan_eval)
+ESSAYS_REVISION = "792d672b77d1a67720f7e9820d646358fc18792e"
 
 
 def _qa_cache_file(url: str) -> Path:
@@ -1514,11 +1516,7 @@ def _pkg_version(name: str) -> str | None:
 
 
 def _essays_revision() -> str | None:
-    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(
-        os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub"
-    )
-    ref = Path(hub) / ("datasets--" + ESSAYS_REPO.replace("/", "--")) / "refs" / "main"
-    return ref.read_text().strip() if ref.is_file() else None
+    return ESSAYS_REVISION
 
 
 def _file_md5(path: Path) -> str | None:

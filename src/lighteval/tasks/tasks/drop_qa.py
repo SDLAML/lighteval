@@ -92,10 +92,15 @@ def drop_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
+# lighteval/drop_harness: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "9bab3c8c1b5241e83b9e2350b1c9f3940c86fc53"
+
+
 drop_bpb = LightevalTaskConfig(
     name="drop:bpb",
     prompt_function=drop_bpb_prompt,
     hf_repo="lighteval/drop_harness",
+    hf_revision=_REVISION,
     hf_subset="default",
     evaluation_splits=("validation",),
     few_shots_split="train",
@@ -110,6 +115,7 @@ drop_gen = LightevalTaskConfig(
     name="drop:gen",
     prompt_function=drop_gen_prompt,
     hf_repo="lighteval/drop_harness",
+    hf_revision=_REVISION,
     hf_subset="default",
     evaluation_splits=("validation",),
     few_shots_split="train",

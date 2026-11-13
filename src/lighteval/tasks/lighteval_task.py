@@ -134,6 +134,97 @@ def _load_hub_raw_dataset_files(
     return load_dataset(data_format, data_files=data_files)
 
 
+# ---- pinned dataset revisions, also offline (owner 11-13: "a dataset update can never silently change a score") --------------
+# `datasets` (5.x) ignores `revision` when the hub is offline: `load_dataset(repo, name, revision=<anything>)` returns the most
+# recently modified processed copy under $HF_HOME/datasets/<repo>/<name>/0.0.0/<hash>/ - even for a revision that does not exist
+# (tested with revision="0" * 40). A pin would then be silently not applied. `load_dataset_pinned` checks which copy came back and
+# reads the copy of exactly the pinned commit instead, or raises when it is not there; online it is plain `load_dataset`.
+
+
+class PinnedRevisionNotCached(ConnectionError):
+    """Offline, and the processed copy of the pinned revision is not in the datasets cache (the caller may fall back to the
+    raw files of exactly that revision in the hub cache; never to another revision)."""
+
+
+def hub_offline() -> bool:
+    import datasets.config as _dc
+
+    return bool(
+        getattr(_dc, "HF_HUB_OFFLINE", False)
+        or getattr(_dc, "HF_DATASETS_OFFLINE", False)
+        or os.environ.get("HF_HUB_OFFLINE") == "1"
+        or os.environ.get("HF_DATASETS_OFFLINE") == "1"
+    )
+
+
+def hub_cache_dir() -> str:
+    return os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub"
+    )
+
+
+def resolve_revision(repo_id: str, revision: str) -> str:
+    """The commit a `hf_revision` stands for, from the local hub cache. A full commit hash is itself; a branch or ref
+    ("main", "refs/convert/parquet", "refs/pr/1") is read from the repo's `refs/` folder (FileNotFoundError when it is not there)."""
+    import re
+
+    if re.fullmatch(r"[0-9a-f]{40}", revision):
+        return revision
+    ref = Path(hub_cache_dir()) / ("datasets--" + repo_id.replace("/", "--")) / "refs" / revision
+    if not ref.is_file():
+        raise FileNotFoundError(f"revision {revision!r} of {repo_id} does not resolve in the local hub cache (no {ref})")
+    return ref.read_text().strip()
+
+
+def _arrow_copies_of(dataset) -> set[str] | None:
+    """The `<hash>` folders under .../<repo>/<config>/0.0.0/ that the Arrow files of a loaded dataset (or DatasetDict) live in;
+    None when it does not say (an in-memory dataset, a test double)."""
+    parts = list(dataset.values()) if isinstance(dataset, dict) else [dataset]          # DatasetDict is a dict of Dataset
+    found: set[str] = set()
+    for part in parts:
+        files = getattr(part, "cache_files", None)
+        if not files:
+            return None
+        found |= {os.path.basename(os.path.dirname(f["filename"])) for f in files}
+    return found
+
+
+def load_dataset_pinned(path: str, name: str | None = None, *, revision: str | None = None, split: str | None = None):
+    """`load_dataset(path, name, revision=revision[, split=split])` that honours `revision` offline too.
+
+    The call is the plain `load_dataset`. With a revision the result is then checked: its Arrow files must be the processed copy of
+    the pinned commit (always true when the hub answered). If `datasets` took another copy (offline, or the hub was unreachable
+    without the offline flag: the newest copy), the copy of the pinned commit is read instead (`datasets`' own Cache builder with an
+    explicit hash, the same files), or `PinnedRevisionNotCached` is raised when that copy does not exist. Never another revision,
+    never silently. A result that does not say where it lives (in-memory dataset, test double) is returned as it is."""
+    kwargs = {"split": split} if split else {}
+    dataset = load_dataset(path=path, name=name, revision=revision, **kwargs)
+    if revision is None or os.path.isdir(path) or "/" not in path:
+        return dataset
+    copies = _arrow_copies_of(dataset)
+    if copies is None:
+        return dataset
+    try:
+        commit = resolve_revision(path, revision)
+    except FileNotFoundError:
+        if hub_offline():
+            raise                                           # offline, a ref that the hub cache cannot resolve is not a pin
+        return dataset                                      # online: the hub resolved it
+    if copies == {commit}:
+        return dataset
+    from datasets.packaged_modules.cache.cache import Cache
+
+    builder = Cache(dataset_name=path.split("/")[-1], repo_id=path, config_name=name, version="0.0.0", hash=commit)
+    if not os.path.isdir(builder.cache_dir):
+        raise PinnedRevisionNotCached(
+            f"OfflineModeIsEnabled: {path} ({name!r}) @ {commit}: `load_dataset` returned the copy {sorted(copies)} (offline: the newest), "
+            f"and the pinned revision is not in the datasets cache ({builder.cache_dir}); run `titan-eval prefetch` for the "
+            "task on the login node (online)"
+        )
+    builder.download_and_prepare()
+    return builder.as_dataset(split=split) if split else builder.as_dataset()
+
+
 def _load_mgsm_dataset(config_name: str, local_files_only: bool = False) -> DatasetDict:
     import csv
     import importlib.util
@@ -310,20 +401,23 @@ def _load_rbridge_dataset(task_name: str) -> DatasetDict:
 def _load_titaneval_dataset(task_name: str) -> DatasetDict:
     """Load a titaneval task from the local parquet copy in data/titaneval/.
 
-    If the parquet is missing for known HF-derived benchmarks (med_qa, headqa,
-    cybermetric), attempts to auto-download and cache before raising.
+    The files are Git LFS objects of this repo (content pinned by the commit; sha256 rows in titan_eval's
+    configs/datasets.lock.yaml). A missing parquet is an error: the auto-download of known HF-derived benchmarks (med_qa,
+    headqa, cybermetric) fetched the unpinned `main` of the HF repo, so it runs only on request
+    (LIGHTEVAL_TITANEVAL_AUTODOWNLOAD=1, a manual tool; the result must then be pinned in the lock) - dataset pins, 11-13.
     """
     data_dir = Path(__file__).parent.parent.parent.parent / "data" / "titaneval"
     parquet_path = data_dir / f"{task_name}.parquet"
 
-    if not parquet_path.exists():
+    if not parquet_path.exists() and os.environ.get("LIGHTEVAL_TITANEVAL_AUTODOWNLOAD") == "1":
         _try_cache_titaneval(task_name, parquet_path)
 
     if not parquet_path.exists():
         raise FileNotFoundError(
             f"titaneval_local: parquet not found at {parquet_path}. "
             "Copy it from titaneval-mcq/benchmarks/ into data/titaneval/ "
-            "or run scripts/cache_broken_hf_to_titaneval.py."
+            "or run scripts/cache_broken_hf_to_titaneval.py (an automatic download of the unpinned HF main only with "
+            "LIGHTEVAL_TITANEVAL_AUTODOWNLOAD=1)."
         )
     return load_dataset("parquet", data_files={"test": str(parquet_path)})
 
@@ -955,9 +1049,9 @@ class LightevalTask:
             return dataset  # type: ignore
 
         try:
-            dataset = load_dataset(
-                path=task.dataset_path,
-                name=task.dataset_config_name,
+            dataset = load_dataset_pinned(
+                task.dataset_path,
+                task.dataset_config_name,
                 revision=task.dataset_revision,
             )
         except (RuntimeError, ConnectionError) as _e:
@@ -1034,10 +1128,18 @@ class LightevalTask:
                 _data_files: dict = {}
                 _data_fmt: str = "parquet"
                 if _os.path.isdir(_snap_base):
-                    _revisions = sorted(
-                        _os.listdir(_snap_base),
-                        key=lambda r: _os.path.getmtime(_os.path.join(_snap_base, r)),
-                    )
+                    if task.dataset_revision:
+                        # A pinned revision is the ONLY acceptable one: never the newest snapshot (dataset pins, 11-13).
+                        try:
+                            _pinned = resolve_revision(task.dataset_path, task.dataset_revision)
+                        except FileNotFoundError:
+                            _pinned = None
+                        _revisions = [_pinned] if _pinned and _os.path.isdir(_os.path.join(_snap_base, _pinned)) else []
+                    else:
+                        _revisions = sorted(
+                            _os.listdir(_snap_base),
+                            key=lambda r: _os.path.getmtime(_os.path.join(_snap_base, r)),
+                        )
                     for _rev in reversed(_revisions):
                         _rev_dir = _os.path.join(_snap_base, _rev)
                         _config_dir = (
@@ -1090,8 +1192,9 @@ class LightevalTask:
 
                 if not _data_files:
                     raise FileNotFoundError(
-                        f"Dataset '{task.dataset_path}' (config={task.dataset_config_name!r}) "
-                        f"not found in local HF hub cache at '{_snap_base}'. "
+                        f"Dataset '{task.dataset_path}' (config={task.dataset_config_name!r}"
+                        + (f", pinned revision {task.dataset_revision!r}" if task.dataset_revision else "")
+                        + f") not found in local HF hub cache at '{_snap_base}'. "
                         "Download the dataset with internet access first."
                     ) from _e
 

@@ -76,11 +76,16 @@ def piqa_cf_prompt(line, task_name: str = None):
     )
 
 
+# lighteval/piqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "41782e6bf0ef7de82a2ca8a9feb1dca042837fae"
+
+
 # MCF variant: labeled options, score label tokens via logprobs (TRUE MCF)
 piqa_mcf = LightevalTaskConfig(
     name="piqa:mcf",
     prompt_function=piqa_mcf_prompt,
     hf_repo="lighteval/piqa",
+    hf_revision=_REVISION,
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -97,6 +102,7 @@ piqa_mcf_em = LightevalTaskConfig(
     name="piqa:mcf_em",
     prompt_function=piqa_mcf_prompt,
     hf_repo="lighteval/piqa",
+    hf_revision=_REVISION,
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -113,6 +119,7 @@ piqa_cf = LightevalTaskConfig(
     name="piqa:cf",
     prompt_function=piqa_cf_prompt,
     hf_repo="lighteval/piqa",
+    hf_revision=_REVISION,
     hf_subset="plain_text",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],

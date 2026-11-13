@@ -55,11 +55,16 @@ def nq_bpb_prompt(line, task_name: str = None):
     )
 
 
+# google-research-datasets/nq_open: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "5dd9790a83002ad084ddeb7c420dc716852c6f28"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="natural_questions:bpb",
         prompt_function=nq_bpb_prompt,
         hf_repo="google-research-datasets/nq_open",
+        hf_revision=_REVISION,
         hf_subset="nq_open",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
@@ -74,6 +79,7 @@ TASKS_TABLE = [
         name="natural_questions:gen",
         prompt_function=nq_gen_prompt,
         hf_repo="google-research-datasets/nq_open",
+        hf_revision=_REVISION,
         hf_subset="nq_open",
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],

@@ -82,6 +82,10 @@ def gsm8k_prompt(line, task_name: str = None):
     )
 
 
+# openai/gsm8k: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "740312add88f781978c0658806c59bc2815b9866"
+
+
 gsm8k = LightevalTaskConfig(
     name="gsm8k",
     prompt_function=gsm8k_prompt,
@@ -90,6 +94,7 @@ gsm8k = LightevalTaskConfig(
     solver=[prompt_template(MATH_PROMPT_TEMPLATE), generate(cache=True)],
     scorer=math_scorer(),
     hf_repo="openai/gsm8k",
+    hf_revision=_REVISION,
     hf_subset="main",
     hf_avail_splits=["train", "test"],
     evaluation_splits=["test"],

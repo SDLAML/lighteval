@@ -72,11 +72,16 @@ def openbookqa_cf_prompt(line, task_name: str = None):
     )
 
 
+# allenai/openbookqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "388097ea7776314e93a529163e0fea805b8a6454"
+
+
 # Greedy variant: MCF-style prompt, generate 1 token, exact match
 openbookqa_mcf_em = LightevalTaskConfig(
     name="openbookqa:mcf_em",
     prompt_function=openbookqa_mcf_prompt,
     hf_repo="allenai/openbookqa",
+    hf_revision=_REVISION,
     hf_subset="main",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["test"],
@@ -93,6 +98,7 @@ openbookqa_mcf = LightevalTaskConfig(
     name="openbookqa:mcf",
     prompt_function=openbookqa_mcf_prompt,
     hf_repo="allenai/openbookqa",
+    hf_revision=_REVISION,
     hf_subset="main",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["test"],
@@ -109,6 +115,7 @@ openbookqa_cf = LightevalTaskConfig(
     name="openbookqa:cf",
     prompt_function=openbookqa_cf_prompt,
     hf_repo="allenai/openbookqa",
+    hf_revision=_REVISION,
     hf_subset="main",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["test"],

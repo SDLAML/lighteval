@@ -62,12 +62,17 @@ def math_bpb_prompt(line, task_name: str = None):
         gold_index=0,
     )
 
+# EleutherAI/hendrycks_math: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "21a5633873b6a120296cce3e2df9d5550074f4a3"
+
+
 # BPB variant: OLMo-style minimal prompt, 4-shot from training data
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"math:{subset}:bpb",
         prompt_function=math_bpb_prompt,
         hf_repo="EleutherAI/hendrycks_math",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["train", "test"],
         evaluation_splits=["test"],
@@ -87,6 +92,7 @@ TASKS_TABLE += [
         name=f"math:{subset}:gen",
         prompt_function=math_prompt,
         hf_repo="EleutherAI/hendrycks_math",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["train", "test"],
         evaluation_splits=["test"],

@@ -117,11 +117,16 @@ def med_mcqa_cf_prompt(line, task_name: str = None):
     )
 
 
+# lighteval/med_mcqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "88ebeccf8a7c57143bd55125254033927e5a0f3c"
+
+
 # Greedy variant: MCF-style prompt, generate token(s), exact match
 med_mcqa_mcf_em = LightevalTaskConfig(
     name="med_mcqa:mcf_em",
     prompt_function=med_mcqa_mcf_prompt,
     hf_repo="lighteval/med_mcqa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -138,6 +143,7 @@ med_mcqa_mcf = LightevalTaskConfig(
     name="med_mcqa:mcf",
     prompt_function=med_mcqa_mcf_prompt,
     hf_repo="lighteval/med_mcqa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -186,6 +192,7 @@ med_mcqa_cf = LightevalTaskConfig(
     name="med_mcqa:cf",
     prompt_function=med_mcqa_cf_prompt,
     hf_repo="lighteval/med_mcqa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],

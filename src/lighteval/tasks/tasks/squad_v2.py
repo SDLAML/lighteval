@@ -98,6 +98,10 @@ def squad_v2_bpb_prompt(line, task_name: str = None):
     )
 
 
+# rajpurkar/squad_v2: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "3ffb306f725f7d2ce8394bc1873b24868140c412"
+
+
 # Official SQuAD v2 (all 11,873 validation questions; few-shot pool = all of train, so the shots show the abstention).
 # OLMES squad2: stop ["Title:", "\n\n"], max_gen_toks 50. Scorer = official compute_score.py (see SquadOfficialScore);
 # `empty_pred` logs the share of empty generations (an empty output is the official no-answer prediction).
@@ -105,6 +109,7 @@ squad_v2_gen = LightevalTaskConfig(
     name="squad_v2:gen",
     prompt_function=squad_v2_gen_prompt,
     hf_repo="rajpurkar/squad_v2",
+    hf_revision=_REVISION,
     hf_subset="squad_v2",
     hf_avail_splits=["train", "validation"],
     evaluation_splits=["validation"],
@@ -121,6 +126,7 @@ squad_v2_gen_answerable = LightevalTaskConfig(
     name="squad_v2:gen_answerable",
     prompt_function=squad_v2_gen_answerable_prompt,
     hf_repo="rajpurkar/squad_v2",
+    hf_revision=_REVISION,
     hf_subset="squad_v2",
     hf_filter=_answerable,
     hf_avail_splits=["train", "validation"],
@@ -137,6 +143,7 @@ squad_v2_bpb = LightevalTaskConfig(
     name="squad_v2:bpb",
     prompt_function=squad_v2_bpb_prompt,
     hf_repo="rajpurkar/squad_v2",
+    hf_revision=_REVISION,
     hf_subset="squad_v2",
     hf_filter=_answerable,
     hf_avail_splits=["train", "validation"],

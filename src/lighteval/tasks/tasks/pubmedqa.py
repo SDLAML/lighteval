@@ -73,11 +73,16 @@ def pubmedqa_mcf_prompt(line, task_name: str = None):
     )
 
 
+# qiaojin/PubMedQA: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "9001f2853fb87cab8d220904e0de81ac6973b318"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="pubmedqa:cf",
         prompt_function=pubmedqa_cf_prompt,
         hf_repo="qiaojin/PubMedQA",
+        hf_revision=_REVISION,
         hf_subset="pqa_labeled",
         hf_avail_splits=["train"],
         evaluation_splits=["train"],
@@ -92,6 +97,7 @@ TASKS_TABLE = [
         name="pubmedqa:mcf",
         prompt_function=pubmedqa_mcf_prompt,
         hf_repo="qiaojin/PubMedQA",
+        hf_revision=_REVISION,
         hf_subset="pqa_labeled",
         hf_avail_splits=["train"],
         evaluation_splits=["train"],
@@ -106,6 +112,7 @@ TASKS_TABLE = [
         name="pubmedqa:mcf_em",
         prompt_function=pubmedqa_mcf_prompt,
         hf_repo="qiaojin/PubMedQA",
+        hf_revision=_REVISION,
         hf_subset="pqa_labeled",
         hf_avail_splits=["train"],
         evaluation_splits=["train"],

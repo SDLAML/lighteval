@@ -73,11 +73,16 @@ def sciq_mcf_prompt(line, task_name: str = None):
     )
 
 
+# allenai/sciq: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "2c94ad3e1aafab77146f384e23536f97a4849815"
+
+
 # CF variant: completion-style, logprob on full answer text + BPB on gold choice
 sciq_cf = LightevalTaskConfig(
     name="sciq:cf",
     prompt_function=sciq_cf_prompt,
     hf_repo="allenai/sciq",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -94,6 +99,7 @@ sciq_mcf = LightevalTaskConfig(
     name="sciq:mcf",
     prompt_function=sciq_mcf_prompt,
     hf_repo="allenai/sciq",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -110,6 +116,7 @@ sciq_mcf_em = LightevalTaskConfig(
     name="sciq:mcf_em",
     prompt_function=sciq_mcf_prompt,
     hf_repo="allenai/sciq",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],

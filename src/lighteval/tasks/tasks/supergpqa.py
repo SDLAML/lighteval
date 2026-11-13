@@ -120,10 +120,14 @@ def sample_to_fewshot(sample):
     return f"{sample.input}\n\n{options}\n\nANSWER: {sample.target}"
 
 
+# m-a-p/SuperGPQA: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "4430d4458112c7d4497fdcf94d7cc223313d6acf"
+
+
 _SUPERGPQA_COMMON = {
     "hf_repo": "m-a-p/SuperGPQA",
+    "hf_revision": _REVISION,
     "hf_subset": "default",
-    # "hf_revision": "4430d4458112c7d4497fdcf94d7cc223313d6acf",
     "hf_avail_splits": ["train"],
     "evaluation_splits": ["train"],
     "few_shots_split": "train",

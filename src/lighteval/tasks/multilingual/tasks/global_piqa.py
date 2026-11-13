@@ -87,9 +87,9 @@ def global_piqa_mcf_prompt(line, task_name: str = None):
 def _english_piqa_demos(n: int = 8) -> list[dict]:
     """n fixed demonstrations in the Global PIQA row format, from the English PIQA TRAIN split: a seeded draw with the gold
     letters alternating (B, A, B, A, ...). Called once per task by the few-shot sampler."""
-    from datasets import load_dataset
+    from lighteval.tasks.lighteval_task import load_dataset_pinned
 
-    train = load_dataset(_PIQA_REPO, "plain_text", split="train", revision=_PIQA_REVISION)
+    train = load_dataset_pinned(_PIQA_REPO, "plain_text", split="train", revision=_PIQA_REVISION)
     rng = random.Random(1234)
     by_label = {0: [], 1: []}
     for i in rng.sample(range(len(train)), 200):

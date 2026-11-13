@@ -114,9 +114,9 @@ def _base_validation_rows(language: str):
 
     @lru_cache(maxsize=1)
     def rows() -> list[dict]:
-        from datasets import load_dataset
+        from lighteval.tasks.lighteval_task import load_dataset_pinned
 
-        return [dict(r) for r in load_dataset(_BASE_REPO, language, split="validation", revision=_BASE_REVISION)]
+        return [dict(r) for r in load_dataset_pinned(_BASE_REPO, language, split="validation", revision=_BASE_REVISION)]
 
     return rows
 

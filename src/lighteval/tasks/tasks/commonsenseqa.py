@@ -69,11 +69,16 @@ def commonsenseqa_cf_prompt(line, task_name: str = None):
 
 
 
+# tau/commonsense_qa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "94630fe30dad47192a8546eb75f094926d47e155"
+
+
 # Greedy variant: MCF-style prompt, generate 1 token, exact match
 commonsenseqa_mcf_em = LightevalTaskConfig(
     name="commonsenseqa:mcf_em",
     prompt_function=commonsenseqa_mcf_prompt,
     hf_repo="tau/commonsense_qa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -90,6 +95,7 @@ commonsenseqa_mcf = LightevalTaskConfig(
     name="commonsenseqa:mcf",
     prompt_function=commonsenseqa_mcf_prompt,
     hf_repo="tau/commonsense_qa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -106,6 +112,7 @@ commonsenseqa_cf = LightevalTaskConfig(
     name="commonsenseqa:cf",
     prompt_function=commonsenseqa_cf_prompt,
     hf_repo="tau/commonsense_qa",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],

@@ -63,11 +63,16 @@ def gsm_symbolic_prompt(line, task_name: str = None):
 
 _SUBSETS = ["main", "p1", "p2"]
 
+# apple/GSM-Symbolic: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "93b5b3758d9d9841ffe81d6cd2ae2b030685b078"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"gsm_symbolic:{subset}",
         prompt_function=gsm_symbolic_prompt,
         hf_repo="apple/GSM-Symbolic",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],

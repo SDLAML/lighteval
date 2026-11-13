@@ -64,11 +64,16 @@ def arc_mcf_prompt(line, task_name: str = None):
     )
 
 
+# allenai/ai2_arc: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "210d026faf9955653af8916fad021475a3f00453"
+
+
 # CF variant: completion-style, logprob on full answer text + BPB on gold choice
 arc_challenge_cf = LightevalTaskConfig(
     name="arc:challenge:cf",
     prompt_function=arc_prompt,
     hf_repo="allenai/ai2_arc",
+    hf_revision=_REVISION,
     hf_subset="ARC-Challenge",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -84,6 +89,7 @@ arc_easy_cf = LightevalTaskConfig(
     name="arc:easy:cf",
     prompt_function=arc_prompt,
     hf_repo="allenai/ai2_arc",
+    hf_revision=_REVISION,
     hf_subset="ARC-Easy",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -100,6 +106,7 @@ arc_challenge_mcf = LightevalTaskConfig(
     name="arc:challenge:mcf",
     prompt_function=arc_mcf_prompt,
     hf_repo="allenai/ai2_arc",
+    hf_revision=_REVISION,
     hf_subset="ARC-Challenge",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -115,6 +122,7 @@ arc_easy_mcf = LightevalTaskConfig(
     name="arc:easy:mcf",
     prompt_function=arc_mcf_prompt,
     hf_repo="allenai/ai2_arc",
+    hf_revision=_REVISION,
     hf_subset="ARC-Easy",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -131,6 +139,7 @@ arc_challenge_mcf_em = LightevalTaskConfig(
     name="arc:challenge:mcf_em",
     prompt_function=arc_mcf_prompt,
     hf_repo="allenai/ai2_arc",
+    hf_revision=_REVISION,
     hf_subset="ARC-Challenge",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],
@@ -146,6 +155,7 @@ arc_easy_mcf_em = LightevalTaskConfig(
     name="arc:easy:mcf_em",
     prompt_function=arc_mcf_prompt,
     hf_repo="allenai/ai2_arc",
+    hf_revision=_REVISION,
     hf_subset="ARC-Easy",
     hf_avail_splits=["train", "validation", "test"],
     evaluation_splits=["test"],

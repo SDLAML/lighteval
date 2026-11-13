@@ -133,11 +133,16 @@ def wikifact_bpb_prompt(line, task_name: str = None):
     )
 
 
+# lighteval/wikifact: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "afb44b5757033703c2ce0e5ddd84f51b808137f0"
+
+
 def _gen_config(subset: str) -> LightevalTaskConfig:
     return LightevalTaskConfig(
         name=f"wikifact:{subset}:gen",
         prompt_function=wikifact_gen_prompt,
         hf_repo="lighteval/wikifact",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
@@ -158,6 +163,7 @@ def _bpb_config(subset: str) -> LightevalTaskConfig:
         name=f"wikifact:{subset}:bpb",
         prompt_function=wikifact_bpb_prompt,
         hf_repo="lighteval/wikifact",
+        hf_revision=_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],

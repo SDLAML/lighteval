@@ -100,12 +100,17 @@ def winogrande_rc_prompt(line, task_name: str = None):
     )
 
 
+# allenai/winogrande: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "01e74176c63542e6b0bcb004dcdea22d94fb67b5"
+
+
 # BPB variant: partial evaluation (OLMO-style), BPB only
 # Accuracy is not reported because partial eval uses one fixed gold choice.
 winogrande_bpb = LightevalTaskConfig(
     name="winogrande:bpb",
     prompt_function=winogrande_cf_prompt,
     hf_repo="allenai/winogrande",
+    hf_revision=_REVISION,
     hf_subset="winogrande_xl",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -122,6 +127,7 @@ winogrande_mcf = LightevalTaskConfig(
     name="winogrande:mcf",
     prompt_function=winogrande_mcf_prompt,
     hf_repo="allenai/winogrande",
+    hf_revision=_REVISION,
     hf_subset="winogrande_xl",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -138,6 +144,7 @@ winogrande_mcf_em = LightevalTaskConfig(
     name="winogrande:mcf_em",
     prompt_function=winogrande_mcf_prompt,
     hf_repo="allenai/winogrande",
+    hf_revision=_REVISION,
     hf_subset="winogrande_xl",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],
@@ -156,6 +163,7 @@ winogrande_cf = LightevalTaskConfig(
     name="winogrande:cf",
     prompt_function=winogrande_rc_prompt,
     hf_repo="allenai/winogrande",
+    hf_revision=_REVISION,
     hf_subset="winogrande_xl",
     hf_avail_splits=["train", "test", "validation"],
     evaluation_splits=["validation"],

@@ -21,12 +21,10 @@ https://arxiv.org/abs/2009.03300
 from functools import partial
 from string import ascii_uppercase
 
-from datasets import load_dataset
-
 from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.dynamic_metrics import LogLikelihoodAccMetric
 from lighteval.metrics.normalizations import LogProbCharNorm
-from lighteval.tasks.lighteval_task import LightevalTaskConfig
+from lighteval.tasks.lighteval_task import LightevalTaskConfig, load_dataset_pinned
 from lighteval.tasks.requests import Doc
 
 _CF_METRICS = [
@@ -191,13 +189,19 @@ def mmlu_redux_prompt(line, task_name: str = None, *, subject: str):
     )
 
 
+# lighteval/mmlu: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_MMLU_REVISION = "31d46ab06e6934bb0d95f6918668716d1db6f921"
+# edinburgh-dawg/mmlu-redux-2.0: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_MMLU_REDUX_2_0_REVISION = "372ea425445d51e1ba1188c56e5e893f8138621f"
+
+
 def _mmlu_dev_rows(subset: str) -> list[dict]:
     """The dev questions of the ORIGINAL MMLU (`lighteval/mmlu`, 5 per subject), as MMLU-Redux-style rows.
 
     MMLU-Redux has no dev split; the redux tasks take their shots from here (not from the evaluated redux rows), so they
     get the same 5 demonstrations as `mmlu:<subject>:mcf_em`. Read from the cached / downloaded `lighteval/mmlu`.
     """
-    dev = load_dataset("lighteval/mmlu", subset, split="dev")
+    dev = load_dataset_pinned("lighteval/mmlu", subset, revision=_MMLU_REVISION, split="dev")
     return [
         {"question": row["question"], "choices": row["choices"], "answer": row["answer"], "error_type": "ok"}
         for row in dev
@@ -262,6 +266,7 @@ TASKS_TABLE = [
         name=f"mmlu:{subset}:mcf_em",
         prompt_function=mmlu_mcf_prompt,
         hf_repo="lighteval/mmlu",
+        hf_revision=_MMLU_REVISION,
         hf_subset=subset,
         hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
         evaluation_splits=["test"],
@@ -281,6 +286,7 @@ TASKS_TABLE += [
         name=f"mmlu:{subset}:chat",
         prompt_function=mmlu_chat_prompt,
         hf_repo="lighteval/mmlu",
+        hf_revision=_MMLU_REVISION,
         hf_subset=subset,
         hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
         evaluation_splits=["test"],
@@ -300,6 +306,7 @@ TASKS_TABLE += [
         name=f"mmlu:{subset}:cf",
         prompt_function=mmlu_cf_prompt,
         hf_repo="lighteval/mmlu",
+        hf_revision=_MMLU_REVISION,
         hf_subset=subset,
         hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
         evaluation_splits=["test"],
@@ -319,6 +326,7 @@ TASKS_TABLE += [
         name=f"mmlu:{subset}:mcf",
         prompt_function=mmlu_mcf_prompt,
         hf_repo="lighteval/mmlu",
+        hf_revision=_MMLU_REVISION,
         hf_subset=subset,
         hf_avail_splits=["auxiliary_train", "test", "validation", "dev"],
         evaluation_splits=["test"],
@@ -338,6 +346,7 @@ TASKS_TABLE += [
         name=f"mmlu_redux:{subset}:mcf_em",
         prompt_function=partial(mmlu_redux_prompt, subject=subset),
         hf_repo="edinburgh-dawg/mmlu-redux-2.0",
+        hf_revision=_MMLU_REDUX_2_0_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
@@ -359,6 +368,7 @@ TASKS_TABLE += [
         name=f"mmlu_redux:{subset}:chat",
         prompt_function=mmlu_redux_chat_prompt,
         hf_repo="edinburgh-dawg/mmlu-redux-2.0",
+        hf_revision=_MMLU_REDUX_2_0_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
@@ -378,6 +388,7 @@ TASKS_TABLE += [
         name=f"mmlu_redux:{subset}:cf",
         prompt_function=mmlu_redux_cf_prompt,
         hf_repo="edinburgh-dawg/mmlu-redux-2.0",
+        hf_revision=_MMLU_REDUX_2_0_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],
@@ -397,6 +408,7 @@ TASKS_TABLE += [
         name=f"mmlu_redux:{subset}:mcf",
         prompt_function=partial(mmlu_redux_prompt, subject=subset),
         hf_repo="edinburgh-dawg/mmlu-redux-2.0",
+        hf_revision=_MMLU_REDUX_2_0_REVISION,
         hf_subset=subset,
         hf_avail_splits=["test"],
         evaluation_splits=["test"],

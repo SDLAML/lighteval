@@ -57,10 +57,15 @@ def record_to_sample(record):
     return Sample(input=query, target=target)
 
 
+# HuggingFaceH4/MATH-500: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be"
+
+
 math_500 = LightevalTaskConfig(
     name="math_500",
     prompt_function=math_500_prompt,
     hf_repo="HuggingFaceH4/MATH-500",
+    hf_revision=_REVISION,
     hf_subset="default",
     hf_avail_splits=["test"],
     evaluation_splits=["test"],

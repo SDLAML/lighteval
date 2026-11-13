@@ -102,13 +102,17 @@ def coqa_bpb_prompt(line, task_name: str = None):
     return docs if docs else None
 
 
+# EleutherAI/coqa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "05fed1382e15dace7be66ffec858164f656082eb"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="coqa:bpb",
         prompt_function=coqa_bpb_prompt,
         hf_repo="EleutherAI/coqa",
         hf_subset="default",
-        hf_revision="refs/convert/parquet",
+        hf_revision=_REVISION,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
         few_shots_split=None,
@@ -123,7 +127,7 @@ TASKS_TABLE = [
         prompt_function=coqa_gen_prompt,
         hf_repo="EleutherAI/coqa",
         hf_subset="default",
-        hf_revision="refs/convert/parquet",
+        hf_revision=_REVISION,
         hf_avail_splits=["train", "validation"],
         evaluation_splits=["validation"],
         few_shots_split=None,

@@ -65,11 +65,16 @@ def triviaqa_bpb_prompt(line, task_name: str = None):
     )
 
 
+# mandarjoshi/trivia_qa: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "0f7faf33a3908546c6fd5b73a660e0f8ff173c2f"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name="triviaqa:gen",
         prompt_function=triviaqa_gen_prompt,
         hf_repo="mandarjoshi/trivia_qa",
+        hf_revision=_REVISION,
         hf_subset="rc.nocontext",
         hf_avail_splits=["train", "test", "validation"],
         evaluation_splits=["validation"],
@@ -85,6 +90,7 @@ TASKS_TABLE = [
         name="triviaqa:bpb",
         prompt_function=triviaqa_bpb_prompt,
         hf_repo="mandarjoshi/trivia_qa",
+        hf_revision=_REVISION,
         hf_subset="rc.nocontext",
         hf_avail_splits=["train", "test", "validation"],
         evaluation_splits=["validation"],

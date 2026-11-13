@@ -67,11 +67,16 @@ def teleqna_mcf_prompt(line, task_name: str = None):
     )
 
 
+# netop/TeleQnA: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "0eba715a43f0ab7e4d9d7e09ceb258642a149391"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"teleqna:{suffix}",
         prompt_function=fn,
         hf_repo="netop/TeleQnA",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=["test"],
         evaluation_splits=["test"],

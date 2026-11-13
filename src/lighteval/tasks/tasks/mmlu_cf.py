@@ -71,6 +71,10 @@ def mmlu_cf_prompt(line, task_name: str = None, *, subject: str, prompt_function
     )
 
 
+# microsoft/MMLU-CF: the snapshot of the reference runs (same revision as configs/datasets.lock.yaml in titan_eval)
+_REVISION = "c25b89a968a2062e422dd96ddf0fe3387507f0dd"
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"mmlu_cf:{category.lower()}:{variant}",
@@ -80,6 +84,7 @@ TASKS_TABLE = [
             prompt_function=prompt_function,
         ),
         hf_repo="microsoft/MMLU-CF",
+        hf_revision=_REVISION,
         hf_subset="default",
         hf_avail_splits=[f"{category}_val", f"{category}_dev"],
         evaluation_splits=[f"{category}_val"],
