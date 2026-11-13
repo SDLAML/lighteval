@@ -24,6 +24,7 @@ from lighteval.metrics.harness_compatibility.truthful_qa import (
     TRUTHFULQA_GEN_KEYS,
     TruthfulqaGenMetrics,
     TruthfulqaMCMetrics,
+    official_answer,
 )
 from lighteval.metrics.metrics import Metrics
 from lighteval.metrics.metrics_sample import SampleLevelComputation
@@ -137,6 +138,24 @@ def truthful_qa_generative_prompt(line, task_name: str = None):
     )
 
 
+
+class _TruthfulQAEmptyAnswer(SampleLevelComputation):
+    """1 if the official answer extraction (official_answer: after the first "A:", cut at the first "Q:") leaves an empty answer,
+    else 0. Its mean = the share of empty answers, which score 0 on every BLEU / ROUGE metric here (owner 11-13: show it next to
+    the scores; on the run-0.5-study checkpoints it ranges 1% to 69% and drives bleu_acc)."""
+
+    def compute(self, doc, model_response, **kwargs):
+        return float(official_answer(model_response.final_text[0]).strip() == "")
+
+
+truthfulqa_empty_answer_metric = SampleLevelMetric(
+    metric_name="empty_answer",
+    sample_level_fn=_TruthfulQAEmptyAnswer(),
+    category=SamplingMethod.GENERATIVE,
+    corpus_level_fn=np.mean,
+    higher_is_better=False,
+)
+
 truthfulqa_gen = LightevalTaskConfig(
     name="truthfulqa:gen",
     prompt_function=truthful_qa_generative_prompt,
@@ -151,7 +170,7 @@ truthfulqa_gen = LightevalTaskConfig(
     # for Qwen3-1.7B-Base because it starts with " \nA:".) The 6 shots are in the prompt: run it with |0 (a |K > 0 would add
     # shots drawn from the evaluated split).
     generation_size=50,
-    metrics=[truthfulqa_gen_official_metrics],
+    metrics=[truthfulqa_gen_official_metrics, truthfulqa_empty_answer_metric],
     stop_sequence=[],
     version=3,                      # 3: official protocol (no stop, 50 tokens, answer extraction); 2: lm-eval (stop "\n\n", raw text)
 )
