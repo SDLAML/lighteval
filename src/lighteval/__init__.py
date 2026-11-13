@@ -22,5 +22,11 @@
 
 import importlib.metadata
 
+from lighteval import _fast_metadata
+
+
+# before anything can import transformers: its import calls packages_distributions(), which is minutes of file
+# system stat() calls in the standard library (see lighteval/_fast_metadata.py)
+_fast_metadata.install()
 
 __version__ = importlib.metadata.version(__package__ or __name__)
