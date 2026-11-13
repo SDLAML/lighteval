@@ -36,7 +36,7 @@ Here one engine per GPU lives for the whole lighteval call:
 
 A worker exception is sent back with its traceback and raised in the parent (the pool is torn down, because the other
 workers are still busy with the failed job). A dead worker (killed, out of memory, ...) is noticed by a liveness check
-on the result queue, so the parent never waits forever. Workers are daemonic and also exit when the parent disappears.
+on the result queue, so the parent never waits forever. Workers are not daemonic (vLLM spawns its own engine process); they exit on shutdown() and when the parent disappears.
 
 This module imports only the standard library, so the (spawned) workers and the unit tests do not pay for importing
 vLLM unless an engine is really built.
@@ -255,7 +255,9 @@ class DPPool:
                 p = ctx.Process(
                     target=_dp_worker,
                     args=(g, devices[g], self.model_args, self.engine_factory, self._req_qs[g], self._res_q),
-                    daemon=True,
+                    # NOT daemonic: vLLM's engine starts its own EngineCore process, and daemonic processes may not have children
+                    # (AssertionError on the node, 11-13). Workers still exit on shutdown() and when the parent disappears (poll).
+                    daemon=False,
                     name=f"lighteval-dp-{g}",
                 )
                 p.start()
