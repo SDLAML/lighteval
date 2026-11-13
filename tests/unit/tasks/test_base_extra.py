@@ -230,6 +230,47 @@ def test_encyclo_strict_answer_line():
     assert ex("Answer: E", 5) == "E"
 
 
+def test_encyclo_reader_version_1_accepts_two_more_unambiguous_forms():
+    """Owner OK 11-13: "Answer: B) <option text>" and "Answer: Answer: B" (72.5% of Qwen3-1.7B-Base's outputs); the other rules stay strict."""
+    ex = encyclo_k_base.extract_answer
+    assert {c.name: c.version for c in encyclo_k_base.TASKS_TABLE}["encyclo_k_base:cot"] == 1
+    for text, letter in (
+        ("Answer: C) vi.i.v.ii.", "C"),  # the letter, ")", the option copied
+        ("Answer: Answer: C", "C"),  # the instruction's own prefix repeated
+        ("Answer: Answer: C) vi.i.v.ii.", "C"),  # both
+        ("Answer: **Answer:** D", "D"),
+        ("analysis\nANSWER: B) iii.x.ii.", "B"),
+        ("x\nAnswer: A) i.\nAnswer: B", "A"),  # still the FIRST answer line
+        ("Answer: A) a statement (with parentheses) in it.", "A"),
+    ):
+        assert ex(text, 8) == letter, text
+    for text in (
+        "Answer: B) or C)",  # hedges stay no answer
+        "Answer: B) and C)",
+        "Answer: B) / C) vi.",
+        "Answer: B) vii. C) viii.",  # two options named
+        "Answer: Answer: Answer: B",  # only one repeated prefix
+        "Answer: Answer: E) iv.",  # beyond the 4 options
+        "Answer: viii.v.vi.iii.",  # option text without a letter
+        "E) vii.viii.",  # no "Answer:"
+        "Answer: b) vii.",  # lower-case letter
+        "The answer: B) vii.",
+    ):
+        assert ex(text, 4) is None, text
+    # a generation that loops on blanks must not make the reader slow (the first draft needed 8 s for 2,000 blanks after "Answer:")
+    import time
+
+    start = time.time()
+    for text in ("Answer:" + " " * 100000 + "X!", "Answer: B" + " " * 100000 + "!", "Answer: Answer:" + "*_" * 50000 + "X!", "Answer: B)" + " " * 100000 + "x C)", "A" * 200000):
+        assert ex(text, 4) is None
+    assert time.time() - start < 2.0
+    doc = Doc(query="q", choices=["A", "B", "C", "D"], gold_index=2)
+    metric = encyclo_k_base.StrictAnswerLine()
+    assert metric.compute(doc, ModelResponse(text=["Answer: C) vi.i.v.ii."])) == {"extractive_match": 1.0, "answered": 1.0}
+    assert metric.compute(doc, ModelResponse(text=["Answer: Answer: B"])) == {"extractive_match": 0.0, "answered": 1.0}
+    assert metric.compute(doc, ModelResponse(text=["Answer: B) or C)"])) == {"extractive_match": 0.0, "answered": 0.0}
+
+
 def test_encyclo_prompt_filters_chinese_text():
     row = {
         "prompt": "P", "question": "English statement", "options": ["i.ii.", "iii."], "answer_letter": "B", "discipline": "Law",
@@ -287,6 +328,42 @@ def test_all_golds_score_as_answers():
             doc = Doc(query="q", choices=[gold_of(answer)], gold_index=0)
             text = f"... the final answer is: $\\boxed{{{boxed(answer)}}}$"
             assert metric.compute(doc, ModelResponse(text=[text]))["pass@1"] == 1.0, (repo, answer)
+
+
+def _cut_at_stop(text, stops):
+    """What vLLM does with `stop`: the output ends before the first stop string found in the GENERATED text."""
+    found = [text.find(stop) for stop in stops if stop in text]
+    return text[: min(found)] if found else text
+
+
+def test_math_stop_strings_cut_a_new_problem_not_the_models_own_heading():
+    """Version 1: the stop strings match at the start of a line only (version 0: "Problem:" anywhere cut "**Understanding the Problem:**")."""
+    version_0 = ["Problem:", "Solve the following math problem"]
+    answer = "Therefore, the final answer is: $\\boxed{25}$. I hope it is correct"
+    heading = "Let's break it down step by step.\n\n1. **Understanding the Problem:**\n   We need all pairs.\n\n" + answer
+    own_lines = (
+        "To solve this problem, we first solve the following math problem: find x.\n" + answer,  # the phrase in a sentence
+        "1. **Problem:** the sum of ...\n2. **Solution:** ..." + "\n" + answer,  # a bold label on its own line
+        "   Problem: indented restatement inside a list\n" + answer,
+        "Solution: Problem: " + answer,  # mid-line
+    )
+    for config in aime_hmmt_base.TASKS_TABLE:
+        assert config.version == 1 and list(config.stop_sequence) == ["\nProblem:", "\nSolve the following math problem"], config.name
+        stops = list(config.stop_sequence)
+        assert _cut_at_stop(heading, version_0) != heading  # what the old stops did
+        assert _cut_at_stop(heading, stops) == heading, config.name
+        for text in own_lines:
+            assert _cut_at_stop(text, stops) == text, (config.name, text)
+        # a base model that goes on in the prompt's own format: a blank line, "Problem:", the next problem
+        for gap in ("\n\n", "\n"):
+            cut = _cut_at_stop(answer + gap + "Problem:\nFind the number of ...\n\nSolution: x" + answer, stops)
+            assert cut.rstrip("\n") == answer and cut.startswith(answer), cut  # a blank line leaves one "\n" (the stop starts at the last one)
+        assert _cut_at_stop(answer + "\n\nSolve the following math problem efficiently and clearly.  The last line ...", stops).rstrip("\n") == answer
+        # an empty solution that starts the next problem at once
+        assert _cut_at_stop("\n\nProblem:\nFind ...", stops).strip() == ""
+        # the prompt itself holds both strings; vLLM only reads the generated text, so the prompt template is unchanged
+        prompt = aime_hmmt_base.PROMPT_TEMPLATE.format(problem="P")
+        assert prompt.startswith("Solve the following math problem") and prompt.endswith("\n\nProblem:\nP\n\nSolution:")
 
 
 # ---- SimpleQA -----------------------------------------------------------------------------------------------------------------

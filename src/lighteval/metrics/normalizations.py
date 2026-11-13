@@ -477,9 +477,26 @@ def remove_punc(text: str) -> str:
     return "".join(ch for ch in text if ch not in PUNCT)
 
 
+# Unicode bidirectional formatting characters: LRM U+200E, RLM U+200F, ALM U+061C, LRE / RLE / PDF / LRO / RLO U+202A-U+202E, LRI / RLI / FSI / PDI
+# U+2066-U+2069. They are invisible and carry no word meaning, but a base model often opens an Arabic answer with U+200F (XQuAD ara: the
+# prediction " \u200fهولاكو خان" against the gold " هولاكو خان" had a different first word, em 0 / f1 0.5); category Cf, so the punctuation
+# filter below never removed them (11-13 review fix). Zero-width joiners (U+200C / U+200D: meaningful in Persian / Indic scripts), the
+# zero-width space U+200B and the soft hyphen U+00AD are NOT touched.
+BIDI_MARKS = "\u200e\u200f\u061c\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+_BIDI_MARKS_RE = re.compile(f"[{BIDI_MARKS}]")
+
+
+def remove_bidi_marks(text: str) -> str:
+    """Deletes the Unicode bidirectional formatting characters (see BIDI_MARKS)."""
+    return _BIDI_MARKS_RE.sub("", text)
+
+
 @requires(Extra.MULTILINGUAL)
 def get_multilingual_normalizer(lang: Language, lower: bool = True) -> Callable[[str], str]:
     """Get a normalizer function for the specified language.
+
+    Steps: bidi formatting marks removed (all languages), lower-case, the language's articles removed, Unicode punctuation
+    removed, the language's word tokenizer, words joined with single spaces.
 
     Returns:
         Callable[[str], str]: A function that normalizes text for the specified language
@@ -487,6 +504,7 @@ def get_multilingual_normalizer(lang: Language, lower: bool = True) -> Callable[
 
     def _inner_normalizer(text: str) -> str:
         tokenizer = get_word_tokenizer(lang)
+        text = remove_bidi_marks(text)
         # 11-13: lower-case BEFORE removing the articles. The patterns hold lower-case forms only; with the old order ("The Eiffel Tower",
         # "Die Stadt") a capitalised article at the start of an answer was never removed, so the prediction "The Eiffel Tower" did not
         # match the gold "the Eiffel Tower".

@@ -155,6 +155,12 @@ class MultilingualQuasiExactMatchMetric(SampleLevelMetric):
         )
 
 
+# Languages whose F1 is computed over characters, not words (version 1 of multi_wiki_qa, 11-13 review fix): Korean writes particles and
+# counters into the word, so the word-level F1 gave 0 to `1988년` against the gold `1988` (11.4% of the Korean predictions contain the gold
+# and scored F1 0). KorQuAD 1.0 (arXiv:1909.07005) scores F1 at the character level for the same reason.
+CHARACTER_LEVEL_F1_LANGUAGES = frozenset({Language.KOREAN})
+
+
 class MultilingualSquadOfficialMetric(SampleLevelMetric):
     def __init__(self, language: Language, score: Literal["em", "f1"]):
         """Exact match / F1 of the official SQuAD script (see SquadOfficialScore) with the language's own normalisation.
@@ -166,6 +172,8 @@ class MultilingualSquadOfficialMetric(SampleLevelMetric):
         then the language's word tokenizer (spaCy / NLTK / jieba / pythainlp / stanza ...) so that unspaced scripts
         (zho, jpn, tha, ...) are compared as words. The metric name is just "em" / "f1": the same name for every language,
         which is what a macro over languages and the registry need (the Quasi metrics carry the language in their name).
+        The normaliser also deletes the Unicode bidi formatting marks (U+200E / U+200F / U+061C / U+202A-U+202E / U+2066-U+2069)
+        in every language. The F1 of the languages in CHARACTER_LEVEL_F1_LANGUAGES (kor) is over characters; the EM is not changed.
 
         Args:
             language: The language of the samples.
@@ -173,7 +181,11 @@ class MultilingualSquadOfficialMetric(SampleLevelMetric):
         """
         super().__init__(
             metric_name=score,
-            sample_level_fn=SquadOfficialScore(score, normalizer=get_multilingual_normalizer(language)),
+            sample_level_fn=SquadOfficialScore(
+                score,
+                normalizer=get_multilingual_normalizer(language),
+                char_level_f1=(score == "f1" and language in CHARACTER_LEVEL_F1_LANGUAGES),
+            ),
             category=SamplingMethod.GENERATIVE,
             corpus_level_fn=np.mean,
             higher_is_better=True,

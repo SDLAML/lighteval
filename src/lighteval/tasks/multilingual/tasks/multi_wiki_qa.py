@@ -88,6 +88,9 @@ def _gen_config(name_lang: str, language: Language, hf_subset: str) -> Lighteval
             MultilingualSquadOfficialMetric(language, "em"),
             MultilingualSquadOfficialMetric(language, "f1"),
         ],
+        # 1 (11-13 review fixes): the normaliser removes the Unicode bidi marks (every language); the F1 of Korean is over characters
+        # (MultilingualSquadOfficialMetric / CHARACTER_LEVEL_F1_LANGUAGES). Prompts and generations are those of version 0.
+        version=1,
     )
 
 

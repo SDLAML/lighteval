@@ -13,7 +13,9 @@ is the same). The score is the fork's math scorer of math_500 / math:gen (Metric
 expression; sympy equivalence, precision 5), applied to each sample: pass@1 = the unbiased estimator with n = 10, k = 1 (= the mean
 of the 10 samples) and pass@10 = any of the 10 samples correct (n = k = 10). The prompt is the instruct-style AIME / HMMT prompt of
 Oleg Filatov's aime.py ("... final answer is: $\\boxed{ANSWER}$ ...") with the "Problem:" / "Solution:" cues of our math_500, so a
-base model starts a solution instead of extending the problem; generation stops at "Problem:" or a repeated instruction.
+base model starts a solution instead of extending the problem; generation stops where a new problem would begin: a line that starts
+with "Problem:" or with the repeated instruction (version 1; version 0 stopped at "Problem:" anywhere and cut the model's own heading
+"**Understanding the Problem:**", 1.3-4% of the samples).
 AIME 2024 gold answers carry leading zeros ("025", 7 of 30); the scorer reads "025" and "25" as the same number (tested).
 aime.py / hmmt.py are unchanged (aime24, aime25: n = 1, no cap; aime26, hmmt_feb_2026: n = 10, 32768 tokens, no pass@10).
 
@@ -43,7 +45,14 @@ from lighteval.tasks.requests import Doc, SamplingMethod
 N_SAMPLES = 10
 KS = (1, 10)
 MAX_NEW_TOKENS = 4096
-STOP_SEQUENCES = ["Problem:", "Solve the following math problem"]
+# Version 1 (review fix 11-13): a stop string must only match where a NEW problem begins, i.e. at the start of a line. The prompt puts
+# "\n\nProblem:\n" between the instruction and the problem, so a base model that goes on in the same format writes "\n\nProblem:\n<next
+# problem>" or the whole instruction again after its answer. Version 0 used "Problem:" / "Solve the following math problem" anywhere in
+# the text: the model's own heading "1. **Understanding the Problem:**" was cut after "the" (dead sample without an answer: 4 / 9 / 12 / 7
+# of 300 / 300 / 300 / 330 samples of Qwen3-1.7B-Base for AIME 24 / 25 / 26 / HMMT). One "\n" (not two) also catches a continuation that
+# follows its answer line without a blank line. vLLM compares the stop strings with the generated text only (never the prompt).
+STOP_SEQUENCES = ["\nProblem:", "\nSolve the following math problem"]
+TASK_VERSION = 1
 PROMPT_TEMPLATE = (
     "Solve the following math problem efficiently and clearly.  The last line of your response should be of the following format: "
     "'Therefore, the final answer is: $\\boxed{{ANSWER}}$. I hope it is correct' (without quotes) where ANSWER is just the final "
@@ -130,7 +139,7 @@ def _config(name, repo, revision, gold_of, specific_of):
         generation_size=MAX_NEW_TOKENS,
         metrics=[PASS_AT],
         stop_sequence=STOP_SEQUENCES,
-        version=0,
+        version=TASK_VERSION,  # 1: stop strings only at the start of a line (0: "Problem:" anywhere cut "**Understanding the Problem:**")
     )
 
 

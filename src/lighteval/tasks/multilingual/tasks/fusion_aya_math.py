@@ -16,6 +16,13 @@ Problem: / Solution:"), with language-specific translations.
 
 Reports expr_gold_metric (math expression / LaTeX \\boxed{} parser).
 
+Version 1 (11-13 review fixes, titan_eval): (a) the stop strings only match at the START OF A LINE (a restarted problem), and the
+colon-less aliases ("Problem", "Aufgabe", ...) only as a line of their own: version 0 cut solutions at the word inside a sentence or
+heading ("1. **Understanding the Problem**", "Um die Aufgabe zu lösen": 9 of 129 English and 17 of 129 German outputs); (b) bare list /
+tuple golds ("1,3,9,11", "(6,5)", "2400, 1350, 864") are written as $...$ so that gold and prediction go through the same LaTeX path:
+a list is compared as a set (order does not matter), a tuple in order. In version 0 the bare list was read as the decimal 1.3 (or as its
+last number: "2400, 1350, 864" -> 864, so a boxed 864 scored) and \\boxed{1,3,9,11} could never match.
+
 languages:
 english, german, french, ukrainian
 
@@ -25,6 +32,8 @@ math, multilingual, reasoning, olympiad, chain-of-thought
 paper:
 https://arxiv.org/abs/2510.00931
 """
+
+import re
 
 from langcodes import standardize_tag
 
@@ -76,7 +85,8 @@ _FUSION_AYA_PROMPT_PARTS: dict[Language, tuple[str, str, str]] = {
 }
 
 
-# Extra problem-label variants that models may generate.
+# Extra problem-label variants that models may generate (a restarted task written without the colon). Matched only as a LINE OF THEIR
+# OWN ("\nProblem\n"): version 0 matched the bare word anywhere and cut "1. **Understanding the Problem**" and "Um die Aufgabe zu lösen".
 # Keep this small: too many stop strings increase accidental truncation risk.
 _FUSION_AYA_PROBLEM_LABEL_STOP_ALIASES: dict[Language, list[str]] = {
     Language.ENGLISH: ["Problem"],  # no-space variant
@@ -112,11 +122,12 @@ def fusion_aya_cot_template(language: Language) -> str:
 def fusion_aya_stop_sequences(language: Language) -> list[str]:
     """Return stop sequences for a language.
 
-    Stop when the model appears to start a new problem.
+    Stop when the model appears to start a new problem: a line that starts with a problem label (version 1; version 0 matched the label
+    anywhere in the text, so "Understanding the Problem:" in the model's own heading cut the solution).
 
     We keep English stops because models sometimes switch back to English even
     when the prompt is localized. We also add the current language's problem
-    label and a few high-value aliases to avoid over-stopping.
+    label and the colon-less aliases (as a line of their own) to avoid over-stopping.
     """
     try:
         _, problem_label, _ = _FUSION_AYA_PROMPT_PARTS[language]
@@ -126,13 +137,33 @@ def fusion_aya_stop_sequences(language: Language) -> list[str]:
         ) from exc
 
     stop_sequences = [
-        "Problem:",
-        problem_label,
-        *_FUSION_AYA_PROBLEM_LABEL_STOP_ALIASES.get(language, []),
+        "\nProblem:",
+        f"\n{problem_label}",
+        *(f"\n{alias}\n" for alias in _FUSION_AYA_PROBLEM_LABEL_STOP_ALIASES.get(language, [])),
     ]
 
     # Preserve order while removing duplicates.
     return list(dict.fromkeys(stop_sequences))
+
+
+_PLAIN_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def fusion_aya_gold(answer: str) -> str:
+    """The gold in the form the scorer reads: a bare list / tuple is wrapped in $...$ (version 1).
+
+    Gold answers are OlympiadBench strings. Integers, decimals ("4.25") and the golds already written in LaTeX ("$\\frac{4}{7}$",
+    "$64,\\frac{1}{4}$") are left as they are. The 11 bare comma lists and tuples ("1,3,5", "2400, 1350, 864", "(6,5)",
+    "(1,-4,-2),(3,2,3),(13,2,-2)"; 7 + 3 per language) are written as $...$: without it the extractor reads "1,3,5" as the decimal
+    1.3 and "2400, 1350, 864" as 864 (a boxed 864 scored), and the prediction \\boxed{1,3,5} parsed as a set could never equal it.
+    As LaTeX, a comma list is a set (the order of the answer does not matter) and a parenthesised list is a tuple (ordered).
+    """
+    text = str(answer).strip()
+    if not text or "$" in text or "\\boxed" in text or _PLAIN_NUMBER.fullmatch(text):
+        return answer
+    if "," in text or text[0] in "([":
+        return f"${text}$"
+    return answer
 
 
 def fusion_aya_cot_prompt(language: Language):
@@ -143,7 +174,7 @@ def fusion_aya_cot_prompt(language: Language):
         return Doc(
             task_name=task_name,
             query=template.format(prompt=line["question"]),
-            choices=[line["answer"]],
+            choices=[fusion_aya_gold(line["answer"])],
             gold_index=0,
         )
 
@@ -167,6 +198,7 @@ TASKS_TABLE = [
             Metrics.expr_gold_metric,
         ],
         stop_sequence=fusion_aya_stop_sequences(language),
+        version=1,  # 1: stops at the start of a line only; list / tuple golds written as $...$ (0: cut "Understanding the Problem"; lists never matched)
     )
     for language in _LANGUAGES
 ]

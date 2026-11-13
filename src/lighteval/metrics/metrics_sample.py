@@ -252,6 +252,7 @@ class SquadOfficialScore(SampleLevelComputation):
         score: Literal["em", "f1"],
         no_answer_string: str | None = None,
         normalizer: Callable[[str], str] | None = None,
+        char_level_f1: bool = False,
     ):
         """Exact match / F1 of the OFFICIAL SQuAD v2 evaluation script (`compute_score.py`), per sample.
 
@@ -273,6 +274,10 @@ class SquadOfficialScore(SampleLevelComputation):
             normalizer (callable, optional): replaces `squad_normalize_answer` (English: lower-case, ASCII punctuation,
                 articles a / an / the). The multilingual QA tasks pass `get_multilingual_normalizer(language)`
                 (see MultilingualSquadOfficialMetric); everything else in the scorer is unchanged.
+            char_level_f1 (bool): F1 over the CHARACTERS of the normalised strings (white space removed; Counter overlap, same
+                arithmetic) instead of over their words. For agglutinative Korean, where particles and counters are written
+                into the word (`1988` / `1988년` / `1988년에` are three different words): KorQuAD 1.0 (Lim et al. 2019,
+                arXiv:1909.07005) scores F1 at the character level for this reason. Exact match is not changed.
 
         A doc is unanswerable when `doc.specific["unanswerable"]` is true; its gold is then [""] whatever
         `doc.choices` holds (the shots of such a doc show `choices[0]`, e.g. "Not in background").
@@ -282,6 +287,7 @@ class SquadOfficialScore(SampleLevelComputation):
         if score not in ("em", "f1"):
             raise ValueError(f"score must be 'em' or 'f1', got {score}")
         self.score = score
+        self.char_level_f1 = char_level_f1
         self.normalize = normalizer or squad_normalize_answer
         self.no_answer = self.normalize(no_answer_string) if no_answer_string is not None else None
 
@@ -300,6 +306,12 @@ class SquadOfficialScore(SampleLevelComputation):
                 results.append(self.compute_one_item(gold=gold, pred=pred))
         return max(results)
 
+    def _tokens(self, text: str) -> list[str]:
+        if not text:
+            return []
+        normalised = self.normalize(text)
+        return list("".join(normalised.split())) if self.char_level_f1 else normalised.split()
+
     def compute_one_item(self, gold: str, pred: str) -> float:
         """Compares two strings only (official `compute_exact` / `compute_f1`).
 
@@ -308,8 +320,8 @@ class SquadOfficialScore(SampleLevelComputation):
         """
         if self.score == "em":
             return int(self.normalize(gold) == self.normalize(pred))
-        gold_toks = self.normalize(gold).split() if gold else []
-        pred_toks = self.normalize(pred).split() if pred else []
+        gold_toks = self._tokens(gold)
+        pred_toks = self._tokens(pred)
         common = Counter(gold_toks) & Counter(pred_toks)
         num_same = sum(common.values())
         if len(gold_toks) == 0 or len(pred_toks) == 0:

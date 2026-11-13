@@ -93,6 +93,9 @@ TASKS_TABLE = [
             MultilingualSquadOfficialMetric(language, "em"),
             MultilingualSquadOfficialMetric(language, "f1"),
         ),
+        # 1 (11-13 review fix): the normaliser removes the Unicode bidi marks (every language; xquad ara em +2.3 points). Prompts and
+        # generations are those of version 0.
+        version=1,
     )
     for language in _LANGUAGES
 ]
