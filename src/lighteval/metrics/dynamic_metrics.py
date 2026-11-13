@@ -270,6 +270,18 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
         )
 
 
+class BoxedOnlyExtractiveMatchMetric(MultilingualExtractiveMatchMetric):
+    """Strict reading of MultilingualExtractiveMatchMetric (titan_eval, owner 11-13: a boxed-only math score as a SECOND number next to
+    the permissive one): a prediction without "\\boxed" scores 0; one with a box is scored exactly as the parent does (boxed match has
+    priority 0 in the math configs, so the box is what gets compared). Per prediction, then the parent's aggregation (max over n)."""
+
+    def compute(self, doc: Doc, model_response: ModelResponse) -> float:
+        preds = model_response.final_text
+        scores = [super(BoxedOnlyExtractiveMatchMetric, self).compute(doc, model_response[i]) if "\\boxed" in (p or "") else 0.0
+                  for i, p in enumerate(preds)]
+        return self.aggregation_function(scores) if scores else 0.0
+
+
 # ---------------------------------------------------------------------------
 # MMLU per-category accuracy metric
 # ---------------------------------------------------------------------------

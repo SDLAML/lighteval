@@ -93,7 +93,7 @@ TASKS_TABLE += [
         few_shots_split="train",
         few_shots_select="random_sampling_from_train",
         generation_size=1024,
-        metrics=[Metrics.expr_gold_metric],
+        metrics=[Metrics.expr_gold_metric, Metrics.expr_gold_boxed_metric],  # titan_eval: + strict boxed-only second number (owner 11-13)
         stop_sequence=["Problem:"],
         version=0,
     )

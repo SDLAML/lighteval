@@ -70,6 +70,7 @@ math_500 = LightevalTaskConfig(
     metrics=[
         # Metrics.pass_at_k_math(sample_params={"k": 1, "n": 1}),
         Metrics.expr_gold_metric,
+        Metrics.expr_gold_boxed_metric,  # titan_eval: strict boxed-only second number (owner 11-13)
     ],
     version=2,
     sample_fields=record_to_sample,

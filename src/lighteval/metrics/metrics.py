@@ -28,7 +28,7 @@ from aenum import Enum
 from inspect_ai.scorer import Score, Target, accuracy, scorer, stderr
 from inspect_ai.solver import TaskState
 
-from lighteval.metrics.dynamic_metrics import MultilingualExtractiveMatchMetric
+from lighteval.metrics.dynamic_metrics import BoxedOnlyExtractiveMatchMetric, MultilingualExtractiveMatchMetric
 from lighteval.metrics.harness_compatibility.drop import DropMetrics
 from lighteval.metrics.harness_compatibility.truthful_qa import (
     TRUTHFULQA_GEN_KEYS,
@@ -412,6 +412,27 @@ class Metrics(Enum):
     expr_gold_metric = SampleLevelMetric(
         metric_name="extractive_match",
         sample_level_fn=MultilingualExtractiveMatchMetric(
+            language=Language.ENGLISH,
+            fallback_mode="first_match",
+            precision=5,
+            gold_extraction_target=(
+                ExprExtractionConfig(),
+                LatexExtractionConfig(boxed_match_priority=0),
+            ),
+            # Match boxed first before trying other regexes
+            pred_extraction_target=(
+                ExprExtractionConfig(),
+                LatexExtractionConfig(boxed_match_priority=0),
+            ),
+            aggregation_function=max,
+        ),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    expr_gold_boxed_metric = SampleLevelMetric(  # titan_eval: strict (boxed-only) second number next to expr_gold_metric
+        metric_name="extractive_match_boxed",
+        sample_level_fn=BoxedOnlyExtractiveMatchMetric(
             language=Language.ENGLISH,
             fallback_mode="first_match",
             precision=5,
