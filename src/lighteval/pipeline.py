@@ -44,7 +44,7 @@ from lighteval.tasks.registry import Registry
 from lighteval.tasks.requests import SamplingMethod
 from lighteval.utils.imports import is_package_available
 from lighteval.utils.parallelism import test_all_gather
-from lighteval.utils.utils import make_results_table, remove_reasoning_tags
+from lighteval.utils.utils import make_results_table, remove_reasoning_tags, split_reasoning
 
 
 if is_package_available("accelerate"):
@@ -92,6 +92,9 @@ class PipelineParameters:
     cot_prompt: str | None = None
     remove_reasoning_tags: bool = True
     reasoning_tags: str | list[tuple[str, str]] = "[('<think>', '</think>')]"
+    # titan_eval chat evals: the scored text is what follows the LAST end tag; an unclosed block gives an EMPTY answer (utils.split_reasoning).
+    # False = the upstream behaviour (every closed block removed, an unclosed one stays in the text): all base evals.
+    strict_reasoning: bool = False
     load_responses_from_details_date_id: str | None = None
     bootstrap_iters: int = 1000
     load_tasks_multilingual: bool = False
@@ -352,6 +355,16 @@ class Pipeline:
             for _, responses in sampling_method_responses.items():
                 for response in responses:
                     context = response.input if isinstance(response.input, str) else None
+                    if self.pipeline_parameters.strict_reasoning:
+                        response.text_post_processed = [
+                            split_reasoning(
+                                text=text,
+                                tag_pairs=self.pipeline_parameters.reasoning_tags,
+                                context=context,
+                            )[0]
+                            for text in response.text
+                        ]
+                        continue
                     response.text_post_processed = [
                         remove_reasoning_tags(
                             text=text,

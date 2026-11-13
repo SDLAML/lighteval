@@ -102,6 +102,17 @@ remove_reasoning_tags = Arg(
     default=True,
 )
 
+strict_reasoning = Arg(
+    type=Annotated[
+        bool,
+        Option(
+            help="titan_eval chat evals: score only the text after the LAST reasoning end tag; an unclosed reasoning block gives an empty answer.",
+            rich_help_panel=HELP_PANEL_NAME_1,
+        ),
+    ],
+    default=False,
+)
+
 reasoning_tags = Arg(
     type=Annotated[
         str,

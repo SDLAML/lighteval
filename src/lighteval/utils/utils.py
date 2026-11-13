@@ -276,6 +276,37 @@ def safe_divide(numerator: np.ndarray, denominator: float, default_value: float 
     return np.where(denominator != 0, numerator / denominator, default_value)
 
 
+def split_reasoning(text: str, tag_pairs: list[tuple[str, str]], context: str | None = None) -> tuple[str, str]:
+    """Strict reasoning split (titan_eval chat evals, owner 11-13): the answer is the text after the LAST end tag.
+
+    Returns (answer, status), status being
+      "closed"   at least one end tag: the answer is everything after the last one (leading whitespace dropped: the separator the
+                 template or the model puts after the tag), whatever came before is reasoning and is dropped;
+      "unclosed" a block that never ends: no end tag in a text that starts inside a block (`context`, usually the prompt, ends inside
+                 one, e.g. a template whose generation prompt is "<think>\n") or that holds a start tag; a start tag after the last end
+                 tag also counts. The answer is EMPTY (the reasoning must never be scored: a mid-trace answer would count), the caller
+                 counts the sample as "think unclosed";
+      "absent"   no tag at all and the text does not start inside a block: the text itself (a model or mode without reasoning).
+    With several tag pairs the pairs are applied one after the other; "unclosed" wins over "closed" over "absent".
+    `remove_reasoning_tags` (base behaviour, unchanged) keeps an unclosed block in the text; this function never does.
+    """
+    result, status = text, "absent"
+    for start_tag, end_tag in tag_pairs:
+        in_block = False
+        if context is not None:
+            last_start = context.rfind(start_tag)
+            in_block = last_start != -1 and last_start > context.rfind(end_tag)
+        last_end = result.rfind(end_tag)
+        if last_end != -1:
+            answer = result[last_end + len(end_tag):]
+            if start_tag in answer:                      # another block opened after the last close and never ended
+                return "", "unclosed"
+            result, status = answer.lstrip(), ("closed" if status != "unclosed" else status)
+        elif in_block or start_tag in result:
+            return "", "unclosed"
+    return result, status
+
+
 def remove_reasoning_tags(text: str, tag_pairs: list[tuple[str, str]], context: str | None = None) -> str:
     """Removes all instances of reasoning tag pairs from text.
 

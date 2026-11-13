@@ -44,6 +44,7 @@ from lighteval.cli_args import (
     results_org,
     results_path_template,
     save_details,
+    strict_reasoning,
     tasks,
     wandb,
 )
@@ -64,6 +65,7 @@ def vllm(
     load_responses_from_details_date_id: load_responses_from_details_date_id.type = load_responses_from_details_date_id.default,
     remove_reasoning_tags: remove_reasoning_tags.type = remove_reasoning_tags.default,
     reasoning_tags: reasoning_tags.type = reasoning_tags.default,
+    strict_reasoning: strict_reasoning.type = strict_reasoning.default,
     # === saving ===
     output_dir: output_dir.type = output_dir.default,
     results_path_template: results_path_template.type = results_path_template.default,
@@ -111,6 +113,7 @@ def vllm(
         load_responses_from_details_date_id=load_responses_from_details_date_id,
         remove_reasoning_tags=remove_reasoning_tags,
         reasoning_tags=reasoning_tags,
+        strict_reasoning=strict_reasoning,
     )
 
     if model_args.endswith(".yaml"):

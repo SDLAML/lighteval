@@ -238,6 +238,10 @@ class VLLMModelConfig(ModelConfig):
     is_async: bool = False  # Whether to use the async version or sync version of the model
     override_chat_template: bool = None
     chat_template_kwargs: dict = Field(default_factory=dict)
+    # titan_eval chat evals (all default to the upstream behaviour):
+    chat_template: str | None = None  # path of a jinja file that REPLACES the tokenizer's chat template (e.g. Qwen3-0.6B ships a GPT-OSS harmony .jinja next to its real ChatML one)
+    num_samples: PositiveInt | None = None  # replaces the number of samples per prompt of the tasks that sample more than once (n > 1 by their own definition); tasks with n = 1 keep 1
+    error_on_prompt_truncation: bool = False  # chat templates: a prompt that does not fit max_model_length - max_new_tokens is an error (cutting the left end would cut the template head)
     enforce_eager: bool = False  # Whether to enforce eager execution mode in vllm
     distributed_backend: str = "mp"  # Backend for data parallelism: "mp" (multiprocessing, default) or "ray" (needs ray installed)
 
@@ -399,6 +403,9 @@ class VLLMModel(LightevalModel):
             revision=config.revision,
         )
         tokenizer.pad_token = tokenizer.eos_token
+        if config.chat_template:
+            with open(config.chat_template, encoding="utf-8") as f:
+                tokenizer.chat_template = f.read()
         return tokenizer
 
     @cached(SamplingMethod.GENERATIVE)
@@ -441,6 +448,8 @@ class VLLMModel(LightevalModel):
 
             max_new_tokens = self.config.generation_parameters.max_new_tokens or split[0].generation_size
             num_samples = split[0].num_samples
+            if self.config.num_samples is not None and num_samples > 1:
+                num_samples = self.config.num_samples
 
             context = [self.prompt_manager.prepare_prompt(doc) for doc in split]
             tokenized = self.tokenizer(context, add_special_tokens=self.add_special_tokens)
@@ -472,6 +481,12 @@ class VLLMModel(LightevalModel):
                         truncated_tokens[i] = len(token_ids) - max_prompt_size
                         inputs[i] = token_ids[truncated_tokens[i] :]
                 num_truncated = sum(1 for n in truncated_tokens if n > 0)
+                if num_truncated > 0 and self.config.error_on_prompt_truncation:
+                    raise ValueError(
+                        f"{num_truncated} of {len(inputs)} prompts are longer than {max_prompt_size} tokens "
+                        f"({self.max_length=}, {max_new_tokens=}, up to {max(truncated_tokens)} tokens too long): "
+                        "cutting the prompt from the left would cut the chat template head; raise max_model_length or lower max_new_tokens."
+                    )
                 if num_truncated > 0:
                     logger.warning(
                         f"{num_truncated} of {len(inputs)} prompts are longer than {max_prompt_size} tokens "
