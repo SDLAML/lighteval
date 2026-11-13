@@ -34,6 +34,10 @@ from lighteval.tasks.requests import Doc
 from lighteval.utils.language import Language
 
 
+# Pinned dataset revision (tiny-aya-math-edition/fusion-aya-math-bench): the snapshot in the offline cache.
+_REVISION = "56c020a524e50e03df8b0cf7d4efbf8ae85a9d9c"
+
+
 _LANGUAGES = [
     Language.ENGLISH,
     Language.GERMAN,
@@ -154,6 +158,7 @@ TASKS_TABLE = [
         name=f"fusion_aya_math:{language.value}:gen",
         prompt_function=fusion_aya_cot_prompt(language),
         hf_repo="tiny-aya-math-edition/fusion-aya-math-bench",
+        hf_revision=_REVISION,
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("benchmark",),
         few_shots_split=None,

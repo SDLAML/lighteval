@@ -54,6 +54,10 @@ _MCF_METRICS = [
     LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
 ]
 
+# Pinned dataset revision (li-lab/MMLU-ProX): the snapshot in the offline cache; `load_dataset(revision=...)` reads exactly it.
+_REVISION = "8e6106a6c6ce1c5027e66cc338143cf997b2aa09"
+
+
 # MMLU-ProX languages (English excluded — use mmlu_pro.py for English)
 _LANGUAGES = [
     Language.AFRIKAANS,   # af
@@ -139,6 +143,7 @@ TASKS_TABLE = [
         name=f"mmlu_prox:{language.value}:{suffix}",
         prompt_function=prompt_fn,
         hf_repo="li-lab/MMLU-ProX",
+        hf_revision=_REVISION,
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("test",),
         few_shots_split="validation",
@@ -158,6 +163,7 @@ TASKS_TABLE += [
         name=f"mmlu_prox:{language.value}:mcf_em",
         prompt_function=mmlu_prox_mcf_prompt,
         hf_repo="li-lab/MMLU-ProX",
+        hf_revision=_REVISION,
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("test",),
         few_shots_split="validation",

@@ -43,6 +43,10 @@ from lighteval.tasks.templates.utils.formulation import CFFormulation, MCFFormul
 from lighteval.utils.language import Language
 
 
+# Pinned dataset revision (CohereForAI/Global-MMLU (= CohereLabs/Global-MMLU, main on 2026-11-13)): the snapshot in the offline cache; `load_dataset(revision=...)` reads exactly it.
+_REVISION = "0e619dbeb34206cd48705a1a0ea7fb21cae09993"
+
+
 # All available non-English configs in Global-MMLU. The dataset exposes
 # language configs as BCP-47-style short tags (for example, `fa`, `fil`, `sw`)
 # so the task names stay on Language enum values while hf_subset uses
@@ -149,6 +153,7 @@ TASKS_TABLE = [
         name=f"global_mmlu:{language.value}:{suffix}",
         prompt_function=prompt_fn(language),
         hf_repo="CohereForAI/Global-MMLU",
+        hf_revision=_REVISION,
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("test",),
         few_shots_split="dev",
@@ -167,6 +172,7 @@ TASKS_TABLE += [
         name=f"global_mmlu:{language.value}:mcf_em",
         prompt_function=_make_global_mmlu_mcf_prompt(language),
         hf_repo="CohereForAI/Global-MMLU",
+        hf_revision=_REVISION,
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("test",),
         few_shots_split="dev",

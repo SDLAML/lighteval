@@ -25,15 +25,16 @@ https://arxiv.org/abs/1910.11856
 
 from langcodes import standardize_tag
 
-from lighteval.metrics.dynamic_metrics import (
-    MultilingualQuasiExactMatchMetric,
-    MultilingualQuasiF1ScoreMetric,
-)
+from lighteval.metrics.dynamic_metrics import MultilingualSquadOfficialMetric
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.templates.qa import get_qa_prompt_function
 from lighteval.utils.language import Language
+
+
+# Pinned dataset revision (google/xquad): the snapshot in the offline cache; `load_dataset(revision=...)` reads exactly it.
+_REVISION = "51adfef1c1287aab1d2d91b5bead9bcfb9c68583"
 
 
 _LANGUAGES = [
@@ -79,14 +80,18 @@ TASKS_TABLE = [
         name=f"xquad:{language.value}:gen",
         prompt_function=get_qa_prompt_function(language, _adapter),
         hf_repo="google/xquad",
+        hf_revision=_REVISION,
         hf_subset=f"xquad.{standardize_tag(language.value)}",
         evaluation_splits=("validation",),
         few_shots_split="validation",
         generation_size=400,
         stop_sequence=["\n",],
+        # 11-13: the official SQuAD arithmetic (equality / Counter F1, max over the golds) with the language's own normaliser;
+        # metric names "em" and "f1" for every language (the Quasi metrics put the language in the name and use a lenient
+        # prefix match / set-based F1). See MultilingualSquadOfficialMetric.
         metrics=(
-            MultilingualQuasiExactMatchMetric(language, "prefix"),
-            MultilingualQuasiF1ScoreMetric(language),
+            MultilingualSquadOfficialMetric(language, "em"),
+            MultilingualSquadOfficialMetric(language, "f1"),
         ),
     )
     for language in _LANGUAGES
@@ -98,6 +103,7 @@ TASKS_TABLE += [
         name=f"xquad:{language.value}:bpb",
         prompt_function=_bpb_prompt(language),
         hf_repo="google/xquad",
+        hf_revision=_REVISION,
         hf_subset=f"xquad.{standardize_tag(language.value)}",
         evaluation_splits=("validation",),
         few_shots_split="validation",

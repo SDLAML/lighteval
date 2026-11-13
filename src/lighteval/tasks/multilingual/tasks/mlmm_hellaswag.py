@@ -53,6 +53,11 @@ _MCF_METRICS = [
 
 # Languages covered by alexandrainst/m_hellaswag and jon-tow/okapi_hellaswag.
 # English excluded — use hellaswag.py for English evaluation.
+# Pinned dataset revisions: alexandrainst/m_hellaswag (every language but Chinese) and jon-tow/okapi_hellaswag (Chinese), the snapshots in the offline cache.
+_REVISION = "9d31dc982bd6285e081e3e3136332a38b9c1d7b7"
+_REVISION_ZHO = "fb6b5f2b48a6348ae2a9467a6714c3a054fa8d85"
+
+
 _LANGUAGES = [
     Language.ARABIC,
     Language.BENGALI,
@@ -108,6 +113,7 @@ TASKS_TABLE = [
             formulation=CFFormulation(),
         ),
         hf_repo="alexandrainst/m_hellaswag" if lang != Language.CHINESE else "jon-tow/okapi_hellaswag",
+        hf_revision=_REVISION_ZHO if lang == Language.CHINESE else _REVISION,
         hf_subset=standardize_tag(lang.value),
         evaluation_splits=["val" if lang != Language.CHINESE else "validation"],
         hf_avail_splits=["val" if lang != Language.CHINESE else "validation"],
@@ -127,6 +133,7 @@ TASKS_TABLE += [
             formulation=MCFFormulation(),
         ),
         hf_repo="alexandrainst/m_hellaswag" if lang != Language.CHINESE else "jon-tow/okapi_hellaswag",
+        hf_revision=_REVISION_ZHO if lang == Language.CHINESE else _REVISION,
         hf_subset=standardize_tag(lang.value),
         evaluation_splits=["val" if lang != Language.CHINESE else "validation"],
         hf_avail_splits=["val" if lang != Language.CHINESE else "validation"],
@@ -146,6 +153,7 @@ TASKS_TABLE += [
             formulation=MCFFormulation(),
         ),
         hf_repo="alexandrainst/m_hellaswag" if lang != Language.CHINESE else "jon-tow/okapi_hellaswag",
+        hf_revision=_REVISION_ZHO if lang == Language.CHINESE else _REVISION,
         hf_subset=standardize_tag(lang.value),
         evaluation_splits=["val" if lang != Language.CHINESE else "validation"],
         hf_avail_splits=["val" if lang != Language.CHINESE else "validation"],

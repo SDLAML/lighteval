@@ -31,6 +31,7 @@ from lighteval.metrics.metrics_sample import (
     LoglikelihoodAcc,
     NormalizedMultiChoiceProbability,
     Probability,
+    SquadOfficialScore,
 )
 from lighteval.metrics.normalizations import (
     LogProbCharNorm,
@@ -148,6 +149,31 @@ class MultilingualQuasiExactMatchMetric(SampleLevelMetric):
                 aggregation_function=aggregation_function,
                 type_exact_match=match_type,
             ),
+            category=SamplingMethod.GENERATIVE,
+            corpus_level_fn=np.mean,
+            higher_is_better=True,
+        )
+
+
+class MultilingualSquadOfficialMetric(SampleLevelMetric):
+    def __init__(self, language: Language, score: Literal["em", "f1"]):
+        """Exact match / F1 of the official SQuAD script (see SquadOfficialScore) with the language's own normalisation.
+
+        Same arithmetic as the English `Metrics.squad_official_em` / `squad_official_f1` (equality of the normalised
+        strings; F1 over token COUNTS; max over all gold answers) but the normaliser is `get_multilingual_normalizer(language)`:
+        lower-case, Unicode punctuation removed, the language's definite / indefinite articles removed (only cat, deu, ell,
+        eng, fin, fra, glg, heb, hun, ita, nld, nor, por, spa, swe, tur have a pattern; other languages keep every word),
+        then the language's word tokenizer (spaCy / NLTK / jieba / pythainlp / stanza ...) so that unspaced scripts
+        (zho, jpn, tha, ...) are compared as words. The metric name is just "em" / "f1": the same name for every language,
+        which is what a macro over languages and the registry need (the Quasi metrics carry the language in their name).
+
+        Args:
+            language: The language of the samples.
+            score: "em" or "f1".
+        """
+        super().__init__(
+            metric_name=score,
+            sample_level_fn=SquadOfficialScore(score, normalizer=get_multilingual_normalizer(language)),
             category=SamplingMethod.GENERATIVE,
             corpus_level_fn=np.mean,
             higher_is_better=True,

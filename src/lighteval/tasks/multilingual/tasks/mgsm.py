@@ -42,6 +42,10 @@ from lighteval.tasks.requests import Doc
 from lighteval.utils.language import Language
 
 
+# Pinned dataset revision (CohereLabs/global-mgsm): the snapshot in the offline cache; `load_dataset(revision=...)` reads exactly it.
+_REVISION = "29087245a1a9788d4e0413f4927e994d49633bbb"
+
+
 # Languages covered by CohereLabs/global-mgsm.
 # English is intentionally excluded — use gsm8k.py for English evaluation.
 _LANGUAGES = [
@@ -384,6 +388,7 @@ TASKS_TABLE = [
         name=f"mgsm:{language.value}:gen",
         prompt_function=mgsm_cot_prompt(language),
         hf_repo="CohereLabs/global-mgsm",
+        hf_revision=_REVISION,
         hf_subset=standardize_tag(language.value),
         evaluation_splits=("test",),
         few_shots_split=None,

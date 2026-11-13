@@ -148,11 +148,14 @@ class StanzaTokenizer(WordTokenizer):
             import stanza
             from stanza.pipeline.core import DownloadMethod
 
+            # CPU only: the tokenizer is tiny, and the process also runs vLLM workers on the node's GPUs. Offline (compute
+            # nodes): the models must be in $STANZA_RESOURCES_DIR (`stanza.download(lang, processors="tokenize")` on the login node).
+            kwargs = {"use_gpu": False, **self.stanza_kwargs}
             self._tokenizer = stanza.Pipeline(
                 self.stanza_language,
                 processors="tokenize",
                 download_method=DownloadMethod.REUSE_RESOURCES,
-                **self.stanza_kwargs,
+                **kwargs,
             )
 
         return self._tokenizer

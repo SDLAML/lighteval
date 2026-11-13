@@ -52,6 +52,10 @@ _MCF_METRICS = [
     LogLikelihoodAccMetric(normalization=LogProbCharNorm()),
 ]
 
+# Pinned dataset revision (alexandrainst/m_arc): the snapshot in the offline cache; `load_dataset(revision=...)` reads exactly it.
+_REVISION = "69b0991ee606079105c4f9e271bcc1fef0014e03"
+
+
 _LANGUAGES = [
     Language.ARABIC,
     Language.ARMENIAN,
@@ -121,6 +125,7 @@ TASKS_TABLE = [
             formulation=formulation,
         ),
         hf_repo="alexandrainst/m_arc",
+        hf_revision=_REVISION,
         hf_subset=_m_arc_subset(language),
         evaluation_splits=("test",),
         few_shots_split="train",
@@ -143,6 +148,7 @@ TASKS_TABLE += [
             formulation=MCFFormulation(),
         ),
         hf_repo="alexandrainst/m_arc",
+        hf_revision=_REVISION,
         hf_subset=_m_arc_subset(language),
         evaluation_splits=("test",),
         few_shots_split="train",

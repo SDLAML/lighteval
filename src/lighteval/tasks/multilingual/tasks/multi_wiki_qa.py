@@ -33,15 +33,16 @@ https://arxiv.org/abs/2509.04111
 
 from langcodes import standardize_tag
 
-from lighteval.metrics.dynamic_metrics import (
-    MultilingualQuasiExactMatchMetric,
-    MultilingualQuasiF1ScoreMetric,
-)
+from lighteval.metrics.dynamic_metrics import MultilingualSquadOfficialMetric
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.templates.qa import get_qa_prompt_function
 from lighteval.utils.language import Language
+
+
+# Pinned dataset revision (alexandrainst/multi-wiki-qa): the snapshot in the offline cache; `load_dataset(revision=...)` reads exactly it.
+_REVISION = "9bdb3350487e399bd1cd873e1395290d636db5ce"
 
 
 def _make_qa_adapter():
@@ -76,14 +77,16 @@ def _gen_config(name_lang: str, language: Language, hf_subset: str) -> Lighteval
         name=f"multi_wiki_qa:{name_lang}:gen",
         prompt_function=get_qa_prompt_function(language, _make_qa_adapter()),
         hf_repo="alexandrainst/multi-wiki-qa",
+        hf_revision=_REVISION,
         hf_subset=hf_subset,
         evaluation_splits=["train"],
         hf_avail_splits=["train"],
         generation_size=100,
         stop_sequence=["\n"],
+        # 11-13: official SQuAD arithmetic with the language's own normaliser, names "em" / "f1" (as xquad.py)
         metrics=[
-            MultilingualQuasiExactMatchMetric(language, "prefix"),
-            MultilingualQuasiF1ScoreMetric(language),
+            MultilingualSquadOfficialMetric(language, "em"),
+            MultilingualSquadOfficialMetric(language, "f1"),
         ],
     )
 
@@ -93,6 +96,7 @@ def _bpb_config(name_lang: str, language: Language, hf_subset: str) -> Lighteval
         name=f"multi_wiki_qa:{name_lang}:bpb",
         prompt_function=_make_bpb_prompt(language),
         hf_repo="alexandrainst/multi-wiki-qa",
+        hf_revision=_REVISION,
         hf_subset=hf_subset,
         evaluation_splits=["train"],
         hf_avail_splits=["train"],

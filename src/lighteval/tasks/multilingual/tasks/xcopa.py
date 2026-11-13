@@ -74,6 +74,16 @@ def _adapter(line):
     }
 
 
+# Pinned dataset revisions (the snapshots in the offline cache). cambridgeltl/xcopa is the current id of the old `xcopa` repo:
+# the same commit 042f7895 was cached under the legacy folder name `datasets--xcopa`, which offline resolution does not find.
+_REVISION = "042f78955ba48e6404616762fa6e05e839c3907a"
+_REVISION_ARA = "08663706ee7cab30c4b7dc1bb00042a3227ce1ff"      # OALL/AlGhafa-Arabic-LLM-Benchmark-Translated (copa_ext_ar): NOT XCOPA
+
+
+def _hf_revision(language: Language) -> str:
+    return _REVISION_ARA if language == Language.ARABIC else _REVISION
+
+
 def _hf_repo(language: Language) -> str:
     return "OALL/AlGhafa-Arabic-LLM-Benchmark-Translated" if language == Language.ARABIC else "cambridgeltl/xcopa"
 
@@ -112,6 +122,7 @@ TASKS_TABLE = [
         name=f"xcopa:{language.value}:cf",
         prompt_function=get_copa_prompt_function(language, adapter=_adapter, formulation=CFFormulation()),
         hf_repo=_hf_repo(language),
+        hf_revision=_hf_revision(language),
         hf_subset=_hf_subset(language),
         evaluation_splits=["test"],
         few_shots_split="validation",
@@ -126,6 +137,7 @@ TASKS_TABLE += [
         name=f"xcopa:{language.value}:mcf",
         prompt_function=get_copa_prompt_function(language, adapter=_adapter, formulation=MCFFormulation()),
         hf_repo=_hf_repo(language),
+        hf_revision=_hf_revision(language),
         hf_subset=_hf_subset(language),
         evaluation_splits=["test"],
         few_shots_split="validation",
@@ -140,6 +152,7 @@ TASKS_TABLE += [
         name=f"xcopa:{language.value}:mcf_em",
         prompt_function=get_copa_prompt_function(language, adapter=_adapter, formulation=MCFFormulation()),
         hf_repo=_hf_repo(language),
+        hf_revision=_hf_revision(language),
         hf_subset=_hf_subset(language),
         evaluation_splits=["test"],
         few_shots_split="validation",

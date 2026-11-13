@@ -247,7 +247,12 @@ class F1_score(SampleLevelComputation):
 
 
 class SquadOfficialScore(SampleLevelComputation):
-    def __init__(self, score: Literal["em", "f1"], no_answer_string: str | None = None):
+    def __init__(
+        self,
+        score: Literal["em", "f1"],
+        no_answer_string: str | None = None,
+        normalizer: Callable[[str], str] | None = None,
+    ):
         """Exact match / F1 of the OFFICIAL SQuAD v2 evaluation script (`compute_score.py`), per sample.
 
         Copy of `get_raw_scores`, `compute_exact` and `compute_f1` of the official script:
@@ -265,6 +270,9 @@ class SquadOfficialScore(SampleLevelComputation):
                 (OLMES: "Not in background"). A prediction that normalises to this text is mapped to "" before
                 scoring (the official no-answer prediction). Leave it None for tasks without abstention
                 (TriviaQA, WikiFact, PopQA, ...): then the prediction is scored as it is.
+            normalizer (callable, optional): replaces `squad_normalize_answer` (English: lower-case, ASCII punctuation,
+                articles a / an / the). The multilingual QA tasks pass `get_multilingual_normalizer(language)`
+                (see MultilingualSquadOfficialMetric); everything else in the scorer is unchanged.
 
         A doc is unanswerable when `doc.specific["unanswerable"]` is true; its gold is then [""] whatever
         `doc.choices` holds (the shots of such a doc show `choices[0]`, e.g. "Not in background").
@@ -274,18 +282,19 @@ class SquadOfficialScore(SampleLevelComputation):
         if score not in ("em", "f1"):
             raise ValueError(f"score must be 'em' or 'f1', got {score}")
         self.score = score
-        self.no_answer = squad_normalize_answer(no_answer_string) if no_answer_string is not None else None
+        self.normalize = normalizer or squad_normalize_answer
+        self.no_answer = self.normalize(no_answer_string) if no_answer_string is not None else None
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
         if doc.specific and doc.specific.get("unanswerable"):
             golds = [""]
         else:
-            golds = [gold for gold in doc.get_golds() if squad_normalize_answer(gold)]
+            golds = [gold for gold in doc.get_golds() if self.normalize(gold)]
             if not golds:
                 golds = [""]
         results = []
         for pred in model_response.final_text:
-            if self.no_answer is not None and squad_normalize_answer(pred) == self.no_answer:
+            if self.no_answer is not None and self.normalize(pred) == self.no_answer:
                 pred = ""
             for gold in golds:
                 results.append(self.compute_one_item(gold=gold, pred=pred))
@@ -298,9 +307,9 @@ class SquadOfficialScore(SampleLevelComputation):
             float: The score of this gold / prediction pair
         """
         if self.score == "em":
-            return int(squad_normalize_answer(gold) == squad_normalize_answer(pred))
-        gold_toks = squad_normalize_answer(gold).split() if gold else []
-        pred_toks = squad_normalize_answer(pred).split() if pred else []
+            return int(self.normalize(gold) == self.normalize(pred))
+        gold_toks = self.normalize(gold).split() if gold else []
+        pred_toks = self.normalize(pred).split() if pred else []
         common = Counter(gold_toks) & Counter(pred_toks)
         num_same = sum(common.values())
         if len(gold_toks) == 0 or len(pred_toks) == 0:

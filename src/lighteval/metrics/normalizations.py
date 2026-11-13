@@ -440,7 +440,9 @@ _ARTICLE_PATTERNS = {
     Language.FRENCH: r"\b(le|la|les|l'|un|une|des)\b",
     Language.GERMAN: r"\b(der|die|das|den|dem|des|ein|eine|einer|eines|einem|einen)\b",
     Language.FINNISH: r"\b(se|yksi|yks)\b",
-    Language.GREEK: r"\b(ὁ|οἱ|τοῦ|τῶν|τόν|τούς|ὦ|ἡ|αἱ|τῆς|τῶν|τήν|τάς|τό|τά|τοῦ|τῶν|τό|τά)\b",
+    # polytonic forms (as in the original list) + the modern monotonic definite / indefinite articles (11-13: the original list held no form of
+    # modern Greek, so nothing was removed from Greek answers)
+    Language.GREEK: r"\b(ὁ|οἱ|τοῦ|τῶν|τόν|τούς|ὦ|ἡ|αἱ|τῆς|τῶν|τήν|τάς|τό|τά|τοῦ|τῶν|τό|τά|ο|η|το|οι|τα|του|της|των|τον|την|τους|τις|ένας|ενός|ένα|μία|μια|μιας)\b",
     Language.NORWEGIAN: r"\b(en|ei|et|den|det|de)\b",
     Language.SWEDISH: r"\b(en|ett|den|det|de)\b",
     Language.TURKISH: r"\b(bir)\b",
@@ -485,10 +487,13 @@ def get_multilingual_normalizer(lang: Language, lower: bool = True) -> Callable[
 
     def _inner_normalizer(text: str) -> str:
         tokenizer = get_word_tokenizer(lang)
-        text = remove_articles(text, lang)
-        text = remove_punc(text)
+        # 11-13: lower-case BEFORE removing the articles. The patterns hold lower-case forms only; with the old order ("The Eiffel Tower",
+        # "Die Stadt") a capitalised article at the start of an answer was never removed, so the prediction "The Eiffel Tower" did not
+        # match the gold "the Eiffel Tower".
         if lower:
             text = text.lower()
+        text = remove_articles(text, lang)
+        text = remove_punc(text)
 
         tokens = tokenizer.word_tokenize(text)
         return " ".join(tokens)
