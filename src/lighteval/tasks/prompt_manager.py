@@ -111,6 +111,20 @@ class PromptManager:
         messages = []
         instruction_used = False  # Flag to check if instruction is used in the first few-shot example
 
+        # A doc that carries its own conversation (titan_eval long-context chat tasks: MRCR, GSM-Infinite; fork tasks/tasks/long_more.py) is rendered as given:
+        # `doc.specific["chat_messages"]` = [{"role", "content"}, ...]. A global system prompt is only added when the conversation has none of its own.
+        own = (doc.specific or {}).get("chat_messages") if isinstance(doc.specific, dict) else None
+        if own:
+            messages = [{"role": m["role"], "content": m["content"]} for m in own]
+            if self.system_prompt is not None and messages[0]["role"] != "system":
+                messages.insert(0, {"role": "system", "content": self.system_prompt})
+            if tokenize:
+                assert self.tokenizer is not None, "Tokenizer must be set for chat template formatting."
+                return self.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True, **self.chat_template_kwargs
+                )
+            return messages
+
         # Add system prompt if available
         if self.system_prompt is not None:
             messages.append({"role": "system", "content": self.system_prompt})
