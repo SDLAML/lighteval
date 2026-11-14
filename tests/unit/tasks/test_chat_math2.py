@@ -99,6 +99,36 @@ def test_task_table_names_and_no_filters():
     assert sum(n.startswith("omega_chat:explorative:") and n.endswith(":test_out") for n in names) == 41
 
 
+def test_mmlu_prox_lite_is_the_same_task_on_the_official_lite_dataset():
+    full = {t.name.split(":")[1]: t for t in cm2.TASKS_TABLE if t.name.startswith("mmlu_prox_chat:")}
+    lite = {t.name.split(":")[1]: t for t in cm2.TASKS_TABLE if t.name.startswith("mmlu_prox_lite_chat:")}
+    assert sorted(lite) == sorted(full) and len(lite) == 28 and "en" not in lite, "same 28 languages, English is mmlu_pro_chat"
+    assert all(t.hf_repo == "li-lab/MMLU-ProX-Lite" and t.hf_revision == cm2.MMLU_PROX_LITE_REVISION for t in lite.values())
+    assert len(cm2.MMLU_PROX_LITE_REVISION) == 40 and cm2.MMLU_PROX_LITE_PER_LANG_ITEMS == 588
+    assert all(t.hf_repo == cm2.MMLU_PROX_REPO and t.hf_revision == cm2.MMLU_PROX_REVISION for t in full.values())
+    for lang in cm2.MMLU_PROX_LANGS:
+        a, b = full[lang], lite[lang]
+        for field in ("prompt_function", "generation_size", "stop_sequence", "evaluation_splits", "hf_avail_splits", "hf_subset", "few_shots_split"):
+            assert getattr(a, field) == getattr(b, field), (lang, field)
+        assert [m.metric_name for m in a.metrics] == [m.metric_name for m in b.metrics], (lang, "metrics")
+        assert a.hf_filter is None and b.hf_filter is None
+
+
+def test_mmlu_prox_lite_prompt_and_gold_are_the_full_set_ones():
+    lite_row = {"question_id": 5, "question": "Q?", "category": "law", "src": "x", "answer_index": 1,
+                **{f"option_{i}": v for i, v in enumerate(["a", "b", "c"])}}
+    d = cm2.mmlu_prox_chat_prompt(lite_row, "mmlu_prox_lite_chat:de")
+    assert d.choices == list("ABC") and d.gold_index == 1 and "one of ABC." in d.query
+    assert cm2._prox_key(lite_row) == 5
+
+
+def test_mmlu_prox_subset_seeds_keep_the_full_set_ones():
+    # the opt-in draw of the full set keeps its seed (N=200 = the first build's items); the lite draw uses its own seed
+    assert cm2.SEED == "chat_math2-v1"
+    tasks = {t.name: t for t in cm2.mmlu_prox_tasks("p", "mmlu_prox", "r", "v") + cm2.mmlu_prox_tasks("q", "mmlu_prox_lite", "r", "v")}
+    assert tasks["p:de"].hf_repo == "r" and tasks["q:de"].hf_revision == "v"
+
+
 def test_imo_csv_guard_refuses_a_swapped_file():
     import tempfile
     from pathlib import Path

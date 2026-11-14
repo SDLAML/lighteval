@@ -42,6 +42,9 @@ lighteval/metrics/chat_metrics.py). FULL official sets (owner rule 11-14: no see
   - MMLU-ProX: 28 languages (the base task mmlu_prox:mcf_em languages), the whole test split of each (11,759 questions per language, 329,252 in
     all), the MMLU-Pro chat prompt (mc_query of chat_evals: English instruction, "Answer: $LETTER", the letters of the question, 3 to 10 options).
     Subtask names mmlu_prox_chat:<lang>. The flag draws N per language (seed chat_math2-v1:mmlu_prox:<lang>, keys = question_id).
+  - MMLU-ProX-Lite (li-lab/MMLU-ProX-Lite @ e82aafb9, MIT): the official lite set, 588 questions per language, the same 28 languages,
+    the same prompt, scoring and English exclusion; only the dataset differs. Subtask names mmlu_prox_lite_chat:<lang>; the flag seed is
+    chat_math2-v1:mmlu_prox_lite:<lang>.
 """
 
 import hashlib
@@ -154,6 +157,11 @@ MMLU_PROX_LANGS = [
     "vi", "wo", "yo", "zh", "zu",
 ]                                                              # the languages of the base task mmlu_prox:mcf_em (English is mmlu_pro_chat)
 MMLU_PROX_PER_LANG_ITEMS = 11759     # test split of every language (329,252 in all)
+# The official lite set (li-lab/MMLU-ProX-Lite, MIT, 588 test questions per language, the same 29 languages): the same tasks on
+# another dataset (owner 11-14: intermediate checkpoints, task mmlu_prox_lite_chat). Its question_id / answer_index / option_i columns match.
+MMLU_PROX_LITE_REPO = "li-lab/MMLU-ProX-Lite"
+MMLU_PROX_LITE_REVISION = "e82aafb9460529687d3c7e51b401d8dd1dd309dd"
+MMLU_PROX_LITE_PER_LANG_ITEMS = 588
 
 
 def _options(line):
@@ -173,6 +181,30 @@ def mmlu_prox_chat_prompt(line, task_name: str = None):
 
 def _prox_key(row) -> int:
     return int(row["question_id"])
+
+
+def mmlu_prox_tasks(prefix: str, seed_name: str, repo: str, revision: str) -> list[LightevalTaskConfig]:
+    """One task per language (`<prefix>:<lang>`) of an MMLU-ProX dataset. English is not here (it is mmlu_pro_chat).
+    `seed_name` keys the opt-in subset draw (data.sample_per_group): the full MMLU-ProX keeps its own seeds, so N=200 is unchanged."""
+    return [
+        LightevalTaskConfig(
+            name=f"{prefix}:{lang}",
+            prompt_function=mmlu_prox_chat_prompt,
+            hf_repo=repo,
+            hf_subset=lang,
+            hf_revision=revision,
+            hf_avail_splits=["test"],
+            evaluation_splits=["test"],
+            few_shots_split=None,
+            few_shots_select=None,
+            generation_size=BUDGET,
+            stop_sequence=[],
+            hf_filter=subset_filter(f"{SEED}:{seed_name}:{lang}", _prox_key, ["test"]),
+            metrics=[chat_choice_metric(1)],
+            version=0,
+        )
+        for lang in MMLU_PROX_LANGS
+    ]
 
 
 # ------------------------------------------------------------------------------------------------------------- tasks
@@ -222,25 +254,8 @@ def _build_tasks():
                         version=0,
                     )
                 )
-    for lang in MMLU_PROX_LANGS:
-        tasks.append(
-            LightevalTaskConfig(
-                name=f"mmlu_prox_chat:{lang}",
-                prompt_function=mmlu_prox_chat_prompt,
-                hf_repo=MMLU_PROX_REPO,
-                hf_subset=lang,
-                hf_revision=MMLU_PROX_REVISION,
-                hf_avail_splits=["test"],
-                evaluation_splits=["test"],
-                few_shots_split=None,
-                few_shots_select=None,
-                generation_size=BUDGET,
-                stop_sequence=[],
-                hf_filter=subset_filter(f"{SEED}:mmlu_prox:{lang}", _prox_key, ["test"]),
-                metrics=[chat_choice_metric(1)],
-                version=0,
-            )
-        )
+    tasks += mmlu_prox_tasks("mmlu_prox_chat", "mmlu_prox", MMLU_PROX_REPO, MMLU_PROX_REVISION)
+    tasks += mmlu_prox_tasks("mmlu_prox_lite_chat", "mmlu_prox_lite", MMLU_PROX_LITE_REPO, MMLU_PROX_LITE_REVISION)
     return tasks
 
 
