@@ -294,7 +294,7 @@ class GsmInfinite(unittest.TestCase):
         base = [c for c in lm.TASKS_TABLE if c.name == "gsm_infinite_hard_65536"][0]
         chat = [c for c in lm.TASKS_TABLE if c.name == "gsm_infinite_hard_65536_chat"][0]
         self.assertTrue(base.hf_repo.endswith("xdg/gsm_infinite_hard_64k"))
-        self.assertEqual((base.generation_size, base.stop_sequence), (2048, ["\nProblem:"]))
+        self.assertEqual((base.generation_size, base.stop_sequence), (4096, ["\nProblem:"]))
         self.assertEqual((chat.generation_size, chat.stop_sequence), (8192, []))
 
 

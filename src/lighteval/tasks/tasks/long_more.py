@@ -232,7 +232,8 @@ TASKS_TABLE = [_lb2_base_config(n) for n in LB2B_LENGTHS]
 GSM_SUBSETS = ("hard", "medium")
 GSM_LABEL = {8192: "8k", 16384: "16k", 32768: "32k", 65536: "64k", 131072: "128k"}
 GSM_OPS = tuple(range(2, 21))
-GSM_BASE_NEW = 2048                     # base generation cap (the paper's 4,096 is for chat APIs; the dataset's own solutions are 30 tokens per op)
+GSM_BASE_NEW = 4096                     # base generation cap = the official max_tokens: gsm-infinite/config.sh `max_tokens=4096` ("Token limits"; run.sh passes it as --max-tokens, pred/model_handler.py defaults to 4096 too)
+                                        # @ Infini-AI-Lab/gsm_infinite caa53880. The official code has NO separate base / completion path (OpenAI chat.completions only), so a base model gets the same cap.
 GSM_CHAT_NEW = 8192                     # chat default cap (the registry yaml sets it; thinking models may need more)
 GSM_MARGIN = 64
 GSM_BASE_STOP = ["\nProblem:"]         # a base model that has answered goes on with a new "Problem:"
@@ -432,6 +433,9 @@ TASKS_TABLE += _build_gsm_tasks()
 
 
 # ============================================================================================================== MRCR
+# Official handling (openai/mrcr README, checked 11-14): `MAX_CONTEXT_WINDOW = 1000000  # Set accordingly`; `if n_tokens(messages) > MAX_CONTEXT_WINDOW: continue` (o200k tokens of the PROMPT contents) = the item is
+# skipped, not scored; the example call `client.chat.completions.create(model=MODEL, messages=messages)` has NO generation cap. Ours: an item is skipped (NaN, `skipped`) when prompt + the run's generation cap +
+# MRCR_MARGIN does not fit the run's window. The window per bin is the registry yaml's (titan_eval: longest prompt of the bin in the Qwen3.5 tokenizer + budget + 64, clamped to the model's context by `min_context`).
 MRCR_BINS = (8192, 16384, 32768, 65536, 131072, 262144)
 MRCR_NEEDLES = (2, 4, 8)
 MRCR_BASE_NEW = 1024                    # the gold answers are up to 800 tokens (Qwen tokenizer; max 3,563 characters)
