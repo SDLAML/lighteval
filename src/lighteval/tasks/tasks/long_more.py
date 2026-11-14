@@ -27,8 +27,11 @@ longbench_v2_base_<L>   LongBench v2 (zai-org/LongBench-v2, 503 four-choice ques
                         generation of a few tokens: the first letter A-D. Metrics: acc, the official breakdowns (easy / hard, short / medium / long words), token buckets of the untruncated prompt,
                         acc_untruncated / acc_truncated and the share of cut prompts. (The chat twin is `longbench_v2_chat`, module chat_long.py.)
 gsm_infinite_<hard|medium>_<L>[_chat]   GSM-Infinite (InfiniAILab, arXiv 2502.05252): noise-filled reasoning problems, L = 8192 .. 131072 (the dataset's 8k .. 128k), op counts 2 .. 20, accuracy per
-                        op count. Data: the prepared sample of titan_eval/evals/long_data.py (official `limit` rule, 20 per op). Chat = the dataset's messages as given; base = the same text as plain
+                        op count. Data: the prepared sample of titan_eval/evals/long_data.py (official `limit` rule, 200 per op). Chat = the dataset's messages as given; base = the same text as plain
                         text (instruction, then "Problem: ... Question: ... Solution:"), zero-shot (the paper has no base protocol). Answer = the official parser (eval_realistic.py criteriaoutput).
+                        The prepared sample is the OFFICIAL one: 200 per op (the `limit` of the official run script; owner rule 11-14: full official set). The opt-in flag
+                        `data.sample_per_group=N` (titan_eval) applies the same official rule at limit N (the first int(N * pct) rows of each filter_config group of every op, a multiple
+                        of 20 gives exactly N per op); no seed: the official rule is deterministic.
 mrcr_<L>[_chat]         OpenAI MRCR (openai/mrcr, MIT): 2 / 4 / 8 needles, the bin of L = 8192 .. 262144 tokens (prompt + answer), 100 rows per needle count. Chat = the conversation as given; base = the
                         same conversation as a "User: / Assistant:" transcript ending in "Assistant:". Official grader verbatim (prefix check, then SequenceMatcher ratio). Items whose prompt does not fit
                         the run's context are skipped as in the official script (counted: `skipped`).
@@ -54,6 +57,7 @@ from lighteval.metrics.metrics_sample import SampleLevelComputation
 from lighteval.metrics.utils.metric_utils import SampleLevelMetricGrouping
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc, SamplingMethod
+from lighteval.tasks.sampling import sample_per_group
 from lighteval.tasks.tasks.chat_long import (
     ENV_MAX_MODEL_LEN,
     ENV_MAX_NEW_TOKENS,
@@ -344,6 +348,59 @@ def gsm_metric() -> SampleLevelMetricGrouping:
     )
 
 
+# gsm-infinite/config.sh `filter_config` (Infini-AI-Lab/gsm_infinite @ caa53880), in the official order: (percentage, template, mode). The same list is long_data.GSM_FILTER of
+# titan_eval (the preparation); the fork cannot import it.
+GSM_FILTER = (
+    (0.4, "crazy_zootopia", "normalforward"),
+    (0.05, "movie_festival_awards", "normalforward"),
+    (0.05, "teachers_in_school", "normalforward"),
+    (0.4, "crazy_zootopia", "forwardreverse"),
+    (0.05, "movie_festival_awards", "forwardreverse"),
+    (0.05, "teachers_in_school", "forwardreverse"),
+)
+
+
+class GsmLimit:
+    """`hf_filter` object of the opt-in flag: the official `limit` rule at `limit` per op count. The prepared file holds, per op, the first int(200 * pct) rows of each
+    filter_config group in dataset order; the first int(limit * pct) rows of each group are a prefix of that, i.e. exactly the rows the official script takes at that limit."""
+
+    def __init__(self, limit: int):
+        self.limit = int(limit)
+
+    def pick(self, rows) -> list[int]:
+        """Indices (ascending) of the kept rows of one split."""
+        seen: dict[tuple, int] = {}
+        keep = []
+        for i, r in enumerate(rows):
+            pct = next((p for p, t, m in GSM_FILTER if t == r["template"] and m == r["mode"]), None)
+            if pct is None:
+                continue
+            key = (int(r["op"]), r["template"], r["mode"])
+            if seen.get(key, 0) < int(self.limit * pct):
+                seen[key] = seen.get(key, 0) + 1
+                keep.append(i)
+        return keep
+
+    def _one(self, ds):
+        return ds.select(self.pick(ds))
+
+    def apply(self, dataset):
+        if hasattr(dataset, "keys"):
+            from datasets import DatasetDict
+
+            return DatasetDict({name: self._one(d) for name, d in dataset.items()})
+        return self._one(dataset)
+
+    def __repr__(self) -> str:
+        return f"GsmLimit({self.limit})"
+
+
+def gsm_limit_filter():
+    """None (the full prepared sample, 200 per op) unless the run set data.sample_per_group."""
+    n = sample_per_group()
+    return None if n is None else GsmLimit(n)
+
+
 def _gsm_config(subset: str, length: int, chat: bool) -> LightevalTaskConfig:
     def prompt(line, task_name: str = None):
         return gsm_doc(line, task_name, subset, chat)
@@ -361,12 +418,17 @@ def _gsm_config(subset: str, length: int, chat: bool) -> LightevalTaskConfig:
         few_shots_select=None,
         generation_size=GSM_CHAT_NEW if chat else GSM_BASE_NEW,
         stop_sequence=[] if chat else GSM_BASE_STOP,
+        hf_filter=gsm_limit_filter(),
         metrics=[gsm_metric()],
         version=0,
     )
 
 
-TASKS_TABLE += [_gsm_config(s, n, chat) for s in GSM_SUBSETS for n in GSM_LABEL for chat in (False, True)]
+def _build_gsm_tasks() -> list[LightevalTaskConfig]:
+    return [_gsm_config(s, n, chat) for s in GSM_SUBSETS for n in GSM_LABEL for chat in (False, True)]
+
+
+TASKS_TABLE += _build_gsm_tasks()
 
 
 # ============================================================================================================== MRCR

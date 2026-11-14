@@ -102,7 +102,8 @@ N_ICL = 100                                                         # HELMET HEA
 SHOTS = 2                                                           # HELMET: --shots 2 (demos of RAG / json_kv / re-rank / long documents); ICL has its own shots in the dataset name
 
 LENGTHS = (8192, 16384, 32768, 65536, 131072)
-CHAT_GEN = 4096                                                     # chat variant: generation budget (the registry sets gen.max_new_tokens and max_model_len = L + CHAT_GEN)
+CHAT_GEN = 4096                                                     # chat variant, NON-thinking: generation budget (the registry sets gen.max_new_tokens and max_model_len = L + CHAT_GEN; HELMET's own budgets are 20-200).
+                                                                    # A THINKING run gets the chat budget (32,768, capped by the model's context) on top of the prompt window L: titan_eval config.resolve, task yaml `prompt_tokens: L`
 CHAT_MARGIN = 64                                                    # tokens the chat template adds around the user message (prepare-time check)
 
 # ----------------------------------------------------------------------------------------------------------- the subsets
@@ -333,7 +334,7 @@ def ndcg_cut(run: dict[str, float], qrels: dict[str, int], k: int) -> float:
 def prefixed(spec: Spec, fields: dict, completion: str, chat: bool) -> str:
     """HELMET eval.py: a completion (no chat template) is scored together with the answer prefix that ended the prompt. A chat reply is scored as it is, except for the
     datasets with `stop_new_line` (RAG, re-rank, ICL): HELMET stops their generation at the first newline whatever the template, so the reply counts up to its first line
-    (leading blank lines skipped; the generation budget of the chat variant is 4096 tokens, not HELMET's 20 / 200: without this a long reply that mentions the gold would score)."""
+    (leading blank lines skipped; the generation budget of the chat variant is 4096 tokens non-thinking and up to 32,768 thinking, not HELMET's 20 / 200: without this a long reply that mentions the gold would score)."""
     if chat:
         return completion.lstrip().split("\n")[0] if spec.stop_nl else completion
     return templates_of(spec)[1].format(**fields) + completion

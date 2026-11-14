@@ -450,13 +450,20 @@ class PromptManagerHook(unittest.TestCase):
 @unittest.skipUnless((XDG / "gsm_infinite_hard_8k" / "data.parquet").is_file(), "prepared GSM-Infinite data not on disk")
 class RealGsmData(unittest.TestCase):
     def test_prepared_rows_are_the_official_sample(self):
+        """The prepared file is the official `limit` 200 sample (owner rule 11-14), and the opt-in flag at limit 20 gives the first build's 20 per op."""
         import pandas as pd
 
         df = pd.read_parquet(XDG / "gsm_infinite_hard_8k" / "data.parquet")
-        self.assertEqual(len(df), 19 * 20)
+        self.assertEqual(len(df), 19 * 200)
         self.assertEqual(sorted(df.op.unique()), list(range(2, 21)))
         for op, g in df.groupby("op"):
-            self.assertEqual(len(g), 20)
+            self.assertEqual(len(g), 200)
+            self.assertEqual(g.groupby(["template", "mode"]).size().to_dict(),
+                             {("crazy_zootopia", "forwardreverse"): 80, ("crazy_zootopia", "normalforward"): 80, ("movie_festival_awards", "forwardreverse"): 10,
+                              ("movie_festival_awards", "normalforward"): 10, ("teachers_in_school", "forwardreverse"): 10, ("teachers_in_school", "normalforward"): 10})
+        small = df.iloc[lm.GsmLimit(20).pick(df.to_dict("records"))]
+        self.assertEqual(len(small), 19 * 20)
+        for op, g in small.groupby("op"):
             self.assertEqual(g.groupby(["template", "mode"]).size().to_dict(),
                              {("crazy_zootopia", "forwardreverse"): 8, ("crazy_zootopia", "normalforward"): 8, ("movie_festival_awards", "forwardreverse"): 1,
                               ("movie_festival_awards", "normalforward"): 1, ("teachers_in_school", "forwardreverse"): 1, ("teachers_in_school", "normalforward"): 1})

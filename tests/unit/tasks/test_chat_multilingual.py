@@ -1,11 +1,9 @@
 """Tests of the multilingual chat evals (tasks/tasks/chat_multilingual.py): MMMLU (14 locales), INCLUDE (44 languages), chat prompt.
 
-Plain functions: run with pytest, or `python tests/unit/tasks/test_chat_multilingual.py`. The subset file and the task table are checked
-for shape and consistency; no dataset is read here (the rows of the subsets are checked against the drawn ids only in the draw itself).
-The scorers are the chat metrics of chat_evals / chat_metrics.
+Plain functions: run with pytest, or `python tests/unit/tasks/test_chat_multilingual.py`. The task table is checked for shape and consistency (the FULL official
+sets are the default, owner rule 11-14; the opt-in subsets are tested in test_sampling.py); no dataset is read here. The scorers are the chat metrics of chat_evals / chat_metrics.
 """
 
-import json
 import unittest
 
 from lighteval.metrics.chat_metrics import chat_choice_metric
@@ -43,9 +41,8 @@ def test_mmmlu_prompt_is_the_mmlu_pro_chat_prompt():
     assert d.specific["subject"] == "geography" and d.specific["row"] == 7
 
 
-def test_mmmlu_filter_keys_on_the_row_index():
-    keep = cmu.mmmlu_filter(frozenset({7, 9}))
-    assert keep({"Unnamed: 0": 7}) and keep({"Unnamed: 0": "9"}) and not keep({"Unnamed: 0": 8})
+def test_mmmlu_key_is_subject_and_index():
+    assert cmu._mmmlu_key({"Subject": "anatomy", "Unnamed: 0": "7"}) == "anatomy|7"
 
 
 def test_include_prompt_and_gold():
@@ -54,11 +51,10 @@ def test_include_prompt_and_gold():
     assert d.choices == ["A", "B", "C", "D"] and d.gold_index == 2 and d.specific["country"] == "Jordan"
 
 
-def test_include_row_key_is_stable_and_filters():
+def test_include_row_key_is_stable():
     key = cmu.include_row_key(INCLUDE_LINE)
     assert key == cmu.include_row_key(dict(INCLUDE_LINE)), "the same row gives the same id"
     assert cmu.include_row_key({**INCLUDE_LINE, "answer": "1"}) != key, "a changed answer is another row"
-    assert cmu.include_filter(frozenset({key}))(INCLUDE_LINE) and not cmu.include_filter(frozenset())(INCLUDE_LINE)
 
 
 def test_mmmlu_scoring_rules():
@@ -78,20 +74,6 @@ def test_include_scoring_uses_the_letter_of_the_options():
     assert _score(doc, "<think>r</think>\n\nAnswer: D")["acc"] == 0.0
 
 
-def test_subset_file_shape_and_sizes():
-    data = json.loads(cmu.SUBSETS_FILE.read_text())
-    assert data["per_language"] == cmu.PER_LANG == 200
-    assert set(data["mmmlu"]) == set(cmu.MMMLU_LOCALES) and len(data["mmmlu"]) == 14
-    for locale, ids in data["mmmlu"].items():
-        assert len(ids) == 200 and ids == sorted(ids) and len(set(ids)) == 200, locale
-        assert all(0 <= i < 14042 for i in ids), locale                  # each locale has 14,042 test rows
-    assert len(data["include"]) == 44
-    for language, keys in data["include"].items():
-        assert 0 < len(keys) <= 200 and keys == sorted(keys) and len(set(keys)) == len(keys), language
-        assert all(len(k) == 32 for k in keys), language                 # md5 hex ids
-    assert data["include"]["Uzbek"] and len(data["include"]["Uzbek"]) == 200
-
-
 def test_task_table_names_and_pins():
     names = [t.name for t in cmu.TASKS_TABLE]
     assert len(names) == 58 and len(set(names)) == 58
@@ -104,8 +86,10 @@ def test_task_table_names_and_pins():
     assert "sqi" in {t.name.split(":")[1] for t in include} and "zho" in {t.name.split(":")[1] for t in include}
 
 
-def test_subset_file_is_present():
-    assert cmu.SUBSETS_FILE.exists(), "the subset file is part of the repo (draw on the login node)"
+def test_no_english_and_no_filters():
+    codes = {t.name.split(":")[1] for t in cmu.TASKS_TABLE}
+    assert "en" not in codes and "eng" not in codes, "MMMLU has no English locale, INCLUDE no English"
+    assert all(t.hf_filter is None for t in cmu.TASKS_TABLE), "the full test sets: no subset filter without data.sample_per_group"
 
 
 if __name__ == "__main__":

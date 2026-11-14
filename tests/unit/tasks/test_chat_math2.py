@@ -1,10 +1,9 @@
 """Tests of the second set of chat evals (tasks/tasks/chat_math2.py): IMO-AnswerBench, OMEGA, MMLU-ProX (chat prompt).
 
-Plain functions: run with pytest, or `python tests/unit/tasks/test_chat_math2.py`. No dataset is read here: the subset file and the
-task table are checked for shape and consistency; the scorers are the chat metrics of chat_evals / chat_metrics.
+Plain functions: run with pytest, or `python tests/unit/tasks/test_chat_math2.py`. No dataset is read here: the task table is checked for shape and
+consistency (the FULL official sets are the default, owner rule 11-14; the opt-in subsets are tested in test_sampling.py); the scorers are the chat metrics of chat_evals / chat_metrics.
 """
 
-import json
 import unittest
 
 from lighteval.metrics.chat_metrics import chat_choice_metric, chat_math_metric
@@ -82,25 +81,22 @@ def test_mmlu_prox_scoring_is_the_anchored_letter():
     assert m.compute(d, _resp("<think>r</think>\n\nAnswer: B or C"))["acc"] == 0.0
 
 
-def test_subset_file_shape():
-    data = json.loads(cm2.SUBSETS_FILE.read_text())
-    assert data["seed"] == cm2.SEED
-    assert set(data["mmlu_prox"]) == set(cm2.MMLU_PROX_LANGS) and len(cm2.MMLU_PROX_LANGS) == 28
-    for lang, ids in data["mmlu_prox"].items():
-        assert len(ids) == cm2.MMLU_PROX_PER_LANG and len(set(ids)) == len(ids), lang
-    assert len(data["omega"]) == 96
-    for key, ids in data["omega"].items():
-        cat, subset, split = key.split("|")
-        assert cat in cm2.OMEGA_REPOS and split in cm2.OMEGA_REPOS[cat][2], key
-        assert 0 < len(ids) <= cm2.OMEGA_PER_BUCKET and len(set(ids)) == len(ids), key
+def test_omega_buckets_are_the_full_test_splits():
+    assert {c: len(v) for c, v in cm2.OMEGA_SUBSETS.items()} == {"explorative": 41, "compositional": 7, "transformative": 7}
+    assert all(len(set(v)) == len(v) for v in cm2.OMEGA_SUBSETS.values())
+    assert {c: tuple(spec[2]) for c, spec in cm2.OMEGA_REPOS.items()} == {"explorative": ("test_in", "test_out"), "compositional": ("test",), "transformative": ("test",)}
+    assert cm2.OMEGA_ITEMS == 9715 and cm2.MMLU_PROX_PER_LANG_ITEMS == 11759
 
 
-def test_task_table_names():
+def test_task_table_names_and_no_filters():
     names = [t.name for t in cm2.TASKS_TABLE]
     assert "imo_answerbench_chat" in names
-    assert sum(n.startswith("omega_chat:") for n in names) == 96
-    assert sum(n.startswith("mmlu_prox_chat:") for n in names) == 28
+    assert sum(n.startswith("omega_chat:") for n in names) == 96 and len(set(names)) == len(names)
+    assert sum(n.startswith("mmlu_prox_chat:") for n in names) == 28 and "mmlu_prox_chat:en" not in names, "English is mmlu_pro_chat"
     assert all(t.generation_size == cm2.BUDGET for t in cm2.TASKS_TABLE)
+    assert all(t.hf_filter is None for t in cm2.TASKS_TABLE), "the full sets: no subset filter without data.sample_per_group"
+    assert {n.split(":")[1] for n in names if n.startswith("omega_chat:")} == {"explorative", "compositional", "transformative"}
+    assert sum(n.startswith("omega_chat:explorative:") and n.endswith(":test_out") for n in names) == 41
 
 
 def test_imo_csv_guard_refuses_a_swapped_file():

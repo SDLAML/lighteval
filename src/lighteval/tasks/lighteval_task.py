@@ -44,6 +44,7 @@ from lighteval.tasks.prompt_manager import FewShotSampler
 from lighteval.tasks.requests import (
     Doc,
 )
+from lighteval.tasks.sampling import apply_dataset_filter
 from lighteval.utils.utils import ListLike, as_list
 
 
@@ -1033,19 +1034,19 @@ class LightevalTask:
 
             dataset = load_from_disk(task.dataset_path)
             if task.dataset_filter is not None:
-                dataset = dataset.filter(task.dataset_filter)
+                dataset = apply_dataset_filter(dataset, task.dataset_filter)
             return dataset  # type: ignore
 
         if task.dataset_path == "titaneval_local":
             dataset = _load_titaneval_dataset(task.dataset_config_name)
             if task.dataset_filter is not None:
-                dataset = dataset.filter(task.dataset_filter)
+                dataset = apply_dataset_filter(dataset, task.dataset_filter)
             return dataset  # type: ignore
 
         if task.dataset_path == "rbridge_local":
             dataset = _load_rbridge_dataset(task.dataset_config_name)
             if task.dataset_filter is not None:
-                dataset = dataset.filter(task.dataset_filter)
+                dataset = apply_dataset_filter(dataset, task.dataset_filter)
             return dataset  # type: ignore
 
         try:
@@ -1067,7 +1068,7 @@ class LightevalTask:
                     local_files_only=_is_offline,
                 )
                 if task.dataset_filter is not None:
-                    dataset = dataset.filter(task.dataset_filter)
+                    dataset = apply_dataset_filter(dataset, task.dataset_filter)
                 return dataset  # type: ignore
 
             if (_is_script_err or _is_offline) and task.dataset_path == "google/wmt24pp":
@@ -1076,7 +1077,7 @@ class LightevalTask:
                     local_files_only=_is_offline,
                 )
                 if task.dataset_filter is not None:
-                    dataset = dataset.filter(task.dataset_filter)
+                    dataset = apply_dataset_filter(dataset, task.dataset_filter)
                 return dataset  # type: ignore
 
             if (_is_script_err or _is_offline) and task.dataset_path == "facebook/flores":
@@ -1085,13 +1086,13 @@ class LightevalTask:
                     local_files_only=_is_offline,
                 )
                 if task.dataset_filter is not None:
-                    dataset = dataset.filter(task.dataset_filter)
+                    dataset = apply_dataset_filter(dataset, task.dataset_filter)
                 return dataset  # type: ignore
 
             if task.dataset_path == "titaneval_local":
                 dataset = _load_titaneval_dataset(task.dataset_config_name)
                 if task.dataset_filter is not None:
-                    dataset = dataset.filter(task.dataset_filter)
+                    dataset = apply_dataset_filter(dataset, task.dataset_filter)
                 return dataset  # type: ignore
 
             if _is_script_err:
@@ -1103,7 +1104,7 @@ class LightevalTask:
                 )
                 if dataset is not None:
                     if task.dataset_filter is not None:
-                        dataset = dataset.filter(task.dataset_filter)
+                        dataset = apply_dataset_filter(dataset, task.dataset_filter)
                     return dataset  # type: ignore
 
             _splits = list(task.config.hf_avail_splits or [])
@@ -1209,7 +1210,7 @@ class LightevalTask:
                 dataset = load_dataset("json", data_files=_data_files)
 
         if task.dataset_filter is not None:
-            dataset = dataset.filter(task.dataset_filter)
+            dataset = apply_dataset_filter(dataset, task.dataset_filter)
 
         # It returns DatasetDict because we don't specify a split
         return dataset  # type: ignore

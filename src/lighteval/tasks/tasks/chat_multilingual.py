@@ -31,33 +31,30 @@ CohereLabs/include-base-44 @ d2e1f601 (the fork's base revision; Apache-2.0)
 abstract:
 Same conventions as chat_evals.py (0-shot, the model's chat template, the scored text = what follows the LAST </think>, metrics in
 lighteval/metrics/chat_metrics.py). The question and options are in their own language; the instruction is the English MMLU-Pro chat
-prompt of chat_evals.mc_query ("Answer: $LETTER"), the same choice as mmlu_prox_chat (chat_math2.py). Subsets (stored in
-chat_multilingual_subsets.json, drawn by `python -m lighteval.tasks.tasks.chat_multilingual --draw`, seed chat_multilingual-v1):
+prompt of chat_evals.mc_query ("Answer: $LETTER"), the same choice as mmlu_prox_chat (chat_math2.py). FULL official test sets (owner rule 11-14: no
+seeded subsets to save compute); the opt-in flag `data.sample_per_group=N` (titan_eval) keeps a seeded N per language, drawn by lighteval.tasks.sampling
+from the pinned data (nothing stored; seed chat_multilingual-v1:<mmmlu|include>:<locale or language>):
   - MMMLU: 14 locales (the report's 14 languages: AR_XY, BN_BD, DE_DE, ES_LA, FR_FR, HI_IN, ID_ID, IT_IT, JA_JP, KO_KR, PT_BR, SW_KE,
-    YO_NG, ZH_CN), 200 seeded items per locale (the locale has 14,042 test rows; key = the row's `Unnamed: 0` index). Subtask names
+    YO_NG, ZH_CN), the whole test split of each (14,042 rows per locale, 196,588 in all; key of the draw = subject + the row's `Unnamed: 0` index). Subtask names
     mmmlu_chat:<lang> with <lang> = ar, bn, de, es, fr, hi, id, it, ja, ko, pt, sw, yo, zh.
-  - INCLUDE: 44 languages (include-base-44 test split, 22,639 questions; the fork's include.py language map), 200 seeded items per language
-    (key = md5 of question + options + answer, the base file has no id column). Languages with fewer than 200 questions keep all of them.
-    Subtask names include_chat:<iso3>; the registry's mean over subtasks is the mean over languages.
-The report sampled 10% of MMMLU and INCLUDE (Qwen3 report, see the review page); this task uses a fixed 200 per language instead.
+  - INCLUDE: 44 languages (include-base-44 test split, 22,639 questions in all; the fork's include.py language map), every question
+    (key of the draw = md5 of question + options + answer, the base file has no id column). Subtask names include_chat:<iso3>; the registry's mean over
+    subtasks is the mean over languages.
+The Qwen3 report sampled 10% of MMMLU and INCLUDE (see the review page); this task runs the full sets.
 """
 
 import hashlib
-import json
-import random
-from pathlib import Path
 from string import ascii_uppercase
 
 from lighteval.metrics.chat_metrics import chat_choice_metric
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.multilingual.tasks.include import _BASE_REPO, _BASE_REVISION, _LANGUAGES, _choices
 from lighteval.tasks.requests import Doc
+from lighteval.tasks.sampling import subset_filter
 from lighteval.tasks.tasks.chat_evals import BUDGET, mc_query
 
 
-SEED = "chat_multilingual-v1"
-SUBSETS_FILE = Path(__file__).with_name("chat_multilingual_subsets.json")
-PER_LANG = 200
+SEED = "chat_multilingual-v1"           # seed prefix of the opt-in subsets (data.sample_per_group); the full sets use no seed
 
 # ----------------------------------------------------------------------------------------------------------------- MMMLU
 MMMLU_REPO = "openai/MMMLU"
@@ -80,11 +77,9 @@ def mmmlu_chat_prompt(line, task_name: str = None):
     )
 
 
-def mmmlu_filter(ids: frozenset):
-    def keep(row) -> bool:
-        return int(row["Unnamed: 0"]) in ids
-
-    return keep
+def _mmmlu_key(row) -> str:
+    """Unique id of an MMMLU row: `Unnamed: 0` alone is the index WITHIN a subject (1,534 distinct values for 14,042 rows), so the subject is part of the key."""
+    return f"{row['Subject']}|{int(row['Unnamed: 0'])}"
 
 
 # -------------------------------------------------------------------------------------------------------------- INCLUDE
@@ -106,25 +101,12 @@ def include_chat_prompt(line, task_name: str = None):
     )
 
 
-def include_filter(ids: frozenset):
-    def keep(row) -> bool:
-        return include_row_key(row) in ids
-
-    return keep
 
 
 # ------------------------------------------------------------------------------------------------------------- tasks
-def _load_subsets() -> dict:
-    return json.loads(SUBSETS_FILE.read_text())
-
-
 def _build_tasks():
     tasks = []
-    if not SUBSETS_FILE.exists():
-        return tasks
-    subsets = _load_subsets()
     for locale, code in MMMLU_LOCALES.items():
-        ids = frozenset(subsets["mmmlu"][locale])
         tasks.append(
             LightevalTaskConfig(
                 name=f"mmmlu_chat:{code}",
@@ -138,13 +120,12 @@ def _build_tasks():
                 few_shots_select=None,
                 generation_size=BUDGET,
                 stop_sequence=[],
-                hf_filter=mmmlu_filter(ids),
+                hf_filter=subset_filter(f"{SEED}:mmmlu:{locale}", _mmmlu_key, ["test"]),      # None = the full test split
                 metrics=[chat_choice_metric(1)],
                 version=0,
             )
         )
     for language, code in _LANGUAGES.items():
-        ids = frozenset(subsets["include"][language])
         tasks.append(
             LightevalTaskConfig(
                 name=f"include_chat:{code}",
@@ -158,7 +139,7 @@ def _build_tasks():
                 few_shots_select=None,
                 generation_size=BUDGET,
                 stop_sequence=[],
-                hf_filter=include_filter(ids),
+                hf_filter=subset_filter(f"{SEED}:include:{language}", include_row_key, ["test"]),
                 metrics=[chat_choice_metric(1)],
                 version=0,
             )
@@ -167,34 +148,3 @@ def _build_tasks():
 
 
 TASKS_TABLE = _build_tasks()
-
-
-# -------------------------------------------------------------------------------------------------------- the draw
-def draw(out: Path = SUBSETS_FILE) -> dict:
-    """Draw the seeded subsets from the pinned datasets and write them (run once on the login node; the file is the record).
-    Seeds: random.Random(f"{SEED}:<bucket>") over the SORTED ids of the bucket, so the draw is the same on every machine."""
-    from datasets import load_dataset
-
-    mmmlu = {}
-    for locale in MMMLU_LOCALES:
-        ds = load_dataset(MMMLU_REPO, locale, split="test", revision=MMMLU_REVISION)
-        rows = sorted({int(i) for i in ds["Unnamed: 0"]})
-        mmmlu[locale] = sorted(random.Random(f"{SEED}:mmmlu:{locale}").sample(rows, min(PER_LANG, len(rows))))
-    include = {}
-    for language in _LANGUAGES:
-        ds = load_dataset(_BASE_REPO, language, split="test", revision=_BASE_REVISION)
-        keys = sorted({include_row_key(r) for r in ds})
-        include[language] = sorted(random.Random(f"{SEED}:include:{language}").sample(keys, min(PER_LANG, len(keys))))
-    data = {"seed": SEED, "per_language": PER_LANG, "mmmlu": mmmlu, "include": include}
-    out.write_text(json.dumps(data, indent=0, sort_keys=True) + "\n")
-    return data
-
-
-if __name__ == "__main__":
-    import sys
-
-    if "--draw" in sys.argv:
-        d = draw()
-        print(f"mmmlu locales {len(d['mmmlu'])}, include languages {len(d['include'])}")
-    else:
-        print("usage: python -m lighteval.tasks.tasks.chat_multilingual --draw")
