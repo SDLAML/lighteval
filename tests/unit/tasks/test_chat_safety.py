@@ -111,3 +111,15 @@ if __name__ == "__main__":
                 failed += 1
                 print("FAIL", name, type(e).__name__, e)
     sys.exit(1 if failed else 0)
+
+
+def test_wmdp_inverted_acc_is_one_minus_acc():
+    from lighteval.models.model_output import ModelResponse
+    from lighteval.tasks.requests import Doc
+    from lighteval.tasks.tasks.chat_safety import WMDP_CHAT_METRICS
+
+    doc = Doc(task_name="wmdp_chat:bio", query="q", choices=["A", "B", "C", "D"], gold_index=1)
+    right = WMDP_CHAT_METRICS.sample_level_fn.compute(doc, ModelResponse(text=["Answer: B"], text_post_processed=["Answer: B"]))
+    wrong = WMDP_CHAT_METRICS.sample_level_fn.compute(doc, ModelResponse(text=["Answer: C"], text_post_processed=["Answer: C"]))
+    assert right["acc"] == 1.0 and right["inverted_acc"] == 0.0
+    assert wrong["acc"] == 0.0 and wrong["inverted_acc"] == 1.0
