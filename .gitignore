@@ -184,3 +184,4 @@ prod_env
 logs
 _logs
 outputs
+!src/lighteval/tasks/tasks/chat_math2_subsets.json
