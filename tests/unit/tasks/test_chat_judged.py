@@ -1,4 +1,4 @@
-"""Tests of the generation half of the judge-graded chat evals (tasks/tasks/chat_judged.py): SimpleQA, AA-Omniscience, AA-LCR, HLE (text only).
+"""Tests of the generation half of the judge-graded chat evals (tasks/tasks/chat_judged.py): SimpleQA, SimpleQA Verified, AA-Omniscience, AA-LCR, HLE (text only).
 
 The grader prompts, the readers of the judge's reply and the metrics live in titan_eval (titan_eval/evals/judge_graders.py, tests/test_chat_judge.py there): the fork only builds the
 prompts, puts `question` / `gold` into `Doc.specific` and counts `answered`.
@@ -14,7 +14,7 @@ from lighteval.tasks.tasks import chat_judged as cj
 
 
 def test_four_tasks_with_pinned_revisions_and_no_judge_metric():
-    assert [t.name for t in cj.TASKS_TABLE] == ["simpleqa_chat", "aa_omniscience_chat", "aa_lcr_chat", "hle_chat"]
+    assert [t.name for t in cj.TASKS_TABLE] == ["simpleqa_chat", "simpleqa_verified_chat", "aa_omniscience_chat", "aa_lcr_chat", "hle_chat"]
     for t in cj.TASKS_TABLE:
         assert re.fullmatch(r"[0-9a-f]{40}", t.hf_revision), t.name
         assert t.metrics[0] is cj.answered_metric and len(t.metrics) == 1, "the benchmark's metrics are the judge stage's, not lighteval's"
@@ -26,6 +26,17 @@ def test_simpleqa_prompt_is_the_bare_question():
     d = cj.simpleqa_chat_prompt({"problem": "Who wrote it?", "answer": "Me", "metadata": "{}"}, "simpleqa_chat|0")
     assert d.query == "Who wrote it?" and d.instruction is None and d.get_golds() == ["Me"]
     assert d.specific == {"question": "Who wrote it?", "gold": "Me"}
+
+
+def test_simpleqa_verified_prompt_is_the_bare_question_and_keeps_the_acceptable_range():
+    row = {"original_index": 5, "problem": "How many citations?", "answer": "120k (acceptable range: anything between 118k and 122k)", "topic": "Science and technology",
+           "answer_type": "Number", "multi_step": False, "requires_reasoning": True, "urls": "http://x"}
+    d = cj.simpleqa_verified_chat_prompt(row, "simpleqa_verified_chat|0")
+    assert d.query == "How many citations?" and d.instruction is None and d.get_golds() == [row["answer"]]
+    assert d.specific == {"question": "How many citations?", "gold": row["answer"], "original_index": 5, "topic": "Science and technology", "answer_type": "Number",
+                          "multi_step": False, "requires_reasoning": True}
+    t = next(t for t in cj.TASKS_TABLE if t.name == "simpleqa_verified_chat")
+    assert (t.hf_repo, t.hf_subset, t.hf_revision, list(t.evaluation_splits)) == ("google/simpleqa-verified", "simpleqa_verified", "0dc97e0d28d8233463e005cdc4475cc2a13ba2dc", ["eval"])
 
 
 def test_omniscience_prompt_is_the_cards_answer_prompt_plus_the_question():

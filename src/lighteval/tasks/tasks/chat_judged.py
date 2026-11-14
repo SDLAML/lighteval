@@ -22,10 +22,10 @@
 
 """
 name:
-Judge-graded chat evals (titan_eval, post-trained models): SimpleQA, AA-Omniscience (public set), AA-LCR, Humanity's Last Exam (text only)
+Judge-graded chat evals (titan_eval, post-trained models): SimpleQA, SimpleQA Verified, AA-Omniscience (public set), AA-LCR, Humanity's Last Exam (text only)
 
 dataset:
-lighteval/SimpleQA, ArtificialAnalysis/AA-Omniscience-Public, ArtificialAnalysis/AA-LCR, cais/hle
+lighteval/SimpleQA, google/simpleqa-verified, ArtificialAnalysis/AA-Omniscience-Public, ArtificialAnalysis/AA-LCR, cais/hle
 
 abstract:
 Generation half of four benchmarks that need a judge model. Compute nodes are offline, so the judging is NOT done inside lighteval: these tasks only produce the answers (prompt as
@@ -34,6 +34,7 @@ in the benchmark's own harness, the model's chat template and thinking switch fr
 reference answer, ...metadata}`. titan_eval/evals/judge.py then reads the answers back from the details, grades them with the benchmark's OFFICIAL grader prompt through a local judge
 model (titan_eval/evals/judge_graders.py) and adds the benchmark's metrics to scores.json. Tasks are named `<name>_chat`.
   simpleqa_chat       question only, as simple-evals (one user message, no system prompt); 4,321 test questions (+ 5 few-shot rows, not scored)
+  simpleqa_verified_chat  the same bare question; the 1,000 questions of SimpleQA Verified (google/simpleqa-verified: numeric golds carry their acceptable range)
   aa_omniscience_chat the dataset card's OMNISCIENCE_ANSWER_PROMPT (domain, subtopic) + the question in ONE user message (as the fork's aa_omniscience); 600 questions
   aa_lcr_chat         the dataset card's prompt template: the documents of the question's set (in the order of data_source_filenames) + the question; 100 questions with 72k to 115k tokens
                       (cl100k_base) of input: needs vllm.max_model_len >= ~160k (the task yaml sets it); the documents come from the dataset's extracted_text zip
@@ -68,6 +69,7 @@ SIMPLEQA_REPO, SIMPLEQA_REVISION = "lighteval/SimpleQA", "d785eed336ea739b1c0168
 OMNISCIENCE_REPO, OMNISCIENCE_REVISION = "ArtificialAnalysis/AA-Omniscience-Public", "e4883edbb9f5ccf2b2a8fdc6fb65e01a58e99849"
 LCR_REPO, LCR_REVISION = "ArtificialAnalysis/AA-LCR", "9a77ef56b717057ade24ceab4d273712a0b4f19e"       # v1.1 (the current one); v1.0.0 = bdae010bbce259820c0e34c1d7cce210d966fb75
 LCR_ZIP = "extracted_text/AA-LCR_extracted-text.zip"
+SQV_REPO, SQV_REVISION = "google/simpleqa-verified", "0dc97e0d28d8233463e005cdc4475cc2a13ba2dc"          # MIT, 1 csv, split `eval` (config simpleqa_verified)
 HLE_REPO, HLE_REVISION = "cais/hle", "5a81a4c7271a2a2a312b9a690f0c2fde837e4c29"                       # gated: not fetched yet (the revision is the one the hub lists)
 
 # files of a dataset repo that a task reads next to the rows (`titan-eval prefetch` downloads them too: titan_eval/evals/prefetch.py EXTRA_FILES hook)
@@ -107,6 +109,14 @@ def _doc(task_name, query, question, gold, **meta) -> Doc:
 def simpleqa_chat_prompt(line, task_name: str = None):
     """One user message = the question, nothing else (simple-evals `sampler([{"role": "user", "content": problem}])`)."""
     return _doc(task_name, line["problem"], line["problem"], line["answer"])
+
+
+# ------------------------------------------------------------------------------------------------------- SimpleQA Verified
+def simpleqa_verified_chat_prompt(line, task_name: str = None):
+    """The same bare question as SimpleQA (the Kaggle starter notebook of SimpleQA Verified: `generate(prompt=question)`). The gold of the numeric answers carries its acceptable
+    range ("120k (acceptable range: anything between 118k and 122k)"): the official grader prompt reads it, so it is passed as it is."""
+    return _doc(task_name, line["problem"], line["problem"], line["answer"], original_index=int(line["original_index"]), topic=line["topic"], answer_type=line["answer_type"],
+                multi_step=bool(line["multi_step"]), requires_reasoning=bool(line["requires_reasoning"]))
 
 
 # ------------------------------------------------------------------------------------------------------- AA-Omniscience
@@ -221,6 +231,7 @@ def _cfg(name, prompt_fn, repo, revision, split, subset="default"):
 
 TASKS_TABLE = [
     _cfg("simpleqa_chat", simpleqa_chat_prompt, SIMPLEQA_REPO, SIMPLEQA_REVISION, "test"),
+    _cfg("simpleqa_verified_chat", simpleqa_verified_chat_prompt, SQV_REPO, SQV_REVISION, "eval", subset="simpleqa_verified"),
     _cfg("aa_omniscience_chat", aa_omniscience_chat_prompt, OMNISCIENCE_REPO, OMNISCIENCE_REVISION, "train"),
     _cfg("aa_lcr_chat", aa_lcr_chat_prompt, LCR_REPO, LCR_REVISION, "test"),
     _cfg("hle_chat", hle_chat_prompt, HLE_REPO, HLE_REVISION, "test"),

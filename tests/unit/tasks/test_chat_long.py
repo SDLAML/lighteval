@@ -8,6 +8,7 @@ Plain functions: run with pytest, or `python tests/unit/tasks/test_chat_long.py`
 
 import math
 import os
+import sys
 import unittest
 from unittest import mock
 
@@ -19,6 +20,36 @@ from lighteval.tasks.tasks import chat_long
 
 
 TOKENIZER = "/e/project1/trustllm-eu/wang55/torchtitan_assets/Qwen3-1.7B"
+
+
+class _FakeEmbedder:
+    """A tiny stand-in for the Qwen3-Embedding model: letter counts, unit length (identical texts -> cosine 1)."""
+
+    def encode(self, texts):
+        import numpy as _np
+
+        vecs = []
+        for t in texts:
+            v = _np.zeros(26, dtype=_np.float32)
+            for ch in t.lower():
+                if "a" <= ch <= "z":
+                    v[ord(ch) - 97] += 1
+            n = _np.linalg.norm(v)
+            vecs.append(v / n if n else v)
+        return _np.stack(vecs)
+
+
+def _fake_rouge_module(rouge_l=1.0):
+    import types
+
+    mod = types.ModuleType("rouge")
+
+    class Rouge:
+        def get_scores(self, hyps, refs, avg=False):
+            return [{"rouge-l": {"f": rouge_l}} for _ in refs]
+
+    mod.Rouge = Rouge
+    return mod
 
 
 def line(context="word " * 50, difficulty="hard", length="long", answer="C", question="What is the answer?"):
@@ -225,10 +256,31 @@ class LongBenchProMetrics(unittest.TestCase):
         self.assertLess(chat_long.lbp_ndcg(["a", "b", "c"], "c\nx\nb"), 1.0)
         self.assertEqual(chat_long.lbp_ndcg(["a", "b"], "x\ny"), 0.0)
 
-    def test_summary_needs_the_embedding_model(self):
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(chat_long, "_EMBEDDER", None):
-            with self.assertRaises(RuntimeError):
+    def test_summary_without_the_embedding_folder_fails_loudly(self):
+        fake_rouge = _fake_rouge_module()
+        with mock.patch.dict(os.environ, {chat_long.ENV_EMBEDDING: "/nonexistent/qwen3-embedding"}), \
+                mock.patch.dict(sys.modules, {"rouge": fake_rouge}), mock.patch.object(chat_long, "_EMBEDDER", None):
+            with self.assertRaises(RuntimeError) as cm:
                 chat_long.lbp_summary(["the answer"], "an answer", False)
+            self.assertIn(chat_long.ENV_EMBEDDING, str(cm.exception))
+
+    def test_missing_rouge_names_the_install_script(self):
+        with mock.patch.dict(sys.modules, {"rouge": None}), mock.patch.object(chat_long, "_EMBEDDER", _FakeEmbedder()):
+            with self.assertRaises(RuntimeError) as cm:
+                chat_long.lbp_summary(["the answer"], "an answer", False)
+        self.assertIn("install_requirements.sh", str(cm.exception))
+        self.assertIn("rouge==1.0.1", str(cm.exception))
+
+    def test_summary_is_half_cosine_plus_half_rouge(self):
+        # identical texts: cosine 1 and ROUGE-L 1 -> 1.0; unrelated vectors: cosine 0 -> only the ROUGE half remains
+        with mock.patch.dict(sys.modules, {"rouge": _fake_rouge_module(rouge_l=0.4)}), mock.patch.object(chat_long, "_EMBEDDER", _FakeEmbedder()):
+            self.assertAlmostEqual(chat_long.lbp_summary(["same text"], "same text", False), 0.5 * 1.0 + 0.5 * 0.4)
+            self.assertAlmostEqual(chat_long.lbp_summary(["aaa"], "zzz", False), 0.5 * 0.0 + 0.5 * 0.4)
+            self.assertEqual(chat_long.lbp_summary([], "x", False), 0.0)
+
+    def test_summary_metric_value_routes_t4_items(self):
+        with mock.patch.dict(sys.modules, {"rouge": _fake_rouge_module(rouge_l=1.0)}), mock.patch.object(chat_long, "_EMBEDDER", _FakeEmbedder()):
+            self.assertAlmostEqual(chat_long.lbp_metric_value("T4.1 Global-Coverage Constrained Summary", ["same"], "same", False), 1.0)
 
     def test_metric_value_empty_is_zero(self):
         self.assertEqual(chat_long.lbp_metric_value("T3.2 Single-Hop Fact QA", ["x"], "", False), 0.0)
@@ -262,3 +314,28 @@ class LongBenchProMetrics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QwenEmbedderPooling(unittest.TestCase):
+    """A tiny random Qwen3 (the real architecture, one layer, 32 wide) with the Qwen3-1.7B tokenizer: last-token pooling with left padding
+    must give the same vector for a text whether it is encoded alone or in a padded batch, and unit length."""
+
+    def test_padding_invariance_and_unit_length(self):
+        if not os.path.isdir(TOKENIZER):
+            self.skipTest("Qwen3-1.7B tokenizer not on disk")
+        try:
+            import torch
+            from transformers import AutoTokenizer, Qwen3Config, Qwen3Model
+        except ImportError:
+            self.skipTest("torch / transformers Qwen3 not available")
+        torch.manual_seed(0)
+        cfg = Qwen3Config(hidden_size=32, num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=1, intermediate_size=64,
+                          vocab_size=151936, head_dim=16)
+        model = Qwen3Model(cfg)
+        tok = AutoTokenizer.from_pretrained(TOKENIZER, padding_side="left")
+        emb = chat_long.QwenLastTokenEmbedder(tok, model, device="cpu")
+        texts = ["a short answer", "a considerably longer answer with many more words in it to force padding"]
+        batch = emb.encode(texts)
+        single = np.vstack([emb.encode([t]) for t in texts])
+        np.testing.assert_allclose(batch, single, atol=1e-4)
+        np.testing.assert_allclose(np.linalg.norm(batch, axis=1), np.ones(2), atol=1e-5)

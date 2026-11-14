@@ -193,7 +193,7 @@ TASKS_TABLE = [
 # question_nonthinking); the official middle truncation of the whole prompt (model_manager._truncate_prompt: ids[:L/2] + ids[-L/2:]) with the
 # prompt budget of this module. Metric per secondary task (official `task_metric_config`): NDCG (T1.x, reimplemented: pytrec_eval is not
 # installed), pairwise accuracy (T2.x, T6.3), accuracy (T3.x, T11.x), F1 (T5.x, T6.2, T7.x, T9.x), SubEM (T6.1, T8.x, T10.x), and Summary (T4.x) =
-# 0.5 x max cosine similarity to the answer points (Qwen3-Embedding-8B, sentence_transformers) + 0.5 x max ROUGE-L (the `rouge` package, jieba
+# 0.5 x max cosine similarity to the answer points (Qwen3-Embedding-8B, plain transformers, last-token pooling) + 0.5 x max ROUGE-L (the `rouge` package, jieba
 # for Chinese). Summary needs the embedding model: TITAN_EVAL_EMBEDDING_MODEL (a folder; not on disk, login-node download) and the `rouge`
 # package (not installed): a run with a T4 item fails loudly until both are there.
 LBP_REPO = "caskcsg/LongBench-Pro"
@@ -325,31 +325,81 @@ def lbp_ndcg(answers, prediction):
     return dcg / idcg if idcg > 0 else 0.0
 
 
+DEFAULT_EMBEDDING = "/e/data1/trustllmd/wang55/hf_models/Qwen3-Embedding-8B"   # the pinned download (login node); titan_eval chat.EMBEDDING_MODEL
+EMBED_BATCH = 8
+ROUGE_HINT = ("the `rouge` package (pinned rouge==1.0.1) is not installed: install it through llm_env/install_requirements.sh "
+              "(owner step; `pip install --no-deps rouge==1.0.1`)")
+
+
+class QwenLastTokenEmbedder:
+    """Qwen3-Embedding as its model card shows it (transformers usage): left padding, last-token pooling, L2 normalisation. Documents get NO
+    instruction: the official LongBench-Pro code calls `encode(answers)` without a prompt, and the model's sentence-transformers config has
+    `default_prompt_name: null` (the query instruction is for queries only). Runs on CUDA when there is one (after the vLLM engine has been
+    cleaned up, lighteval's pipeline does that before the metrics), else on CPU (slow). Weights in the checkpoint's dtype (bf16)."""
+
+    def __init__(self, tok, model, device: str | None = None):
+        import torch
+
+        self.torch = torch
+        self.tok = tok
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = model.to(self.device).eval()
+
+    @classmethod
+    def from_path(cls, path: str):
+        from transformers import AutoModel, AutoTokenizer
+
+        tok = AutoTokenizer.from_pretrained(path, padding_side="left")
+        model = AutoModel.from_pretrained(path, dtype="auto")
+        return cls(tok, model)
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        """(len(texts), dim) float32, unit length. Batches of EMBED_BATCH, truncation at the tokenizer's model_max_length (as sentence-transformers)."""
+        out = []
+        with self.torch.no_grad():
+            for i in range(0, len(texts), EMBED_BATCH):
+                batch = self.tok(texts[i:i + EMBED_BATCH], padding=True, truncation=True, max_length=self.tok.model_max_length,
+                                 return_tensors="pt").to(self.device)
+                hidden = self.model(**batch).last_hidden_state
+                last = hidden[:, -1]                     # left padding: the last position is each text's last token
+                out.append(self.torch.nn.functional.normalize(last.float(), p=2, dim=1).cpu())
+        return self.torch.cat(out).numpy() if out else np.zeros((0, 0), dtype=np.float32)
+
+
 _EMBEDDER = None
 
 
-def _embedder():
+def get_embedder():
+    """The process-wide embedder (loaded once, on first use). Path: TITAN_EVAL_EMBEDDING_MODEL (exported by titan_eval from chat.EMBEDDING_MODEL)."""
     global _EMBEDDER
     if _EMBEDDER is None:
-        path = os.environ.get(ENV_EMBEDDING)
-        if not path:
-            raise RuntimeError(f"longbench_pro_chat Summary (T4) needs the embedding model: set {ENV_EMBEDDING} to the Qwen3-Embedding-8B folder "
-                               "(login-node download; not on disk)")
-        from sentence_transformers import SentenceTransformer
-
-        _EMBEDDER = SentenceTransformer(path, tokenizer_kwargs={"padding_side": "left"})
+        path = os.environ.get(ENV_EMBEDDING) or DEFAULT_EMBEDDING
+        if not os.path.isdir(path):
+            raise RuntimeError(f"longbench_pro_chat Summary (T4) needs the Qwen3-Embedding-8B folder; not found at {path} "
+                               f"(set {ENV_EMBEDDING} or download it on the login node)")
+        _EMBEDDER = QwenLastTokenEmbedder.from_path(path)
     return _EMBEDDER
 
 
+def _rouge_class():
+    try:
+        from rouge import Rouge
+    except ImportError as e:
+        raise RuntimeError(f"longbench_pro_chat Summary (T4): {ROUGE_HINT}") from e
+    return Rouge
+
+
 def lbp_summary(answers, prediction, is_zh: bool, alpha: float = 0.5, beta: float = 0.5):
+    """Official Summary (LongBench-Pro modules/utils.py): alpha x max cosine(answer points, prediction) + beta x max ROUGE-L F (jieba for Chinese)."""
+    Rouge = _rouge_class()                       # before any model is loaded: a missing package fails at once
     answers = _norm_answers(answers)
     prediction = _fix_space(prediction.lower().strip())
     if not answers or not prediction:
         return 0.0
-    model = _embedder()
-    a_emb = model.encode(answers)
-    p_emb = model.encode([prediction])
-    semantic = float(model.similarity(a_emb, p_emb).max().cpu().numpy())
+    emb = get_embedder()
+    a_vec = emb.encode(answers)
+    p_vec = emb.encode([prediction])
+    semantic = float(np.max(a_vec @ p_vec.T))    # unit vectors: the dot product is the cosine
     if is_zh:
         import jieba
 
@@ -357,10 +407,6 @@ def lbp_summary(answers, prediction, is_zh: bool, alpha: float = 0.5, beta: floa
         pred_t = " ".join(jieba.cut(prediction, cut_all=False))
     else:
         answers_t, pred_t = answers, prediction
-    try:
-        from rouge import Rouge
-    except ImportError as e:
-        raise RuntimeError("longbench_pro_chat Summary (T4) needs the `rouge` package (not installed; owner installs)") from e
     try:
         scores = Rouge().get_scores([pred_t] * len(answers_t), answers_t, avg=False)
         rouge_l = max(s["rouge-l"]["f"] for s in scores)
