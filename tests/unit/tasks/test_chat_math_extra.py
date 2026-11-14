@@ -70,3 +70,15 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok", name)
+
+
+def test_percent_signs_are_dropped_as_the_official_math_normaliser_does():
+    # generation review 11-14: gsm8k_chat id 772 answered "\boxed{50\%}" for gold 50 and scored 0 (math-verify reads 50\% as 0.5)
+    line = {"question": "What percent?", "answer": "half\n#### 50"}
+    assert _score("gsm8k_chat", line, "so the answer is \\boxed{50\\%}")["avg@n"] == 1.0
+    assert _score("gsm8k_chat", line, "\\boxed{50%}")["avg@n"] == 1.0
+    assert _score("gsm8k_chat", line, "\\boxed{51\\%}")["avg@n"] == 0.0
+    assert _score("gsm8k_chat", line, "\\boxed{0.5}")["avg@n"] == 0.0, "50% is not read as 0.5"
+    line = {"question": "q", "final_answer": ["$50\\%$"]}
+    assert _score("olympiadbench_chat", line, "\\boxed{50\\%}")["avg@n"] == 1.0, "a percent gold matches its own form"
+    assert _score("olympiadbench_chat", line, "\\boxed{50}")["avg@n"] == 1.0

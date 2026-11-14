@@ -34,6 +34,7 @@ The text scored is `model_response.final_text`, i.e. what follows the LAST `</th
 `ModelResponse(text=[sample])` objects (never `model_response[i]`, which drops `text_post_processed` and would score the reasoning).
 """
 
+import copy
 import logging
 import re
 from string import ascii_uppercase
@@ -113,6 +114,11 @@ def anchored_letter(pred: str, n_options: int) -> str | None:
     return last
 
 
+def _drop_percent(text: str) -> str:
+    """Remove percent signs ("\\%", "%"), as hendrycks/math `strip_string` does before comparing answers."""
+    return text.replace("\\%", "").replace("%", "")
+
+
 def _math_scores(extractor: MultilingualExtractiveMatchMetric) -> Callable[[Doc, str], dict[str, float]]:
     """One extraction per sample: lenient = the permissive score; strict = the same score when the text holds a \\boxed (the box has priority 0 in
     the extractor, so it is what gets compared), else 0 (exactly BoxedOnlyExtractiveMatchMetric, without its `model_response[i]` slicing)."""
@@ -120,6 +126,12 @@ def _math_scores(extractor: MultilingualExtractiveMatchMetric) -> Callable[[Doc,
     def score(doc: Doc, pred: str) -> dict[str, float]:
         if not pred or not pred.strip():
             return {"avg@n": 0.0, "avg@n_lenient": 0.0}
+        # Percent signs are dropped on both sides, as the official MATH normaliser does (hendrycks/math `strip_string`, also Qwen2.5-Math
+        # evaluation): math-verify reads "50\%" as 0.5, so "\boxed{50\%}" scored 0 against gold "50" (GSM8K) and even against gold "$50\%$".
+        pred = _drop_percent(pred)
+        if any("%" in c for c in doc.choices):
+            doc = copy.copy(doc)
+            doc.choices = [_drop_percent(c) for c in doc.choices]
         lenient = float(extractor.compute(doc, ModelResponse(text=[pred])))
         return {"avg@n": lenient if "\\boxed" in pred else 0.0, "avg@n_lenient": lenient}
 
