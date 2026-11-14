@@ -25,7 +25,7 @@ name:
 Safety chat evals (titan_eval, post-trained models): ToxiGen (classification form), BBQ, WMDP
 
 dataset:
-skg/toxigen-data (annotated), lighteval/bbq_helm, cais/wmdp (the same pinned revisions as toxigen_base:cf, bbq_base:mcf_em, wmdp_base:mcf_em)
+skg/toxigen-data (annotated), lighteval/bbq_helm, cais/wmdp (the same pinned revisions as toxigen_base:cf, bbq_base:mcf_em, wmdp_base:mcf)
 
 abstract:
 The three safety benchmarks of the base track, asked the way a post-trained model is used: 0-shot, the prompt is the user message
