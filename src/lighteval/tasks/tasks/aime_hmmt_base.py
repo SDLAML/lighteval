@@ -96,13 +96,22 @@ class MathPassAt(SamplingMetric, SampleLevelComputation):
         return self.n
 
 
-PASS_AT = SampleLevelMetricGrouping(
-    metric_name=[f"pass@{k}" for k in KS],
-    sample_level_fn=MathPassAt(),
-    category=SamplingMethod.GENERATIVE,
-    corpus_level_fn={f"pass@{k}": np.mean for k in KS},
-    higher_is_better={f"pass@{k}": True for k in KS},
-)
+def pass_at_metric(n: int = N_SAMPLES, ks: tuple[int, ...] = KS) -> SampleLevelMetricGrouping:
+    return SampleLevelMetricGrouping(
+        metric_name=[f"pass@{k}" for k in ks],
+        sample_level_fn=MathPassAt(n, ks),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn={f"pass@{k}": np.mean for k in ks},
+        higher_is_better={f"pass@{k}": True for k in ks},
+    )
+
+
+PASS_AT = pass_at_metric()
+
+# AIME 2026 = THE hard-math probe of the base suite (owner 11-16: one AIME, done properly, no 4k cap that turns it into noise): 32 samples per
+# problem, pass@1 / pass@8 / pass@32, and the chat budget 32,768 new tokens (the same cap as the chat evals, so the cap rarely decides; the
+# old 4,096 cut ~20 % of the samples). AIME 24 / 25 and HMMT 2026 keep the old protocol (registered, not in the base suite).
+AIME26_N, AIME26_KS, AIME26_MAX_NEW_TOKENS, AIME26_VERSION = 32, (1, 8, 32), 32768, 2
 
 
 def aime_gold(answer) -> str:
@@ -125,7 +134,7 @@ def math_base_prompt(line, task_name: str = None, *, gold_of, specific_of):
     )
 
 
-def _config(name, repo, revision, gold_of, specific_of):
+def _config(name, repo, revision, gold_of, specific_of, *, metric=None, max_new_tokens=MAX_NEW_TOKENS, version=TASK_VERSION):
     return LightevalTaskConfig(
         name=name,
         prompt_function=partial(math_base_prompt, gold_of=gold_of, specific_of=specific_of),
@@ -136,10 +145,10 @@ def _config(name, repo, revision, gold_of, specific_of):
         evaluation_splits=["train"],
         few_shots_split=None,
         few_shots_select=None,
-        generation_size=MAX_NEW_TOKENS,
-        metrics=[PASS_AT],
+        generation_size=max_new_tokens,
+        metrics=[metric or PASS_AT],
         stop_sequence=STOP_SEQUENCES,
-        version=TASK_VERSION,  # 1: stop strings only at the start of a line (0: "Problem:" anywhere cut "**Understanding the Problem:**")
+        version=version,  # 1: stop strings only at the start of a line (0: "Problem:" anywhere cut "**Understanding the Problem:**")
     )
 
 
@@ -158,6 +167,7 @@ def _matharena_specific(line):
 TASKS_TABLE = [
     _config("aime24_base", "HuggingFaceH4/aime_2024", "2fe88a2f1091d5048c0f36abc874fb997b3dd99a", aime_gold, _aime24_specific),
     _config("aime25_base", "yentinglin/aime_2025", "6f71d77b0b89b9dabe07ab466c51df33f514df7f", aime_gold, _aime25_specific),
-    _config("aime26_base", "MathArena/aime_2026", "d61f486805306e6e6b5913504c07763a99e1b112", aime_gold, _matharena_specific),
+    _config("aime26_base", "MathArena/aime_2026", "d61f486805306e6e6b5913504c07763a99e1b112", aime_gold, _matharena_specific,
+            metric=pass_at_metric(AIME26_N, AIME26_KS), max_new_tokens=AIME26_MAX_NEW_TOKENS, version=AIME26_VERSION),
     _config("hmmt_feb_2026_base", "MathArena/hmmt_feb_2026", "589a53fe152febc0f4f99f3e561007bf8da8e664", hmmt_gold, _matharena_specific),
 ]

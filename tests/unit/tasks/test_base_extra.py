@@ -383,7 +383,7 @@ def test_math_stop_strings_cut_a_new_problem_not_the_models_own_heading():
         "Solution: Problem: " + answer,  # mid-line
     )
     for config in aime_hmmt_base.TASKS_TABLE:
-        assert config.version == 1 and list(config.stop_sequence) == ["\nProblem:", "\nSolve the following math problem"], config.name
+        assert config.version == (2 if config.name == "aime26_base" else 1) and list(config.stop_sequence) == ["\nProblem:", "\nSolve the following math problem"], config.name
         stops = list(config.stop_sequence)
         assert _cut_at_stop(heading, version_0) != heading  # what the old stops did
         assert _cut_at_stop(heading, stops) == heading, config.name
@@ -437,7 +437,11 @@ def test_registered_names_and_expansions():
         names = set(registry.load_tasks())
         assert not any("_base" in n for n in names), (spec, names)
     sampled = Registry(tasks="aime26_base|0").load_tasks()["aime26_base|0"]
-    assert max(sampled.num_samples) == 10 and sampled.generation_size == 4096
+    # owner 11-16: AIME 2026 = the base suite's hard-math probe, done properly: 32 samples, pass@1/8/32, the chat budget 32,768 (no 4k cap)
+    assert max(sampled.num_samples) == 32 and sampled.generation_size == 32768
+    assert {c.name: c for c in aime_hmmt_base.TASKS_TABLE}["aime26_base"].metrics[0].metric_name == ["pass@1", "pass@8", "pass@32"]
+    other = Registry(tasks="aime24_base|0").load_tasks()["aime24_base|0"]
+    assert max(other.num_samples) == 10 and other.generation_size == 4096, "AIME 24 / 25 / HMMT keep the old protocol (out of the base suite)"
 
 
 if __name__ == "__main__":
