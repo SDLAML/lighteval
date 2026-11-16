@@ -466,29 +466,74 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(text.startswith("<system>a system prompt</system><user>You are given a story") and text.endswith("<assistant>"))
 
     def test_chat_item_that_does_not_fit_the_window_is_marked_and_scores_zero(self):
-        """Owner 11-16 (`over_context: zero`, the OLMES rule): floor = HELMET's own answer size of the dataset (20 for kilt_triviaqa); a plain-text dataset sends exactly the stored base prompt
-        (n_tokens), a chat-template dataset the user template + a chat template of at most 16 tokens."""
-        class Tok:
-            def encode(self, text, add_special_tokens=False):
-                return text.split(" ")
+        """Owner 11-16 (`over_context: zero`, the OLMES rule, margin 0): floor = HELMET's own answer size of the dataset (20 for kilt_triviaqa); the prompt is rendered as the vLLM model sends it and counted
+        exactly: a plain-text dataset sends the base prompt as it is, a chat-template dataset the user template through the model's chat template (here + 3 tokens: <user> </user> <assistant>)."""
+        import json
 
-        line = dict(self.line(), n_tokens=10000)
+        from lighteval.tasks import exact_prompt
+
+        class Tok:
+            chat_template = "x"
+
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kw):
+                think = "<think> </think> " if kw.get("enable_thinking") is False else ""
+                return "".join(f"<{m['role']}> {m['content']} </{m['role']}> " for m in messages) + "<assistant> " + think
+
+            def __call__(self, texts, add_special_tokens=False):
+                return {"input_ids": [t.split() for t in texts]}
+
+        line = self.line()
         for name, template in (("kilt_triviaqa", False), ("infbench_qa_eng", True)):
             spec = H.SPECS[name]
             fn = H.make_prompt_function(spec, True)
             l = dict(line, context="c " * 50, question="q?")
-            n_est = 10000 if not template else 10000 - len(H.build_prompt(spec, l, False)[len(H.build_prompt(spec, l, True)):].split(" ")) + 16
-            for ctx, over in ((n_est + spec.gen + 64, False), (n_est + spec.gen + 64 - 1, True)):
-                with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(ctx)}), mock.patch("lighteval.tasks.tasks.chat_long._tokenizer", return_value=Tok()):
-                    d = fn(l, f"helmet_8192_chat:{name}")
-                self.assertEqual((d.specific["over_context"], d.specific["n_tokens"]), (over, n_est), (name, ctx))
-                self.assertEqual((bool(d.specific.get("no_generation")), d.query == "Reply with the word OK."), (over, over))
-                self.assertEqual(bool(d.specific.get("plain_text")), not template, "the flag stays on a plain dataset's over docs: the split keeps its newline stop")
-                if over:
-                    m = H.make_metric(spec, True).sample_level_fn.compute(d, ModelResponse(text=["Paris"], text_post_processed=["Paris"]))
-                    self.assertEqual((m["helmet_score"], m["over_context"]), (0.0, 1.0))
+            n_exact = len(H.build_prompt(spec, l, template).split()) + (3 if template else 0)
+            for render, extra in (({}, 0), ({"chat_template_kwargs": {"enable_thinking": False}}, 2 if template else 0)):        # the thinking switch only matters where the chat template is used
+                for ctx, over in ((n_exact + extra + spec.gen, False), (n_exact + extra + spec.gen - 1, True)):
+                    exact_prompt.reset()
+                    env = {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(ctx), "TITAN_EVAL_RENDER": json.dumps(render) if render else ""}
+                    with mock.patch.dict(os.environ, env), mock.patch.object(exact_prompt, "load_tokenizer", return_value=Tok()):
+                        d = fn(l, f"helmet_8192_chat:{name}")
+                    self.assertEqual((d.specific["over_context"], d.specific["n_tokens"], d.specific["exact_prompt_tokens"]), (over, n_exact + extra, n_exact + extra), (name, ctx))
+                    self.assertEqual((bool(d.specific.get("no_generation")), d.query == "Reply with the word OK."), (over, over))
+                    self.assertEqual(bool(d.specific.get("plain_text")), not template, "the flag stays on a plain dataset's over docs: the split keeps its newline stop")
+                    self.assertEqual(d.specific["answer_budget"], 0 if over else spec.gen)
+                    if over:
+                        m = H.make_metric(spec, True).sample_level_fn.compute(d, ModelResponse(text=["Paris"], text_post_processed=["Paris"]))
+                        self.assertEqual((m["helmet_score"], m["over_context"]), (0.0, 1.0))
+        exact_prompt.reset()
         base = H.make_prompt_function(H.SPECS["kilt_triviaqa"], False)(line, "helmet_8192:kilt_triviaqa")      # the base variant never marks
         self.assertNotIn("over_context", base.specific)
+        with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "", "TITAN_EVAL_MAX_MODEL_LEN": "5"}):
+            self.assertNotIn("over_context", H.make_prompt_function(H.SPECS["kilt_triviaqa"], True)(line, "helmet_8192_chat:kilt_triviaqa").specific, "no tokenizer: nothing is marked")
+
+    def test_chat_rows_are_counted_in_one_batch_by_the_prefetch_hook(self):
+        import json
+
+        from lighteval.tasks import exact_prompt
+
+        calls = []
+
+        class Tok:
+            chat_template = "x"
+
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kw):
+                return "".join(f"<{m['role']}> {m['content']} " for m in messages) + "<assistant> "
+
+            def __call__(self, texts, add_special_tokens=False):
+                calls.append(len(texts))
+                return {"input_ids": [t.split() for t in texts]}
+
+        fn = H.make_prompt_function(H.SPECS["infbench_qa_eng"], True)
+        rows = [dict(self.line(), context="c " * k, question="q?") for k in (3, 4, 5)]
+        exact_prompt.reset()
+        with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": "100000", "TITAN_EVAL_RENDER": ""}), mock.patch.object(exact_prompt, "load_tokenizer", return_value=Tok()):
+            fn.prefetch(rows, "helmet_8192_chat:infbench_qa_eng")
+            self.assertEqual(calls, [3])
+            docs = [fn(r, "helmet_8192_chat:infbench_qa_eng") for r in rows]
+        self.assertEqual(calls, [3], "the per-row calls hit the cache")
+        self.assertEqual([d.specific["n_tokens"] for d in docs], [len(H.build_prompt(H.SPECS["infbench_qa_eng"], r, True).split()) + 2 for r in rows])
+        exact_prompt.reset()
 
     def test_unclosed_think_is_an_empty_answer(self):
         spec = H.SPECS["kilt_triviaqa"]

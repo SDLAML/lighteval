@@ -1742,35 +1742,42 @@ _CHAT_NAME = re.compile(r"ruler_(\d+)_chat:([a-z0-9_]+)")
 def ruler_chat_prompt(line: dict, task_name: str = None) -> Doc:
     """Chat variant: the user message is the sample's `input` as prepared (the RULER prompt, ending in its question); the answer prefix is left out of the prompt and, with
     no `gen_prefix` in `specific`, the scorer (RulerStringMatch) does not prepend it to the reply either.
-    Owner 11-16 (`over_context: zero`, the OLMES rule): with the run's window and tokenizer known, the chat prompt size is ESTIMATED from the stored base token count (`length` = base prompt
-    + the subtask's answer size; minus the answer prefix, plus a chat template of at most CHAT_TEMPLATE_TOKENS), and an item whose subtask answer size does not fit the window
-    (context - prompt - 64 < answer size) is marked `over_context` + `no_generation` (no request, scored 0). The floor of RULER is the subtask's own size, so an item is either given it whole or not run."""
-    from lighteval.tasks import answer_fit as af
+    Owner 11-16 (`over_context: zero`, the OLMES rule, margin 0): with the run's window and tokenizer known, the chat prompt is rendered exactly as the vLLM model sends it (exact_prompt.py: the model's
+    chat template, thinking switch, system prompt) and counted with the model's tokenizer; an item whose subtask answer size does not fit the window (context - prompt tokens < answer size) is marked
+    `over_context` + `no_generation` (no request, scored 0). The floor of RULER is the subtask's own size, so an item is either given it whole or not run."""
+    from lighteval.tasks import answer_fit as af, exact_prompt
 
     outputs = line["outputs"]
-    spec: dict = {}
-    query = line["input"]
+    doc = Doc(query=line["input"], choices=outputs, gold_index=list(range(len(outputs))), task_name=task_name, specific=None)
     m = _CHAT_NAME.search(task_name or "")
-    tok_path = os.environ.get("TITAN_EVAL_TOKENIZER")
-    if m and tok_path and af.run_context():
-        from lighteval.tasks.tasks.chat_long import _tokenizer
-
+    ex = exact_prompt.get() if m and af.run_context() else None
+    if ex is not None:
         length, subset = int(m.group(1)), m.group(2)
-        gen = _gen_size(subset, length)
-        prefix = line.get("gen_prefix", "")
-        prefix_tokens = len(_tokenizer(tok_path).encode("\n" + prefix, add_special_tokens=False)) if prefix else 0
-        n_est = int(line["length"]) - gen - prefix_tokens + af.CHAT_TEMPLATE_TOKENS
-        fit = af.fit_answer(n_est, _chat_gen_size(subset, length), gen, margin=RULER_CHAT_MARGIN)       # budget = the chat size, floor = the subtask's own size
-        spec = af.mark({"n_tokens": n_est}, fit)
+        n_prompt = ex.count(doc)
+        fit = af.fit_answer(n_prompt, _chat_gen_size(subset, length), _gen_size(subset, length))       # budget = the chat size, floor = the subtask's own size
+        doc.specific = exact_prompt.stamp(af.mark({}, fit), n_prompt)
         if fit["over_context"]:
-            query = af.SKIP_USER
-    return Doc(
-        query=query,
-        choices=outputs,
-        gold_index=list(range(len(outputs))),
-        task_name=task_name,
-        specific=spec or None,
-    )
+            doc.query = af.SKIP_USER
+    return doc
+
+
+def _ruler_chat_active(task_name: str) -> bool:
+    from lighteval.tasks import answer_fit as af
+
+    return bool(_CHAT_NAME.search(task_name or "")) and bool(af.run_context())
+
+
+def _ruler_chat_docs(line: dict, task_name: str) -> list[Doc]:
+    return [Doc(query=line["input"], choices=line["outputs"], gold_index=0, task_name=task_name, specific=None)]
+
+
+def _install_prefetch() -> None:
+    from lighteval.tasks import exact_prompt
+
+    ruler_chat_prompt.prefetch = exact_prompt.prefetcher(_ruler_chat_docs, _ruler_chat_active)     # the rows of a split are counted in batches before the per-row calls (lighteval_task._get_docs_from_split)
+
+
+_install_prefetch()
 
 
 class _RulerChat(SampleLevelComputation):
@@ -1820,11 +1827,6 @@ def _chat_gen_size(subset: str, length: int) -> int:
     if subset.startswith("niah"):
         return max(own, 128)
     return own
-
-
-# The OLMES-style rule (owner-approved 11-16, answer_fit.MARGIN = 64 as OLMES openai_mrcr.py:41-46). Review 11-16 R2: the prompt-size estimate here is an exact upper bound (3 tokens of
-# slack on 65 / 65 items), so margin 0 would zero no item of a 131,072-token model at 128k, while margin 64 zeroes 59 of 1,300 (CWE 43). Kept at the approved 64 until the owner decides.
-RULER_CHAT_MARGIN = 64
 
 
 def get_ruler_tasks(

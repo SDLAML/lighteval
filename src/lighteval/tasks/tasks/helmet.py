@@ -81,7 +81,7 @@ from typing import Callable
 import numpy as np
 
 from lighteval.metrics.chat_metrics import ChatSamples
-from lighteval.tasks import answer_fit
+from lighteval.tasks import answer_fit, exact_prompt
 from lighteval.metrics.utils.metric_utils import SampleLevelMetricGrouping
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc, SamplingMethod
@@ -444,37 +444,33 @@ def scoring_fields(line: dict) -> dict:
 def make_prompt_function(spec: Spec, chat: bool) -> Callable:
     plain = chat and not official_chat_template(spec)       # chat variant, dataset with `use_chat_template: false`: the plain base prompt, no template (`specific["plain_text"]`)
 
-    def prompt(line, task_name: str = None):
-        fields = scoring_fields(line)
-        query = build_prompt(spec, line, chat and not plain)
-        sp = {"fields": fields, "answers": list(line["answers"]), "id": line.get("id")}
+    def doc_of(line, task_name: str | None, sp: dict) -> Doc:
         if plain:
             sp["plain_text"] = True                           # the prompt manager renders the query as it is; the vLLM model keeps the task's newline stop
-        tok_path = os.environ.get("TITAN_EVAL_TOKENIZER")
-        if chat and tok_path and answer_fit.run_context() and "n_tokens" in line:
-            # owner 11-16 (`over_context: zero`, the OLMES rule): the prompt size comes from the stored base token count (the base prompt incl. the answer prefix, counted with the
-            # run's tokenizer when the copy was prepared): a plain-text dataset sends exactly that prompt; a chat-template dataset sends the user template only (minus the prefix) plus a chat
-            # template of at most CHAT_TEMPLATE_TOKENS. An item whose dataset answer size (HELMET's own generation_max_length, also the floor) does not fit the window
-            # (context - prompt - 64) is marked `over_context` + `no_generation`: no request, scored 0
-            n_est = int(line["n_tokens"])
-            if not plain:
-                from lighteval.tasks.tasks.chat_long import _tokenizer
-
-                tail = build_prompt(spec, line, chat=False)[len(query):]
-                n_est = n_est - len(_tokenizer(tok_path).encode(tail, add_special_tokens=False)) + answer_fit.CHAT_TEMPLATE_TOKENS
-            fit = answer_fit.fit_answer(n_est, spec.gen, spec.gen)
-            answer_fit.mark(sp, fit)
-            sp["n_tokens"] = n_est
-            if fit["over_context"]:
-                query = answer_fit.SKIP_USER
         return Doc(
             task_name=task_name,
-            query=query,
+            query=build_prompt(spec, line, chat and not plain),
             choices=[""],                       # ChatSamples needs one gold; the scorer reads `specific`
             gold_index=0,
             specific=sp,
         )
 
+    def prompt(line, task_name: str = None):
+        doc = doc_of(line, task_name, {"fields": scoring_fields(line), "answers": list(line["answers"]), "id": line.get("id")})
+        ex = exact_prompt.get() if chat and answer_fit.run_context() else None
+        if ex is not None:
+            # owner 11-16 (`over_context: zero`, the OLMES rule, margin 0; HELMET's own buffer is 0, helmet.py:386): the prompt is rendered as the vLLM model sends it (a plain-text dataset: the base
+            # prompt as it is; a chat-template dataset: the user template through the model's chat template, thinking switch and system prompt) and counted with the model's tokenizer. An item whose
+            # dataset answer size (HELMET's own generation_max_length, also the floor) does not fit the window (context - prompt tokens) is marked `over_context` + `no_generation`: no request, scored 0
+            n_prompt = ex.count(doc)
+            fit = answer_fit.fit_answer(n_prompt, spec.gen, spec.gen)
+            answer_fit.mark(doc.specific, fit)
+            exact_prompt.stamp(doc.specific, n_prompt)
+            if fit["over_context"]:
+                doc.query = answer_fit.SKIP_USER
+        return doc
+
+    prompt.prefetch = exact_prompt.prefetcher(lambda line, task_name: [doc_of(line, task_name, {})], lambda task_name: chat and bool(answer_fit.run_context()))
     prompt.__name__ = f"helmet_{spec.name}_{'chat' if chat else 'base'}_prompt"
     return prompt
 

@@ -65,7 +65,7 @@ from lighteval.metrics.metrics_sample import SampleLevelComputation
 from lighteval.metrics.utils.metric_utils import SampleLevelMetricGrouping
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc, SamplingMethod
-from lighteval.tasks import answer_fit as af
+from lighteval.tasks import answer_fit as af, exact_prompt
 from lighteval.tasks.sampling import sample_per_group
 from lighteval.tasks.tasks.chat_long import (
     ENV_MAX_MODEL_LEN,
@@ -81,7 +81,6 @@ from lighteval.tasks.tasks.chat_long import (
 
 N_SAMPLES = 1
 NAN = float("nan")
-CHAT_PER_MESSAGE = 6       # tokens a chat template adds around one message (ChatML 5, Llama-3 header 5); counted for conversations with many turns
 SKIP_USER = af.SKIP_USER                   # the prompt of an item that does not fit the context: skipped (base: NaN metrics) or not generated (chat: scored 0), kept tiny
 
 
@@ -249,7 +248,7 @@ GSM_VERSION = 1                         # chat tasks: 1 = the official-setup ali
 GSM_BASE_NEW = 4096                     # base generation cap = the official max_tokens: gsm-infinite/config.sh `max_tokens=4096` ("Token limits"; run.sh passes it as --max-tokens, pred/model_handler.py defaults to 4096 too)
                                         # @ Infini-AI-Lab/gsm_infinite caa53880. The official code has NO separate base / completion path (OpenAI chat.completions only), so a base model gets the same cap.
 GSM_CHAT_NEW = 8192                     # chat non-thinking cap (the registry yaml sets it; a thinking run takes the yaml's `think_budget` 32,768): 2x the official 4,096, docs/evals/tasks/gsm_infinite.md
-GSM_MARGIN = 64
+GSM_MARGIN = 64                         # BASE only (the official skip rule of the base track, unchanged); the chat track keeps no margin (exact prompt count, margin 0)
 GSM_MIN_ANSWER = 1024                   # chat: the floor of the answer budget (the OLMES MRCR rule openai_mrcr.py:44 `min_acceptable_gen_toks`, as MRCR / FRAMES): below it the item is not generated and scores 0
 GSM_BASE_STOP = ["\nProblem:"]         # a base model that has answered goes on with a new "Problem:"
 
@@ -302,8 +301,9 @@ def _fit(n_prompt: int, new: int, margin: int) -> bool:
     return True if ctx is None else n_prompt + new + margin <= ctx
 
 
-def _count_messages(messages: list[dict], tok) -> int:
-    return sum(len(tok.encode(m["content"], add_special_tokens=False)) for m in messages) + CHAT_PER_MESSAGE * len(messages)
+def _chat_messages_doc(messages: list[dict], task_name: str | None = None) -> Doc:
+    """The doc a conversation of the dataset becomes in a chat run (its own messages are the prompt: `specific["chat_messages"]`), as `_gsm_chat_doc` / `mrcr_doc` build it; counted by exact_prompt."""
+    return Doc(task_name=task_name, query=messages[-1]["content"], choices=[""], gold_index=0, specific={"chat_messages": messages})
 
 
 def gsm_doc(line, task_name: str, subset: str, chat: bool) -> Doc:
@@ -324,17 +324,19 @@ def gsm_doc(line, task_name: str, subset: str, chat: bool) -> Doc:
 
 
 def _gsm_chat_fit(messages: list[dict], spec: dict) -> bool:
-    """The OLMES answer-budget rule for one chat item (owner 11-16, task key `over_context: zero`; MRCR / FRAMES do the same): budget = min(the run's generation cap, context - prompt - 64);
-    below GSM_MIN_ANSWER the item is NOT generated and scores 0 (the official script's failed request: the reply becomes "Error: ..." which the parser scores 0, the item stays in N);
-    a smaller budget that still reaches the floor is the item's own cap (`max_new_tokens`, counted by `reduced_budget`). Writes the marks into `spec`. -> over_context?
+    """The OLMES answer-budget rule for one chat item (owner 11-16, task key `over_context: zero`; MRCR / FRAMES do the same): budget = min(the run's generation cap, context - prompt tokens), margin 0, the
+    prompt tokens EXACT (the conversation rendered with the model's chat template as the vLLM model sends it, counted with the model's tokenizer: exact_prompt.py); below GSM_MIN_ANSWER the item is NOT
+    generated and scores 0 (the official script's failed request: the reply becomes "Error: ..." which the parser scores 0, the item stays in N); a smaller budget that still reaches the floor is the item's own
+    cap (`max_new_tokens`, counted by `reduced_budget`). Writes the marks into `spec`. -> over_context?
     Without the run's tokenizer / context (unit tests, `lighteval tasks inspect`) nothing is marked."""
     new = run_new_tokens(GSM_CHAT_NEW)
-    tok_path = os.environ.get(ENV_TOKENIZER)
-    n_prompt = _count_messages(messages, _tokenizer(tok_path)) if tok_path else -1
-    spec["n_tokens"] = n_prompt
-    fit = af.fit_answer(n_prompt, new, GSM_MIN_ANSWER, GSM_MARGIN) if tok_path else af.no_fit(new)
-    af.mark(spec, fit)
-    return fit["over_context"]
+    ex = exact_prompt.get()
+    if ex is None:
+        spec["n_tokens"] = -1
+        return af.mark(spec, af.no_fit(new))["over_context"]
+    n_prompt = ex.count(_chat_messages_doc(messages))
+    exact_prompt.stamp(spec, n_prompt)
+    return af.mark(spec, af.fit_answer(n_prompt, new, GSM_MIN_ANSWER))["over_context"]
 
 
 def _gsm_chat_doc(line, task_name: str, subset: str, messages: list[dict]) -> Doc:
@@ -516,6 +518,9 @@ def _gsm_config(subset: str, length: int, chat: bool) -> LightevalTaskConfig:
     def prompt(line, task_name: str = None):
         return gsm_doc(line, task_name, subset, chat)
 
+    if chat:
+        prompt.prefetch = exact_prompt.prefetcher(lambda line, name: [_chat_messages_doc(json.loads(line["messages"]))])     # the rows of the split are counted in batches first (exact_prompt.py)
+
     name = f"gsm_infinite_{subset}_{length}" + ("_chat" if chat else "")
     return LightevalTaskConfig(
         name=name,
@@ -580,16 +585,20 @@ def mrcr_doc(line, task_name: str, chat: bool) -> Doc:
     skipped, n_prompt = False, -1
     tok_path = os.environ.get(ENV_TOKENIZER)
     plain = None if chat else mrcr_plain(messages)
-    if tok_path:
-        tok = _tokenizer(tok_path)
-        n_prompt = _count_messages(messages, tok) if chat else len(tok.encode(plain, add_special_tokens=False))
+    ex = exact_prompt.get() if chat else None
+    if chat and ex is not None:
+        n_prompt = ex.count(_chat_messages_doc(messages))           # the conversation as the vLLM model sends it (chat template, thinking switch, system prompt), the model's tokenizer
+    elif tok_path and not chat:
+        n_prompt = len(_tokenizer(tok_path).encode(plain, add_special_tokens=False))
         skipped = not _fit(n_prompt, new, MRCR_MARGIN)
     spec = {"random_string": line["random_string_to_prepend"], "n_needles": int(line["n_needles"]), "bin_upper": int(line["bin_upper"]), "n_chars": int(line["n_chars"]),
             "desired_msg_index": int(line["desired_msg_index"]), "total_messages": int(line["total_messages"]), "n_tokens": n_prompt}
     if chat:
-        # owner 11-16 (`over_context: zero`, the OLMES rule): the answer budget shrinks to what the context leaves (>= MRCR_MIN_ANSWER), else the question is not generated and scores 0
-        fit = af.fit_answer(n_prompt, new, MRCR_MIN_ANSWER, MRCR_MARGIN) if tok_path else af.no_fit(new)
+        # owner 11-16 (`over_context: zero`, the OLMES rule, margin 0): the answer budget shrinks to what the context leaves (>= MRCR_MIN_ANSWER), else the question is not generated and scores 0
+        fit = af.fit_answer(n_prompt, new, MRCR_MIN_ANSWER) if ex is not None else af.no_fit(new)
         af.mark(spec, fit)
+        if ex is not None:
+            exact_prompt.stamp(spec, n_prompt)
         skipped = fit["over_context"]
     else:
         spec["skipped"] = skipped                              # base: skipped (NaN, not in the mean), the official rule
@@ -646,6 +655,9 @@ def _mrcr_config(bin_upper: int, chat: bool) -> LightevalTaskConfig:
     def prompt(line, task_name: str = None):
         return mrcr_doc(line, task_name, chat)
 
+    if chat:
+        prompt.prefetch = exact_prompt.prefetcher(lambda line, name: [_chat_messages_doc(json.loads(line["messages"]))])     # the rows of the split are counted in batches first (exact_prompt.py)
+
     return LightevalTaskConfig(
         name=f"mrcr_{bin_upper}" + ("_chat" if chat else ""),
         prompt_function=prompt,
@@ -668,7 +680,6 @@ TASKS_TABLE += [_mrcr_config(b, chat) for b in MRCR_BINS for chat in (False, Tru
 
 # ============================================================================================================ FRAMES
 FRAMES_CHAT_NEW = 32768                 # the suite budget (owner 11-16; the run's gen.max_new_tokens replaces it): docs/evals/tasks/frames_chat.md "Generation setup"
-FRAMES_MARGIN = 64
 FRAMES_MIN_ANSWER = 1024                # the floor of the answer budget (the OLMES MRCR rule, owner 11-16): below it the question is not generated and scores 0
 FRAMES_PROMPT_HEAD = "Answer the question below using the Wikipedia articles provided.\n\n"
 FRAMES_PROMPT_TAIL = "\n\nQuestion: {question}\n\nGive your final answer on the last line as \"Final answer: <answer>\"."
@@ -699,25 +710,28 @@ frames_metric = SampleLevelMetricGrouping(
 )
 
 
+def _frames_body(line) -> str:
+    return FRAMES_PROMPT_HEAD + frames_articles(json.loads(line["articles"])) + FRAMES_PROMPT_TAIL.format(question=line["question"])
+
+
 def frames_chat_prompt(line, task_name: str = None):
-    """The oracle prompt, never cut. With the run's context and tokenizer known (the run exports them) the OLMES rule applies (answer_fit.fit_answer): the answer budget is
-    min(task budget, context - prompt tokens - 64); below FRAMES_MIN_ANSWER the question is marked `over_context` + `no_generation` and carries the tiny SKIP_USER query (the vLLM model
-    sends no request, the metrics count it, the judge stage grades it wrong without a call); a smaller budget that still reaches the floor is the doc's own `max_new_tokens` (`reduced_budget`).
-    Without the run's variables (unit tests, `lighteval tasks inspect`) nothing is marked."""
-    articles = json.loads(line["articles"])
-    body = FRAMES_PROMPT_HEAD + frames_articles(articles) + FRAMES_PROMPT_TAIL.format(question=line["question"])
-    n_tokens = -1
-    tok_path = os.environ.get(ENV_TOKENIZER)
+    """The oracle prompt, never cut. With the run's context and tokenizer known (the run exports them) the OLMES rule applies (answer_fit.fit_answer, margin 0): the answer budget is
+    min(task budget, context - prompt tokens), the prompt tokens EXACT (the prompt rendered as the vLLM model sends it and counted with the model's tokenizer: exact_prompt.py); below FRAMES_MIN_ANSWER
+    the question is marked `over_context` + `no_generation` and carries the tiny SKIP_USER query (the vLLM model sends no request, the metrics count it, the judge stage grades it wrong without a call); a
+    smaller budget that still reaches the floor is the doc's own `max_new_tokens` (`reduced_budget`). Without the run's variables (unit tests, `lighteval tasks inspect`) nothing is marked."""
+    body = _frames_body(line)
     reasoning = [t.strip() for t in str(line["reasoning_types"]).split("|") if t.strip()]
     specific = {"question": line["question"], "gold": str(line["answer"]), "id": int(line["id"]), "reasoning_types": str(line["reasoning_types"]),
                 "reasoning_type": reasoning[0] if reasoning else "unknown", "n_articles": int(line["n_articles"])}
     new = run_new_tokens(FRAMES_CHAT_NEW)
-    if tok_path and run_context():
-        n_tokens = len(_tokenizer(tok_path).encode(body, add_special_tokens=False))
-        fit = af.fit_answer(n_tokens, new, FRAMES_MIN_ANSWER, FRAMES_MARGIN)
+    ex = exact_prompt.get() if run_context() else None
+    if ex is not None:
+        n_tokens = ex.count(Doc(task_name=task_name, query=body, choices=[""], gold_index=0))
+        fit = af.fit_answer(n_tokens, new, FRAMES_MIN_ANSWER)
+        exact_prompt.stamp(specific, n_tokens)
     else:
         fit = af.no_fit(new)
-    specific["n_tokens"] = n_tokens
+        specific["n_tokens"] = -1
     af.mark(specific, fit)
     return Doc(
         task_name=task_name,
@@ -726,6 +740,9 @@ def frames_chat_prompt(line, task_name: str = None):
         gold_index=0,
         specific=specific,
     )
+
+
+frames_chat_prompt.prefetch = exact_prompt.prefetcher(lambda line, name: [Doc(query=_frames_body(line), choices=[""], gold_index=0)], lambda name: bool(run_context()))
 
 
 TASKS_TABLE += [
@@ -763,6 +780,10 @@ def gsm_symbolic_doc(line, task_name: str = None) -> Doc:
         spec["chat_messages"] = messages
         query = messages[-1]["content"]
     return Doc(task_name=task_name, query=query, choices=[", ".join(gold)], gold_index=0, specific=spec)
+
+
+gsm_symbolic_doc.prefetch = exact_prompt.prefetcher(lambda line, name: [_chat_messages_doc(json.loads(line["messages"]))])
+
 
 
 def _gsm_symbolic_config(length: int) -> LightevalTaskConfig:

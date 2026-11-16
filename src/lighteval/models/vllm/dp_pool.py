@@ -78,6 +78,7 @@ class GenOutput:
     prompt_token_ids: list
     outputs: list = field(default_factory=list)
     prompt_logprobs: list | None = None
+    engine_prompt_len: int | None = None  # len(prompt_token_ids) of the engine's own RequestOutput (titan_eval: the exact-count check compares it with the task's count); None from an engine that does not report it
 
 
 class DPWorkerError(RuntimeError):
@@ -85,9 +86,9 @@ class DPWorkerError(RuntimeError):
 
 
 def slim_output(request_output, keep_last: int | None = None) -> tuple:
-    """RequestOutput -> plain tuple `(completions, prompt_logprobs)`, cheap to pickle.
+    """RequestOutput -> plain tuple `(completions, prompt_logprobs, engine_prompt_len)`, cheap to pickle.
 
-    completions: `[(text, token_ids, finish_reason), ...]`, one per generation (n).
+    completions: `[(text, token_ids, finish_reason), ...]`, one per generation (n). engine_prompt_len: the length of the prompt ids the engine returned (None when it has none).
     prompt_logprobs: None, or one dict per prompt position `{token_id: LP(logprob, rank)}` (first entry None); with
     `keep_last=k` only the last k positions are kept (the loglikelihood path reads only the continuation's positions,
     counted from the end).
@@ -102,15 +103,17 @@ def slim_output(request_output, keep_last: int | None = None) -> tuple:
         prompt_logprobs = [
             None if d is None else {tok: LP(lp.logprob, lp.rank) for tok, lp in d.items()} for d in prompt_logprobs
         ]
-    return completions, prompt_logprobs
+    returned = getattr(request_output, "prompt_token_ids", None)
+    return completions, prompt_logprobs, None if returned is None else len(returned)
 
 
 def rebuild_output(slim: tuple, prompt_token_ids: list) -> GenOutput:
-    completions, prompt_logprobs = slim
+    completions, prompt_logprobs = slim[0], slim[1]
     return GenOutput(
         prompt_token_ids=prompt_token_ids,
         outputs=[GenCompletion(text=t, token_ids=ids, finish_reason=fr) for t, ids, fr in completions],
         prompt_logprobs=prompt_logprobs,
+        engine_prompt_len=slim[2] if len(slim) > 2 else None,
     )
 
 

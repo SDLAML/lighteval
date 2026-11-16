@@ -473,6 +473,10 @@ class VLLMModel(LightevalModel):
             ]
             budgets = [o if o is not None else max_new_tokens for o in own]
 
+            # titan_eval (owner 11-16, `over_context: zero`): a doc whose prompt the task counted EXACTLY (`specific["exact_prompt_tokens"]`, exact_prompt.py) must have that many tokens here, where the
+            # answer budget was computed from it with margin 0: checked before any request is sent (a mismatch would shift the budget) and again on the prompt ids vLLM returns.
+            self._check_exact_counts(split, [len(ids) for ids in inputs], skip, "the prompts about to be sent")
+
             # Left truncate EVERY prompt to the maximum length (room for its max_new_tokens kept). The number of tokens cut
             # from each prompt is recorded per request in ModelResponse.truncated_tokens_count (0 = not truncated).
             # (Until now only the first prompt of the split was checked and nothing was recorded.)
@@ -521,6 +525,12 @@ class VLLMModel(LightevalModel):
                     num_samples=num_samples,
                 )
                 by_index.update(zip(idx, outs))
+            self._check_exact_counts(
+                split,
+                [self._engine_prompt_len(by_index[i]) + truncated_tokens[i] if i in by_index else None for i in range(len(inputs))],
+                skip,
+                "the prompt_token_ids vLLM returned",
+            )
 
             for i in range(len(inputs)):
                 if skip[i]:
@@ -553,6 +563,28 @@ class VLLMModel(LightevalModel):
                 results.append(cur_response)
 
         return dataset.get_original_order(results)
+
+    @staticmethod
+    def _engine_prompt_len(output) -> int:
+        """The prompt length the engine reports for a request (data-parallel workers send it back as `engine_prompt_len`: the ids we sent are not what they SAW), else len(output.prompt_token_ids)."""
+        n = getattr(output, "engine_prompt_len", None)
+        return len(output.prompt_token_ids) if n is None else int(n)
+
+    @staticmethod
+    def _check_exact_counts(docs: list[Doc], got: list[int | None], skip: list[bool], where: str) -> None:
+        """Fail loudly when a doc's exact prompt count (`specific["exact_prompt_tokens"]`, set by the long-context chat tasks with `over_context: zero`) differs from the token count here
+        (`got`, one per doc; None / `skip` = not generated: nothing to compare)."""
+        bad = []
+        for doc, n, sk in zip(docs, got, skip):
+            want = doc.specific.get("exact_prompt_tokens") if isinstance(doc.specific, dict) else None
+            if want is not None and n is not None and not sk and int(want) != int(n):
+                bad.append((getattr(doc, "id", None), int(want), int(n)))
+        if bad:
+            first = "; ".join(f"doc {i}: counted {w}, vLLM side {n}" for i, w, n in bad[:5])
+            raise RuntimeError(
+                f"exact prompt count mismatch on {where}: {len(bad)} of {len(docs)} docs ({first}). The answer budget of `over_context: zero` was computed from the count, so the run is invalid; the render "
+                "settings the run exported (TITAN_EVAL_RENDER: chat template, template kwargs, system prompt, add_special_tokens) differ from the vLLM model's."
+            )
 
     def _generate(
         self,

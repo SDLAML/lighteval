@@ -1,11 +1,14 @@
 # MIT License
 #
-# titan_eval (owner 11-16): the answer-budget rule of the long-context chat tasks with `over_context: zero` (FRAMES, MRCR chat, RULER chat, HELMET chat).
+# titan_eval (owner 11-16): the answer-budget rule of the long-context chat tasks with `over_context: zero` (FRAMES, MRCR chat, GSM-Infinite chat, RULER chat, HELMET chat).
 #
-# OLMES `oe_eval/tasks/oe_eval_tasks/openai_mrcr.py:41-46` lets the answer budget shrink to what the context leaves (`"max_gen_toks": 16384`, `"min_acceptable_gen_toks": 1024`, "Truncate
-# instances which cause max_gen_toks to be <1024"). Ours: budget = min(task budget, context - prompt - margin); the item is NOT generated and scores 0 only if that is below the floor
-# (1,024 for MRCR / FRAMES, the subtask's / dataset's own answer size for RULER / HELMET); an item whose budget is below the task budget but at least the floor is generated with the
-# smaller budget (`specific["max_new_tokens"]`, the vLLM model gives that request its own cap) and counted as reduced.
+# The rule is OLMES's: oe_eval/models/eleuther_vllm_causallms.py:213 gives every request the answer budget min(task budget, max_length - the prompt's tokens), with the tokenized prompt (no estimate) and
+# NO margin; HELMET's own buffer is 0 (helmet.py:386); oe_eval/tasks/oe_eval_tasks/openai_mrcr.py:41-46 sets the floor (`"max_gen_toks": 16384`, `"min_acceptable_gen_toks": 1024`, "Truncate instances which
+# cause max_gen_toks to be <1024"). Ours: budget = min(task budget, context - prompt tokens), where the prompt tokens are the EXACT count of the chat prompt the vLLM model sends (exact_prompt.py: the model's
+# chat template, thinking switch and system prompt rendered by the fork's own PromptManager, counted with the model's tokenizer). The item is NOT generated and scores 0 only if that is below the floor
+# (1,024 for MRCR / FRAMES / GSM-Infinite, the subtask's / dataset's own answer size for RULER / HELMET); an item whose budget is below the task budget but at least the floor is generated with the smaller
+# budget (`specific["max_new_tokens"]`, the vLLM model gives that request its own cap) and counted as reduced. (Before this, the prompt size was an estimate and a 64-token margin of OUR making was kept free; the
+# margin was never OLMES's and is gone with the estimate.)
 """The pure rule (no tokenizer, no environment): `fit_answer`."""
 
 import os
@@ -13,8 +16,6 @@ import os
 
 ENV_MAX_MODEL_LEN = "TITAN_EVAL_MAX_MODEL_LEN"
 SKIP_USER = "Reply with the word OK."      # the prompt of an item that is not generated: never sent (specific["no_generation"]), kept tiny for the details files
-MARGIN = 64                      # tokens kept free for the chat template and the re-tokenisation (owner 11-16)
-CHAT_TEMPLATE_TOKENS = 16        # an upper bound of what a chat template adds around ONE user message (Qwen3.5 10 / 12, hamburger_pt 10 / 12), for the estimates of RULER / HELMET
 
 
 def run_context() -> int | None:
@@ -28,13 +29,13 @@ def no_fit(task_budget: int) -> dict:
     return {"answer_budget": task_budget, "task_budget": task_budget, "over_context": False, "reduced_budget": False}
 
 
-def fit_answer(n_prompt: int, task_budget: int, floor: int, margin: int = MARGIN, ctx: int | None = None) -> dict:
-    """The OLMES-style rule. -> {answer_budget (what the request gets; 0 when over), task_budget, over_context, reduced_budget}.
+def fit_answer(n_prompt: int, task_budget: int, floor: int, ctx: int | None = None) -> dict:
+    """The OLMES rule, margin 0. `n_prompt` = the exact prompt tokens (exact_prompt.py). -> {answer_budget (what the request gets; 0 when over), task_budget, over_context, reduced_budget}.
     Without a context (None and no run variable) nothing is marked: the whole budget, not over."""
     ctx = run_context() if ctx is None else ctx
     if ctx is None:
         return no_fit(task_budget)
-    budget = min(task_budget, ctx - n_prompt - margin)
+    budget = min(task_budget, ctx - n_prompt)
     over = budget < floor
     return {"answer_budget": 0 if over else budget, "task_budget": task_budget, "over_context": over, "reduced_budget": (not over) and budget < task_budget}
 

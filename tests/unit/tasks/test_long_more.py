@@ -46,6 +46,42 @@ def env(ctx=None, new=None, tok="fake"):
     return mock.patch.dict(os.environ, d, clear=False)
 
 
+class FakeChatTok:
+    """Chat tokenizer without a model (owner 11-16, exact count): the template writes `<|role|> content <|end|>` per message, the generation prompt `<|assistant|>` and, with enable_thinking=False,
+    an empty think block (2 tokens); one token per whitespace-separated piece. So a prompt of messages has sum(words) + 2 per message + 1 tokens."""
+    chat_template = "x"
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kw):
+        think = "<think> </think> " if kw.get("enable_thinking") is False else ""
+        return "".join(f"<|{m['role']}|> {m['content']} <|end|> " for m in messages) + "<|assistant|> " + think
+
+    def __call__(self, texts, add_special_tokens=False):
+        return {"input_ids": [t.split() for t in texts]}
+
+
+def chat_env(ctx=None, new=None, **render):
+    """A chat run of the fake chat tokenizer that exports its window / cap and render settings (exact_prompt.py)."""
+    import contextlib
+
+    from lighteval.tasks import exact_prompt
+
+    @contextlib.contextmanager
+    def cm():
+        exact_prompt.reset()
+        d = {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_RENDER": json.dumps(render) if render else "",
+             "TITAN_EVAL_MAX_MODEL_LEN": str(ctx) if ctx is not None else "", "TITAN_EVAL_MAX_NEW_TOKENS": str(new) if new is not None else ""}
+        with mock.patch.dict(os.environ, d, clear=False), mock.patch.object(exact_prompt, "load_tokenizer", return_value=FakeChatTok()):
+            yield
+        exact_prompt.reset()
+
+    return cm()
+
+
+def messages_tokens(messages, extra=0):
+    """The exact prompt tokens of `messages` under FakeChatTok."""
+    return sum(len(m["content"].split()) + 2 for m in messages) + 1 + extra
+
+
 def no_env():
     return mock.patch.dict(os.environ, {k: "" for k in ("TITAN_EVAL_MAX_MODEL_LEN", "TITAN_EVAL_MAX_NEW_TOKENS", "TITAN_EVAL_TOKENIZER")}, clear=False)
 
@@ -258,18 +294,20 @@ class GsmInfinite(unittest.TestCase):
         self.assertNotIn("over_context", d.specific)
 
     def test_chat_item_that_does_not_fit_is_not_generated_and_scores_zero(self):
-        """CHAT tasks (owner 11-16, `over_context: zero`, the OLMES rule): budget = min(cap, context - prompt - 64); below the floor 1,024 no generation, else generated with the smaller budget."""
+        """CHAT tasks (owner 11-16, `over_context: zero`, the OLMES rule, margin 0): budget = min(cap, context - prompt tokens); below the floor 1,024 no generation, else generated with the smaller budget."""
         fake = {"ctx": 20000, "cap": 8192}
         small, mid, long = gsm_line(problem="w " * 100), gsm_line(problem=" ".join(["w"] * 12000)), gsm_line(problem=" ".join(["w"] * 19500))
-        with env(fake["ctx"], fake["cap"]), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        with chat_env(fake["ctx"], fake["cap"]):
             d_small, d_mid, d_long = (lm.gsm_doc(x, "t", "hard", chat=True) for x in (small, mid, long))
-        # the prompt counts words + 6 per message (3 messages): small ~ 120, mid ~ 12,040, long ~ 19,540
+        # the exact prompt: words + 2 template tokens per message (3 messages) + the generation prompt
+        for x, d in ((small, d_small), (mid, d_mid), (long, d_long)):
+            self.assertEqual((d.specific["n_tokens"], d.specific["exact_prompt_tokens"]), (messages_tokens(json.loads(x["messages"])),) * 2)
         self.assertEqual((d_small.specific["over_context"], d_small.specific["reduced_budget"], d_small.specific["answer_budget"]), (False, False, 8192))
         self.assertNotIn("no_generation", d_small.specific)
         self.assertEqual(d_small.specific["chat_messages"][0]["role"], "system")
         self.assertEqual((d_mid.specific["over_context"], d_mid.specific["reduced_budget"]), (False, True))
         self.assertEqual(d_mid.specific["max_new_tokens"], d_mid.specific["answer_budget"])
-        self.assertEqual(d_mid.specific["answer_budget"], 20000 - d_mid.specific["n_tokens"] - lm.GSM_MARGIN)
+        self.assertEqual(d_mid.specific["answer_budget"], 20000 - d_mid.specific["n_tokens"], "no margin: prompt + answer = the window")
         self.assertGreaterEqual(d_mid.specific["answer_budget"], lm.GSM_MIN_ANSWER)
         self.assertTrue(d_long.specific["over_context"] and d_long.specific["no_generation"] and d_long.specific["answer_budget"] == 0)
         self.assertEqual(d_long.specific["chat_messages"], [{"role": "user", "content": lm.SKIP_USER}])
@@ -467,7 +505,7 @@ class GsmSymbolic(unittest.TestCase):
 
     def test_over_context_item_is_not_generated(self):
         long = symbolic_line(problem=" ".join(["w"] * 20000))
-        with env(8000, 8192), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        with chat_env(8000, 8192):
             d = lm.gsm_symbolic_doc(long, "t")
         self.assertTrue(d.specific["over_context"] and d.specific["no_generation"])
         self.assertEqual(d.specific["chat_messages"], [{"role": "user", "content": lm.SKIP_USER}])
@@ -533,7 +571,7 @@ class Mrcr(unittest.TestCase):
         self.assertNotIn("chat_messages", d.specific)
 
     def test_base_skips_and_chat_shrinks_the_budget_or_marks_over_context(self):
-        """Base: the official skip rule (NaN). Chat (owner 11-16, the OLMES rule): budget = min(task budget, context - prompt - 64); below the floor 1,024 the question is not generated."""
+        """Base: the official skip rule (NaN). Chat (owner 11-16, the OLMES rule, margin 0): budget = min(task budget, context - prompt tokens); below the floor 1,024 the question is not generated."""
         msgs = json.loads(mrcr_line()["messages"])
         msgs[2]["content"] = " ".join(["w"] * 3000)
         big = dict(mrcr_line(), messages=json.dumps(msgs))
@@ -541,14 +579,14 @@ class Mrcr(unittest.TestCase):
             b = lm.mrcr_doc(big, "t", chat=False)
             self.assertTrue(b.specific["skipped"] and "over_context" not in b.specific and "no_generation" not in b.specific, "base: the official skip rule, as before")
         n = None
-        with env(100000, 5000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        with chat_env(100000, 5000):
             n = lm.mrcr_doc(big, "t", chat=True).specific["n_tokens"]
-        self.assertTrue(n > 3000)
-        for ctx, new, want in ((n + 5000 + 64, 5000, ("full", 5000)),                    # exactly fits
-                               (n + 5000 + 64 - 1, 5000, ("reduced", 4999)),             # one token short: a reduced budget (still >= 1,024)
-                               (n + 1024 + 64, 5000, ("reduced", 1024)),                 # the floor
-                               (n + 1024 + 64 - 1, 5000, ("over", 0))):                  # below the floor: not generated
-            with env(ctx, new), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        self.assertEqual(n, messages_tokens(msgs), "the whole conversation rendered with the chat template, counted")
+        for ctx, new, want in ((n + 5000, 5000, ("full", 5000)),                          # exactly fits: prompt + answer = the window, no margin
+                               (n + 5000 - 1, 5000, ("reduced", 4999)),                   # one token short: a reduced budget (still >= 1,024)
+                               (n + 1024, 5000, ("reduced", 1024)),                       # the floor
+                               (n + 1024 - 1, 5000, ("over", 0))):                        # below the floor: not generated
+            with chat_env(ctx, new):
                 c = lm.mrcr_doc(big, "t", chat=True)
             sp = c.specific
             kind = "over" if sp["over_context"] else ("reduced" if sp["reduced_budget"] else "full")
@@ -633,22 +671,23 @@ class Frames(unittest.TestCase):
         return dict(self.ROW, articles=json.dumps([{"title": "A", "link": "l", "text": " ".join(f"w{i}" for i in range(words))}]))
 
     def test_a_prompt_that_fits_is_kept_whole(self):
-        with env(10000, 2000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        with chat_env(10000, 2000):
             d = lm.frames_chat_prompt(self._frames_row(300), "t")
         sp = d.specific
         self.assertEqual((sp["over_context"], sp["reduced_budget"], sp["answer_budget"], sp["task_budget"]), (False, False, 2000, 2000))
-        self.assertTrue(sp["n_tokens"] > 300 and sp["n_tokens"] + 2000 + lm.FRAMES_MARGIN <= 10000)
+        self.assertTrue(sp["n_tokens"] > 300 and sp["n_tokens"] + 2000 <= 10000)
+        self.assertEqual((sp["n_tokens"], sp["exact_prompt_tokens"]), (messages_tokens([{"role": "user", "content": d.query}]),) * 2, "the whole prompt rendered with the chat template, counted")
         self.assertIn("w299", d.query)
         self.assertTrue(d.query.endswith('"Final answer: <answer>".') and "no_generation" not in sp and "max_new_tokens" not in sp)
 
     def test_the_answer_budget_shrinks_to_what_the_context_leaves_and_zero_below_the_floor(self):
-        """Owner 11-16 (the OLMES rule, openai_mrcr.py:41-46): budget = min(task budget, context - prompt - 64); the question is not generated only when that is below 1,024."""
+        """Owner 11-16 (the OLMES rule, openai_mrcr.py:41-46, margin 0): budget = min(task budget, context - prompt tokens); the question is not generated only when that is below 1,024."""
         row = self._frames_row(300)
-        with env(100000, 5000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        with chat_env(100000, 5000):
             n = lm.frames_chat_prompt(row, "t").specific["n_tokens"]
-        self.assertEqual(lm.FRAMES_MARGIN, 64)
-        for ctx, want in ((n + 5000 + 64, ("full", 5000)), (n + 5000 + 64 - 1, ("reduced", 4999)), (n + 1024 + 64, ("reduced", 1024)), (n + 1024 + 64 - 1, ("over", 0))):
-            with env(ctx, 5000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+        self.assertFalse(hasattr(lm, "FRAMES_MARGIN"), "no margin on the chat track")
+        for ctx, want in ((n + 5000, ("full", 5000)), (n + 5000 - 1, ("reduced", 4999)), (n + 1024, ("reduced", 1024)), (n + 1024 - 1, ("over", 0))):
+            with chat_env(ctx, 5000):
                 d = lm.frames_chat_prompt(row, "t")
             sp = d.specific
             kind = "over" if sp["over_context"] else ("reduced" if sp["reduced_budget"] else "full")

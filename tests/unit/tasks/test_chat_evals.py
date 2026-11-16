@@ -387,6 +387,55 @@ def test_a_doc_with_its_own_max_new_tokens_gets_that_cap_and_the_others_the_run_
         raise AssertionError("without its own cap the same doc does not fit")
 
 
+def test_a_doc_whose_exact_prompt_count_differs_from_the_engine_side_fails_the_run_loudly():
+    """titan_eval `over_context: zero` (owner 11-16, margin 0): the answer budget was computed from `specific["exact_prompt_tokens"]`; the vLLM model checks it against the token ids it is about to send
+    (before any request) and against the prompt ids / the prompt length the engine returns (after generation); a doc that is not generated is not compared."""
+    from lighteval.models.vllm.vllm_model import VLLMModelConfig
+    sent = []
+    m = _stub_model(VLLMModelConfig(model_name="m", error_on_prompt_truncation=True), {})
+    orig = m._generate
+
+    def spy(inputs, **kw):
+        sent.append(len(inputs))
+        return orig(inputs=inputs, **kw)
+
+    m._generate = spy
+
+    def doc(q, exact=None, skip=False):
+        d = _doc(1, query=q)
+        d.id = q
+        d.specific = {**({"exact_prompt_tokens": exact} if exact is not None else {}), **({"no_generation": True} if skip else {})}
+        return d
+
+    out = m._greedy_until([doc("abcd", 4), doc("ab", 2), doc("xy"), doc("OK", 99, skip=True)])             # equal / equal / no count / not generated (the placeholder is not what was counted)
+    assert len(out) == 4 and sent == [3]
+    sent.clear()
+    try:
+        m._greedy_until([doc("abcd", 4), doc("abc", 5)])
+    except RuntimeError as e:
+        assert "1 of 2 docs" in str(e) and "doc abc: counted 5, vLLM side 3" in str(e) and "about to be sent" in str(e)
+    else:
+        raise AssertionError("a count that differs from the ids about to be sent must fail")
+    assert sent == [], "before any request is sent"
+    # after generation: the engine reports another prompt length than the ids we sent
+    m2 = _stub_model(VLLMModelConfig(model_name="m", error_on_prompt_truncation=True), {})
+    orig2 = m2._generate
+
+    def lying(inputs, **kw):
+        outs = orig2(inputs=inputs, **kw)
+        for o in outs:
+            o.engine_prompt_len = len(o.prompt_token_ids) + 1
+        return outs
+
+    m2._generate = lying
+    try:
+        m2._greedy_until([doc("abcd", 4)])
+    except RuntimeError as e:
+        assert "the prompt_token_ids vLLM returned" in str(e) and "counted 4, vLLM side 5" in str(e)
+    else:
+        raise AssertionError("a different prompt length on the engine side must fail")
+
+
 def test_plain_text_docs_keep_their_stop_sequences_in_a_chat_run():
     """titan_eval (owner 11-16, HELMET's `use_chat_template: false` datasets): a split whose docs ALL carry specific["plain_text"] keeps the task's stop sequences although the run
     uses the chat template; any other split still gets none (the end of turn stops it)."""

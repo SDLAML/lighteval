@@ -281,30 +281,97 @@ def test_ruler_chat_scoring_is_ruler_match_on_the_reply_only():
     assert metric.compute(qa, ModelResponse(text=["London"])) == 0.0
 
 
-def test_ruler_chat_item_that_does_not_fit_the_window_is_marked_and_scores_zero():
-    """Owner 11-16 (`over_context: zero`, the OLMES rule): floor = the subtask's own answer size; the chat prompt size is estimated from the stored base length."""
+def _exact_env(ctx, **render):
+    """A chat run of a fake chat tokenizer (the template writes <|user|> .. <|end|> <|assistant|> [<think> </think>], one token per whitespace-separated piece) that exports its window and render settings."""
+    import contextlib
+    import json
     import os
     from unittest import mock
 
-    from lighteval.models.model_output import ModelResponse
+    from lighteval.tasks import exact_prompt
 
     class Tok:
-        def encode(self, text, add_special_tokens=False):
-            return text.split(" ")
+        chat_template = "x"
 
-    # qa_1 at 4096: own answer size 50; stored length 4000 = base prompt 3950 + 50; the prefix "\nAnswer:" is ONE word for this tokenizer
-    line = {"input": "Q?", "gen_prefix": "Answer:", "outputs": ["Paris"], "length": 4000}
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kw):
+            think = "<think> </think> " if kw.get("enable_thinking") is False else ""
+            return "".join(f"<|{m['role']}|> {m['content']} <|end|> " for m in messages) + "<|assistant|> " + think
+
+        def __call__(self, texts, add_special_tokens=False):
+            return {"input_ids": [t.split() for t in texts]}
+
+    @contextlib.contextmanager
+    def cm():
+        exact_prompt.reset()
+        env = {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(ctx), "TITAN_EVAL_RENDER": json.dumps(render) if render else ""}
+        with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(exact_prompt, "load_tokenizer", return_value=Tok()):
+            yield
+        exact_prompt.reset()
+
+    return cm()
+
+
+def test_ruler_chat_item_that_does_not_fit_the_window_is_marked_and_scores_zero():
+    """Owner 11-16 (`over_context: zero`, the OLMES rule, margin 0): floor = the subtask's own answer size; the chat prompt is rendered as the vLLM model sends it and counted exactly."""
+    from lighteval.models.model_output import ModelResponse
+
+    # qa_1 at 4096: own answer size 50; the answer prefix is NOT in the chat prompt. 3,946 words + <|user|> <|end|> <|assistant|> = 3,949 tokens
+    line = {"input": "w " * 3946 + "Q?", "gen_prefix": "Answer:", "outputs": ["Paris"], "length": 4000}
     name = "ruler_4096_chat:qa_1|0"
-    n_est = 4000 - 50 - 1 + 16                                                                       # answer_fit.CHAT_TEMPLATE_TOKENS
-    fits_at = n_est + 50 + 64                                                                         # prompt + the 50-token answer + the 64-token margin
-    with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(fits_at)}), mock.patch("lighteval.tasks.tasks.chat_long._tokenizer", return_value=Tok()):
+    n_exact = 3947 + 3
+    with _exact_env(n_exact + 50) as _:
         ok = ruler.ruler_chat_prompt(line, name)
-    assert ok.specific["over_context"] is False and ok.specific["n_tokens"] == n_est and ok.specific["answer_budget"] == 50 and "no_generation" not in ok.specific and ok.query == "Q?"
-    with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(fits_at - 1)}), mock.patch("lighteval.tasks.tasks.chat_long._tokenizer", return_value=Tok()):
+    assert ok.specific["over_context"] is False and ok.specific["n_tokens"] == n_exact == ok.specific["exact_prompt_tokens"] and ok.specific["answer_budget"] == 50, "prompt + answer = the window exactly: fits (no margin)"
+    assert "no_generation" not in ok.specific and ok.query == line["input"]
+    with _exact_env(n_exact + 49) as _:
         over = ruler.ruler_chat_prompt(line, name)
     assert over.specific["over_context"] and over.specific["no_generation"] and over.query == "Reply with the word OK." and over.specific["answer_budget"] == 0
+    assert over.specific["exact_prompt_tokens"] == n_exact, "the count of the real prompt stays in the record"
+    with _exact_env(n_exact + 52, chat_template_kwargs={"enable_thinking": False}) as _:           # the thinking switch is part of the prompt: the empty think block adds 2 tokens
+        off = ruler.ruler_chat_prompt(line, name)
+    assert off.specific["n_tokens"] == n_exact + 2 and off.specific["over_context"] is False
+    with _exact_env(n_exact + 51, chat_template_kwargs={"enable_thinking": False}) as _:
+        assert ruler.ruler_chat_prompt(line, name).specific["over_context"] is True
+    with _exact_env(n_exact + 50, system_prompt="be brief") as _:                                   # a system prompt is rendered too: 2 words + 2 markers more
+        assert ruler.ruler_chat_prompt(line, name).specific["n_tokens"] == n_exact + 4
     metric = ruler.ruler_chat_metric.sample_level_fn
     assert metric.compute(over, ModelResponse(text=["Paris"])) == {"ruler_match": 0.0, "over_context": 1.0}, "an item not generated scores 0 whatever came back"
     assert metric.compute(ok, ModelResponse(text=["It is Paris."])) == {"ruler_match": 1.0, "over_context": 0.0}
     no_env = ruler.ruler_chat_prompt(line, name)                                                      # without the run's variables nothing is marked
     assert not no_env.specific
+    with _exact_env(10**6) as _:                                                                       # a name that is not a chat task name: untouched
+        assert not ruler.ruler_chat_prompt(line, "ruler_4096:qa_1|0").specific
+
+
+def test_ruler_chat_rows_are_counted_in_one_batch_before_the_per_row_calls():
+    """lighteval_task._get_docs_from_split hands the rows of a split to `ruler_chat_prompt.prefetch`: one batch call, then the per-row calls only look the counts up."""
+    import os
+    from unittest import mock
+
+    from lighteval.tasks import exact_prompt
+
+    rows = [{"input": "w " * i + "Q?", "gen_prefix": "A:", "outputs": ["x"], "length": 100} for i in (3, 5, 7)]
+    name = "ruler_4096_chat:qa_1|0"
+    with _exact_env(100000) as _:
+        ex = exact_prompt.get()
+        calls = []
+        orig = ex.tok
+
+        class Spy:
+            chat_template = "x"
+
+            def apply_chat_template(self, *a, **k):
+                return orig.apply_chat_template(*a, **k)
+
+            def __call__(self, texts, add_special_tokens=False):
+                calls.append(len(texts))
+                return orig(texts, add_special_tokens=add_special_tokens)
+
+        ex.tok = Spy()
+        ex.pm.tokenizer = ex.tok
+        ruler.ruler_chat_prompt.prefetch(rows, name)
+        assert calls == [3]
+        assert [ruler.ruler_chat_prompt(r, name).specific["n_tokens"] for r in rows] == [3 + 1 + 3, 5 + 1 + 3, 7 + 1 + 3] and calls == [3]
+        with mock.patch.dict(os.environ, {"TITAN_EVAL_MAX_MODEL_LEN": ""}):
+            ruler.ruler_chat_prompt.prefetch(rows, "ruler_4096:qa_1|0")                       # not a chat name / no window: nothing counted
+        assert calls == [3]

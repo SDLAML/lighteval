@@ -810,7 +810,12 @@ class LightevalTask:
         assert self.dataset is not None, f"Dataset {self.dataset_path} not found."
 
         docs = []
+        # titan_eval (owner 11-16, `over_context: zero`): a prompt function with a `prefetch(rows, task_name)` attribute (exact_prompt.prefetcher) gets the rows of the split first, to count the exact
+        # prompt tokens of all of them in batches; the per-row calls below then find their count in its cache. Few-shot pools are not prefetched.
+        prefetch = None if few_shots else getattr(self.formatter, "prefetch", None)
         for split in splits:
+            if prefetch is not None:
+                prefetch(self.dataset[split], self.name)
             for ix, item in enumerate(self.dataset[split]):
                 # Some tasks formatting is applied differently when the document is used for fewshot examples
                 # vs when it's used for the actual prompt. That's why we store whether we are currently using the
