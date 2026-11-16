@@ -437,8 +437,10 @@ class VLLMModel(LightevalModel):
             position=0,
             disable=False,  # self.disable_tqdm,
         ):
-            # For chat models, generation stops with EOS token, so we don't need to specify stop tokens
-            if self.use_chat_template:
+            # For chat models, generation stops with EOS token, so we don't need to specify stop tokens. Exception (titan_eval, owner 11-16): a split whose docs ALL carry
+            # `specific["plain_text"]` (HELMET datasets that run without a chat template, with their newline stop) keeps the task's stop sequences.
+            plain_split = all(isinstance(doc.specific, dict) and doc.specific.get("plain_text") for doc in split)
+            if self.use_chat_template and not plain_split:
                 stop_tokens = []
             else:
                 # NOTE: we are assuming all items in a batch behave similarly (same
@@ -461,7 +463,17 @@ class VLLMModel(LightevalModel):
             # should have been managed by the prompt creator/few shot manager if requested by the user.
             inputs = tokenized["input_ids"]
 
-            # Left truncate EVERY prompt to the maximum length (room for max_new_tokens kept). The number of tokens cut
+            # titan_eval (owner 11-16, task key `over_context: zero`): a doc with `specific["no_generation"]` is never sent to the engine (its response has empty texts and no
+            # finish reasons); a doc with `specific["max_new_tokens"]` (an int) gets THAT cap for its request instead of the run's / the task's (the answer budget shrunk to what the
+            # context leaves, never below the task's floor), recorded in ModelResponse.generation_cap. Every other doc is generated exactly as before.
+            skip = [isinstance(doc.specific, dict) and bool(doc.specific.get("no_generation")) for doc in split]
+            own = [
+                (doc.specific.get("max_new_tokens") if isinstance(doc.specific, dict) and isinstance(doc.specific.get("max_new_tokens"), int) and not sk else None)
+                for doc, sk in zip(split, skip)
+            ]
+            budgets = [o if o is not None else max_new_tokens for o in own]
+
+            # Left truncate EVERY prompt to the maximum length (room for its max_new_tokens kept). The number of tokens cut
             # from each prompt is recorded per request in ModelResponse.truncated_tokens_count (0 = not truncated).
             # (Until now only the first prompt of the split was checked and nothing was recorded.)
             truncated_tokens = [0] * len(inputs)
@@ -470,17 +482,18 @@ class VLLMModel(LightevalModel):
                     "The model max_length was not set in the model arguments, so we cannot check if we need to truncate the context."
                 )
             else:
-                max_prompt_size = self.max_length - (max_new_tokens or 0)
-                if max_prompt_size < 0:
+                limits = [self.max_length - (b or 0) for b in budgets]
+                if any(lim < 0 for lim, sk in zip(limits, skip) if not sk):
                     logger.critical(
-                        f"{max_prompt_size=} is less than 0, either reduce the max_new_tokens or increase model max length."
+                        f"max_prompt_size={min(limits)} is less than 0, either reduce the max_new_tokens or increase model max length."
                     )
                     raise ValueError("Context size is less than 0.")
                 for i, token_ids in enumerate(inputs):
-                    if len(token_ids) > max_prompt_size:
-                        truncated_tokens[i] = len(token_ids) - max_prompt_size
+                    if len(token_ids) > limits[i]:
+                        truncated_tokens[i] = len(token_ids) - limits[i]
                         inputs[i] = token_ids[truncated_tokens[i] :]
                 num_truncated = sum(1 for n in truncated_tokens if n > 0)
+                max_prompt_size = min(limits)
                 if num_truncated > 0 and self.config.error_on_prompt_truncation:
                     raise ValueError(
                         f"{num_truncated} of {len(inputs)} prompts are longer than {max_prompt_size} tokens "
@@ -494,15 +507,35 @@ class VLLMModel(LightevalModel):
                         f"(up to {max(truncated_tokens)} tokens cut)."
                     )
 
-            vllm_outputs = self._generate(
-                inputs=inputs,
-                max_new_tokens=max_new_tokens,
-                stop_tokens=stop_tokens,
-                returns_logits=False,
-                num_samples=num_samples,
-            )
+            groups: dict = {}
+            for i, sk in enumerate(skip):
+                if not sk:
+                    groups.setdefault(budgets[i], []).append(i)          # ONE group (one engine call) unless some docs carry their own cap
+            by_index: dict = {}
+            for budget, idx in groups.items():
+                outs = self._generate(
+                    inputs=[inputs[i] for i in idx],
+                    max_new_tokens=budget,
+                    stop_tokens=stop_tokens,
+                    returns_logits=False,
+                    num_samples=num_samples,
+                )
+                by_index.update(zip(idx, outs))
 
-            for i, vllm_output in enumerate(vllm_outputs):
+            for i in range(len(inputs)):
+                if skip[i]:
+                    results.append(
+                        ModelResponse(
+                            input=context[i],
+                            text=[""] * num_samples,
+                            output_tokens=[[] for _ in range(num_samples)],
+                            input_tokens=list(inputs[i]),
+                            finish_reasons=[],
+                            truncated_tokens_count=truncated_tokens[i],
+                        )
+                    )
+                    continue
+                vllm_output = by_index[i]
                 output_token_ids = [outputs.token_ids for outputs in vllm_output.outputs]
                 result = [output.text for output in vllm_output.outputs]
                 input_token_ids = vllm_output.prompt_token_ids
@@ -515,6 +548,7 @@ class VLLMModel(LightevalModel):
                     # "length" = this generation was cut by the max_new_tokens cap (not by EOS / a stop sequence)
                     finish_reasons=[getattr(output, "finish_reason", None) for output in vllm_output.outputs],
                     truncated_tokens_count=truncated_tokens[i],
+                    generation_cap=own[i],
                 )
                 results.append(cur_response)
 

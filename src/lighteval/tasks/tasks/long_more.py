@@ -33,11 +33,14 @@ gsm_infinite_<hard|medium>_<L>[_chat]   GSM-Infinite (InfiniAILab, arXiv 2502.05
                         `data.sample_per_group=N` (titan_eval) applies the same official rule at limit N (the first int(N * pct) rows of each filter_config group of every op, a multiple
                         of 20 gives exactly N per op); no seed: the official rule is deterministic.
 mrcr_<L>[_chat]         OpenAI MRCR (openai/mrcr, MIT): 2 / 4 / 8 needles, the bin of L = 8192 .. 262144 tokens (prompt + answer), 100 rows per needle count. Chat = the conversation as given; base = the
-                        same conversation as a "User: / Assistant:" transcript ending in "Assistant:". Official grader verbatim (prefix check, then SequenceMatcher ratio). Items whose prompt does not fit
-                        the run's context are skipped as in the official script (counted: `skipped`).
+                        same conversation as a "User: / Assistant:" transcript ending in "Assistant:". Official grader verbatim (prefix check, then SequenceMatcher ratio). BASE: items whose prompt does
+                        not fit the run's context are skipped as in the official script (NaN, not in the mean, counted: `skipped`). CHAT (owner 11-16, task key `over_context: zero`, as FRAMES): the window
+                        is the model's own context and an item that does not fit is NOT generated, scores 0 (wrong), stays in the 300 and is counted by the metric `over_context`.
 frames_chat             FRAMES (google/frames-benchmark, 824 multi-hop questions), ORACLE setting: all linked Wikipedia articles (parasail-ai/frames-benchmark-wikipedia, the pinned Oct-2024 dump) in the
-                        prompt, middle-truncated to the context. Judge-graded: the lighteval metric is `answered`, the accuracy comes from the judge stage (titan_eval/evals/judge.py, grader `frames`
-                        = the paper's auto-rating prompt, Figure 6).
+                        prompt, NEVER cut (owner 11-16, task key `over_context: zero`): the window is the model's own context, and a question whose prompt + generation cap + margin does not fit is not
+                        generated at all (`specific["no_generation"]`, the vLLM model sends no request), counts as WRONG in the 824, is recorded (`specific["over_context"]`, metric `over_context`)
+                        and is not sent to the judge. Judge-graded: the lighteval metrics are `answered` and `over_context`, the accuracy comes from the judge stage (titan_eval/evals/judge.py,
+                        grader `frames` = the paper's auto-rating prompt, Figure 6).
 
 The budget of every prompt = the run's context (TITAN_EVAL_MAX_MODEL_LEN, the task's vllm.max_model_len) minus the generation cap minus a margin; the tokenizer is the model's own
 (TITAN_EVAL_TOKENIZER). Without these variables nothing is cut or skipped (unit tests, `lighteval tasks inspect`).
@@ -57,6 +60,7 @@ from lighteval.metrics.metrics_sample import SampleLevelComputation
 from lighteval.metrics.utils.metric_utils import SampleLevelMetricGrouping
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc, SamplingMethod
+from lighteval.tasks import answer_fit as af
 from lighteval.tasks.sampling import sample_per_group
 from lighteval.tasks.tasks.chat_long import (
     ENV_MAX_MODEL_LEN,
@@ -73,7 +77,7 @@ from lighteval.tasks.tasks.chat_long import (
 N_SAMPLES = 1
 NAN = float("nan")
 CHAT_PER_MESSAGE = 6       # tokens a chat template adds around one message (ChatML 5, Llama-3 header 5); counted for conversations with many turns
-SKIP_USER = "Reply with the word OK."      # the prompt of an item that does not fit the context: skipped (NaN metrics), kept tiny so the run does not spend anything on it
+SKIP_USER = af.SKIP_USER                   # the prompt of an item that does not fit the context: skipped (base: NaN metrics) or not generated (chat: scored 0), kept tiny
 
 
 def _env_int(name: str) -> int | None:
@@ -434,13 +438,15 @@ TASKS_TABLE += _build_gsm_tasks()
 
 # ============================================================================================================== MRCR
 # Official handling (openai/mrcr README, checked 11-14): `MAX_CONTEXT_WINDOW = 1000000  # Set accordingly`; `if n_tokens(messages) > MAX_CONTEXT_WINDOW: continue` (o200k tokens of the PROMPT contents) = the item is
-# skipped, not scored; the example call `client.chat.completions.create(model=MODEL, messages=messages)` has NO generation cap. Ours: an item is skipped (NaN, `skipped`) when prompt + the run's generation cap +
-# MRCR_MARGIN does not fit the run's window. The window per bin is the registry yaml's (titan_eval: longest prompt of the bin in the Qwen3.5 tokenizer + budget + 64, clamped to the model's context by `min_context`).
+# skipped, not scored; the example call `client.chat.completions.create(model=MODEL, messages=messages)` has NO generation cap. Ours, BASE: an item is skipped (NaN, `skipped`) when prompt + the run's generation cap +
+# MRCR_MARGIN does not fit the run's window (the registry yaml's, clamped to the model's context by `min_context`). Ours, CHAT (owner 11-16, `over_context: zero`): no window of the task: the model's own context; an item that
+# does not fit is not generated and scores 0, as FRAMES (NeMo-Skills' mrcr/prepare.py skips such items instead: `continue`).
 MRCR_BINS = (8192, 16384, 32768, 65536, 131072, 262144)
 MRCR_NEEDLES = (2, 4, 8)
 MRCR_BASE_NEW = 1024                    # the gold answers are up to 800 tokens (Qwen tokenizer; max 3,563 characters)
-MRCR_CHAT_NEW = 8192
+MRCR_CHAT_NEW = 32768                   # chat: the suite budget (owner 11-16; the run's gen.max_new_tokens replaces it): docs/evals/tasks/mrcr.md "Generation setup"
 MRCR_MARGIN = 64
+MRCR_MIN_ANSWER = 1024                  # chat: the floor of the answer budget (OLMES openai_mrcr.py:44 `min_acceptable_gen_toks`): below it the question is not generated and scores 0
 MRCR_BASE_STOP = ["\n\nUser:"]
 
 
@@ -471,7 +477,14 @@ def mrcr_doc(line, task_name: str, chat: bool) -> Doc:
         n_prompt = _count_messages(messages, tok) if chat else len(tok.encode(plain, add_special_tokens=False))
         skipped = not _fit(n_prompt, new, MRCR_MARGIN)
     spec = {"random_string": line["random_string_to_prepend"], "n_needles": int(line["n_needles"]), "bin_upper": int(line["bin_upper"]), "n_chars": int(line["n_chars"]),
-            "desired_msg_index": int(line["desired_msg_index"]), "total_messages": int(line["total_messages"]), "n_tokens": n_prompt, "skipped": skipped}
+            "desired_msg_index": int(line["desired_msg_index"]), "total_messages": int(line["total_messages"]), "n_tokens": n_prompt}
+    if chat:
+        # owner 11-16 (`over_context: zero`, the OLMES rule): the answer budget shrinks to what the context leaves (>= MRCR_MIN_ANSWER), else the question is not generated and scores 0
+        fit = af.fit_answer(n_prompt, new, MRCR_MIN_ANSWER, MRCR_MARGIN) if tok_path else af.no_fit(new)
+        af.mark(spec, fit)
+        skipped = fit["over_context"]
+    else:
+        spec["skipped"] = skipped                              # base: skipped (NaN, not in the mean), the official rule
     if skipped:
         query = SKIP_USER
         if chat:
@@ -484,18 +497,24 @@ def mrcr_doc(line, task_name: str, chat: bool) -> Doc:
     return Doc(task_name=task_name, query=query, choices=[line["answer"]], gold_index=0, specific=spec)
 
 
-def _mrcr_names():
-    return ("score", *[f"score_{n}needle" for n in MRCR_NEEDLES], "prefix_ok", "exact", "skipped")
+def _mrcr_names(chat: bool = False):
+    return ("score", *[f"score_{n}needle" for n in MRCR_NEEDLES], "prefix_ok", "exact", *(("over_context", "reduced_budget") if chat else ("skipped",)))
 
 
 def _mrcr_score_fn(base: bool):
     def score(doc: Doc, pred: str) -> dict[str, float]:
         spec = doc.specific or {}
-        if spec.get("skipped"):
+        if base and spec.get("skipped"):                   # base: not in the mean (the official rule)
             return {name: NAN for name in _mrcr_names() if name != "skipped"} | {"skipped": 1.0}
+        if not base and spec.get("over_context"):          # chat: wrong, stays in the mean (and in its needle count)
+            out = {"score": 0.0, "prefix_ok": 0.0, "exact": 0.0, "over_context": 1.0, "reduced_budget": 0.0}
+            for n in MRCR_NEEDLES:
+                out[f"score_{n}needle"] = _nan_if(spec["n_needles"] == n, 0.0)
+            return out
         text = pred.lstrip() if base else pred         # base: the model continues "Assistant:" with a space; chat: the text as it is (the official grader does not strip)
         value = mrcr_grade(text, doc.get_golds()[0], spec["random_string"])
-        out = {"score": value, "prefix_ok": float(text.startswith(spec["random_string"])), "exact": float(value == 1.0), "skipped": 0.0}
+        out = {"score": value, "prefix_ok": float(text.startswith(spec["random_string"])), "exact": float(value == 1.0)}
+        out.update({"skipped": 0.0} if base else {"over_context": 0.0, "reduced_budget": float(bool(spec.get("reduced_budget")))})
         for n in MRCR_NEEDLES:
             out[f"score_{n}needle"] = _nan_if(spec["n_needles"] == n, value)
         return out
@@ -504,13 +523,14 @@ def _mrcr_score_fn(base: bool):
 
 
 def mrcr_metric(base: bool) -> SampleLevelMetricGrouping:
-    names = _mrcr_names()
+    names = _mrcr_names(chat=not base)
+    shares = names[-1:] if base else names[-2:]
     return SampleLevelMetricGrouping(
         metric_name=list(names),
         sample_level_fn=ChatSamples(N_SAMPLES, _mrcr_score_fn(base), names, ks=()),
         category=SamplingMethod.GENERATIVE,
-        corpus_level_fn={name: (np.mean if name == "skipped" else _members_avg) for name in names},
-        higher_is_better={name: name != "skipped" for name in names},
+        corpus_level_fn={name: (np.mean if name in shares else _members_avg) for name in names},
+        higher_is_better={name: name not in shares for name in names},
     )
 
 
@@ -539,8 +559,9 @@ TASKS_TABLE += [_mrcr_config(b, chat) for b in MRCR_BINS for chat in (False, Tru
 
 
 # ============================================================================================================ FRAMES
-FRAMES_CHAT_NEW = 8192
-FRAMES_MARGIN = 256
+FRAMES_CHAT_NEW = 32768                 # the suite budget (owner 11-16; the run's gen.max_new_tokens replaces it): docs/evals/tasks/frames_chat.md "Generation setup"
+FRAMES_MARGIN = 64
+FRAMES_MIN_ANSWER = 1024                # the floor of the answer budget (the OLMES MRCR rule, owner 11-16): below it the question is not generated and scores 0
 FRAMES_PROMPT_HEAD = "Answer the question below using the Wikipedia articles provided.\n\n"
 FRAMES_PROMPT_TAIL = "\n\nQuestion: {question}\n\nGive your final answer on the last line as \"Final answer: <answer>\"."
 
@@ -550,43 +571,52 @@ def frames_articles(articles: list[dict]) -> str:
 
 
 class _FramesGen(SampleLevelComputation):
-    """`answered` (share of non-empty answers) and `truncated` (share of prompts cut in the middle); the accuracy comes from the judge stage."""
+    """`answered` (share of non-empty answers over ALL questions: an over-context question is not answered), `over_context` (share of questions that were not generated: the answer budget
+    the context leaves is below the floor) and `reduced_budget` (share of generated questions whose answer budget was cut below the task's); the accuracy comes from the judge stage."""
 
     def compute(self, doc, model_response, **kwargs) -> dict[str, float]:
+        spec = doc.specific or {}
+        over = bool(spec.get("over_context"))
         texts = list(model_response.final_text)
-        return {"answered": float(np.mean([1.0 if t and t.strip() else 0.0 for t in texts])) if texts else 0.0,
-                "truncated": float(bool((doc.specific or {}).get("truncated")))}
+        answered = 0.0 if over or not texts else float(np.mean([1.0 if t and t.strip() else 0.0 for t in texts]))
+        return {"answered": answered, "over_context": float(over), "reduced_budget": float(bool(spec.get("reduced_budget")))}
 
 
 frames_metric = SampleLevelMetricGrouping(
-    metric_name=["answered", "truncated"],
+    metric_name=["answered", "over_context", "reduced_budget"],
     sample_level_fn=_FramesGen(),
     category=SamplingMethod.GENERATIVE,
-    corpus_level_fn={"answered": np.mean, "truncated": np.mean},
-    higher_is_better={"answered": True, "truncated": False},
+    corpus_level_fn={"answered": np.mean, "over_context": np.mean, "reduced_budget": np.mean},
+    higher_is_better={"answered": True, "over_context": False, "reduced_budget": False},
 )
 
 
 def frames_chat_prompt(line, task_name: str = None):
+    """The oracle prompt, never cut. With the run's context and tokenizer known (the run exports them) the OLMES rule applies (answer_fit.fit_answer): the answer budget is
+    min(task budget, context - prompt tokens - 64); below FRAMES_MIN_ANSWER the question is marked `over_context` + `no_generation` and carries the tiny SKIP_USER query (the vLLM model
+    sends no request, the metrics count it, the judge stage grades it wrong without a call); a smaller budget that still reaches the floor is the doc's own `max_new_tokens` (`reduced_budget`).
+    Without the run's variables (unit tests, `lighteval tasks inspect`) nothing is marked."""
     articles = json.loads(line["articles"])
     body = FRAMES_PROMPT_HEAD + frames_articles(articles) + FRAMES_PROMPT_TAIL.format(question=line["question"])
-    n_tokens, cut = -1, False
+    n_tokens = -1
     tok_path = os.environ.get(ENV_TOKENIZER)
-    ctx = run_context()
-    if tok_path and ctx:
-        tok = _tokenizer(tok_path)
-        budget = ctx - run_new_tokens(FRAMES_CHAT_NEW) - FRAMES_MARGIN
-        if budget <= 0:
-            raise ValueError(f"frames_chat: no room for the prompt (context - generation - margin = {budget})")
-        body, n_tokens, cut = cut_middle(body, budget, tok)
     reasoning = [t.strip() for t in str(line["reasoning_types"]).split("|") if t.strip()]
+    specific = {"question": line["question"], "gold": str(line["answer"]), "id": int(line["id"]), "reasoning_types": str(line["reasoning_types"]),
+                "reasoning_type": reasoning[0] if reasoning else "unknown", "n_articles": int(line["n_articles"])}
+    new = run_new_tokens(FRAMES_CHAT_NEW)
+    if tok_path and run_context():
+        n_tokens = len(_tokenizer(tok_path).encode(body, add_special_tokens=False))
+        fit = af.fit_answer(n_tokens, new, FRAMES_MIN_ANSWER, FRAMES_MARGIN)
+    else:
+        fit = af.no_fit(new)
+    specific["n_tokens"] = n_tokens
+    af.mark(specific, fit)
     return Doc(
         task_name=task_name,
-        query=body,
+        query=SKIP_USER if fit["over_context"] else body,
         choices=[str(line["answer"])],
         gold_index=0,
-        specific={"question": line["question"], "gold": str(line["answer"]), "id": int(line["id"]), "reasoning_types": str(line["reasoning_types"]),
-                  "reasoning_type": reasoning[0] if reasoning else "unknown", "n_articles": int(line["n_articles"]), "n_tokens": n_tokens, "truncated": cut},
+        specific=specific,
     )
 
 

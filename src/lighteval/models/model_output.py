@@ -142,6 +142,9 @@ class ModelResponse:
 
     # Other metadata
     truncated_tokens_count: int = 0  # How many tokens truncated
+    # max_new_tokens the request actually got when its doc carried its own (`doc.specific["max_new_tokens"]`, titan_eval `over_context: zero`: the answer budget shrunk to fit the context);
+    # None = the task's / run's budget. Shows up in the details parquet as model_response.generation_cap.
+    generation_cap: int | None = None
     padded_tokens_count: int = 0  # How many tokens of padding
 
     @property
@@ -164,6 +167,7 @@ class ModelResponse:
             finish_reasons=[self.finish_reasons[index]] if self.finish_reasons else [],
             truncated_tokens_count=self.truncated_tokens_count,
             padded_tokens_count=self.padded_tokens_count,
+            generation_cap=self.generation_cap,
         )
 
 

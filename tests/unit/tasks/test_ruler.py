@@ -53,16 +53,16 @@ def test_runtime_prompt_helper_matches_ruler_prompt():
 def test_ruler_generation_sizes_match_reference_defaults():
     tasks = ruler.get_ruler_tasks(
         "dummy-tokenizer",
-        lengths=[512],
+        lengths=[2048],
         subsets=["niah_single_1", "vt", "cwe", "fwe", "qa_2"],
     )
     task_map = {task.name: task.generation_size for task in tasks}
 
-    assert task_map["ruler_512:niah_single_1"] == 50
-    assert task_map["ruler_512:vt"] == 50
-    assert task_map["ruler_512:cwe"] == 100
-    assert task_map["ruler_512:fwe"] == 50
-    assert task_map["ruler_512:qa_2"] == 50
+    assert task_map["ruler_2048:niah_single_1"] == 50
+    assert task_map["ruler_2048:vt"] == 50
+    assert task_map["ruler_2048:cwe"] == 100
+    assert task_map["ruler_2048:fwe"] == 50
+    assert task_map["ruler_2048:qa_2"] == 50
 
 
 def test_ruler_qa_prompt_matches_reference_template():
@@ -224,3 +224,87 @@ def test_non_qa_cached_lengths_match_retokenized_runtime_prompts():
 
         assert length == len(sample["input"] + "\n" + sample["gen_prefix"]) + sample["tokens_to_generate"]
         assert length <= sample["max_length"]
+
+
+# ---- chat variant (titan_eval, owner 11-16): ruler_<L>_chat:<subset> ---------------------------------------------------------------------------------------------------------------
+
+
+def test_ruler_chat_prompt_is_the_prepared_input_without_the_answer_prefix():
+    line = {
+        "input": "Some text.\nWhat is the special magic number for tenuous-thirst mentioned in the provided text?",
+        "gen_prefix": "The special magic number for tenuous-thirst mentioned in the provided text is",
+        "outputs": ["2867825"],
+    }
+    doc = ruler.ruler_chat_prompt(line, "ruler_4096_chat:niah_single_1|0")
+
+    assert doc.query == line["input"], "the user message is the RULER prompt as prepared (its question is the last line)"
+    assert line["gen_prefix"] not in doc.query
+    assert doc.choices == ["2867825"] and doc.gold_index == [0] and doc.task_name == "ruler_4096_chat:niah_single_1|0"
+    assert not doc.specific, "no gen_prefix in specific: the scorer must not prepend the answer prefix to a chat reply"
+    base = ruler.ruler_prompt(line, "ruler_4096:niah_single_1|0")
+    assert base.query == line["input"] + "\n" + line["gen_prefix"] and base.specific == {"gen_prefix": line["gen_prefix"]}, "the base task is unchanged"
+
+
+def test_ruler_chat_tasks_share_data_budgets_and_scorer_with_the_base_tasks():
+    subsets = ["niah_single_1", "niah_multivalue", "vt", "cwe", "fwe", "qa_1", "qa_2"]
+    tasks = {t.name: t for t in ruler.get_ruler_tasks("dummy-tokenizer", lengths=[4096, 8192], subsets=subsets)}
+    assert len(tasks) == 2 * 2 * len(subsets), "base and chat variant of every (length, subset)"
+    for length in (4096, 8192):
+        for sub in subsets:
+            base, chat = tasks[f"ruler_{length}:{sub}"], tasks[f"ruler_{length}_chat:{sub}"]
+            assert chat.hf_repo == base.hf_repo, "the SAME prepared folder: nothing extra to prepare"
+            assert chat.generation_size == base.generation_size == ruler._gen_size(sub, length), "RULER's own answer size per subtask"
+            assert [m.metric_name for m in base.metrics] == ["ruler_match"] and [m.metric_name for m in chat.metrics] == [["ruler_match", "over_context"]], "the base scorer + the share not generated"
+            assert base.prompt_function is ruler.ruler_prompt and chat.prompt_function is ruler.ruler_chat_prompt
+            assert not chat.stop_sequence and not base.stop_sequence, "no stop sequence: RULER has none, a chat reply ends at the end of turn"
+    assert tasks["ruler_4096_chat:niah_multivalue"].generation_size == 300 and tasks["ruler_8192_chat:niah_multivalue"].generation_size == 250
+    assert tasks["ruler_8192_chat:cwe"].generation_size == 100 and tasks["ruler_8192_chat:vt"].generation_size == 50
+
+
+def test_ruler_chat_scoring_is_ruler_match_on_the_reply_only():
+    from lighteval.metrics.metrics_sample import RulerStringMatch
+    from lighteval.models.model_output import ModelResponse
+
+    metric = RulerStringMatch()
+    line = {"input": "Q?", "gen_prefix": "Answer: The top 10 words that appear most often in the list are:", "outputs": ["alpha", "beta", "list"]}
+    chat = ruler.ruler_chat_prompt(line, "ruler_4096_chat:cwe|0")
+    base = ruler.ruler_prompt(line, "ruler_4096:cwe|0")
+    reply = ModelResponse(text=["1. alpha 2. beta"])
+    assert metric.compute(chat, reply) == 2 / 3, "a fraction of the golds found in the reply"
+    assert metric.compute(base, reply) == 1.0, "the base scorer prepends the answer prefix (it contains the gold word `list`): the chat doc must not get that credit"
+    # a thinking reply: the scored text is what follows the last </think> (final_text of the strict-reasoning run)
+    think = ModelResponse(text=["<think>beta alpha</think> nothing"])
+    think.text_post_processed = ["nothing"]
+    assert metric.compute(chat, think) == 0.0, "the scorer reads final_text, never the think block"
+    qa = ruler.ruler_chat_prompt({"input": "Q?", "gen_prefix": "Answer:", "outputs": ["Paris", "paris, france"]}, "ruler_4096_chat:qa_1|0")
+    assert metric.compute(qa, ModelResponse(text=["It is Paris."])) == 1.0, "QA: any gold, normalised substring (the `:qa_` rule holds for the chat names)"
+    assert metric.compute(qa, ModelResponse(text=["London"])) == 0.0
+
+
+def test_ruler_chat_item_that_does_not_fit_the_window_is_marked_and_scores_zero():
+    """Owner 11-16 (`over_context: zero`, the OLMES rule): floor = the subtask's own answer size; the chat prompt size is estimated from the stored base length."""
+    import os
+    from unittest import mock
+
+    from lighteval.models.model_output import ModelResponse
+
+    class Tok:
+        def encode(self, text, add_special_tokens=False):
+            return text.split(" ")
+
+    # qa_1 at 4096: own answer size 50; stored length 4000 = base prompt 3950 + 50; the prefix "\nAnswer:" is ONE word for this tokenizer
+    line = {"input": "Q?", "gen_prefix": "Answer:", "outputs": ["Paris"], "length": 4000}
+    name = "ruler_4096_chat:qa_1|0"
+    n_est = 4000 - 50 - 1 + 16                                                                       # answer_fit.CHAT_TEMPLATE_TOKENS
+    fits_at = n_est + 50 + 64                                                                         # prompt + the 50-token answer + the 64-token margin
+    with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(fits_at)}), mock.patch("lighteval.tasks.tasks.chat_long._tokenizer", return_value=Tok()):
+        ok = ruler.ruler_chat_prompt(line, name)
+    assert ok.specific["over_context"] is False and ok.specific["n_tokens"] == n_est and ok.specific["answer_budget"] == 50 and "no_generation" not in ok.specific and ok.query == "Q?"
+    with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(fits_at - 1)}), mock.patch("lighteval.tasks.tasks.chat_long._tokenizer", return_value=Tok()):
+        over = ruler.ruler_chat_prompt(line, name)
+    assert over.specific["over_context"] and over.specific["no_generation"] and over.query == "Reply with the word OK." and over.specific["answer_budget"] == 0
+    metric = ruler.ruler_chat_metric.sample_level_fn
+    assert metric.compute(over, ModelResponse(text=["Paris"])) == {"ruler_match": 0.0, "over_context": 1.0}, "an item not generated scores 0 whatever came back"
+    assert metric.compute(ok, ModelResponse(text=["It is Paris."])) == {"ruler_match": 1.0, "over_context": 0.0}
+    no_env = ruler.ruler_chat_prompt(line, name)                                                      # without the run's variables nothing is marked
+    assert not no_env.specific

@@ -348,22 +348,43 @@ class Mrcr(unittest.TestCase):
         self.assertTrue(d.query.endswith("in your response.\n\nAssistant:"))
         self.assertNotIn("chat_messages", d.specific)
 
-    def test_skip_when_the_prompt_does_not_fit(self):
-        big = mrcr_line()
-        msgs = json.loads(big["messages"])
+    def test_base_skips_and_chat_shrinks_the_budget_or_marks_over_context(self):
+        """Base: the official skip rule (NaN). Chat (owner 11-16, the OLMES rule): budget = min(task budget, context - prompt - 64); below the floor 1,024 the question is not generated."""
+        msgs = json.loads(mrcr_line()["messages"])
         msgs[2]["content"] = " ".join(["w"] * 3000)
-        big["messages"] = json.dumps(msgs)
+        big = dict(mrcr_line(), messages=json.dumps(msgs))
         with env(2000, 500), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
-            self.assertTrue(lm.mrcr_doc(big, "t", chat=True).specific["skipped"])
-            self.assertTrue(lm.mrcr_doc(big, "t", chat=False).specific["skipped"])
-            self.assertFalse(lm.mrcr_doc(mrcr_line(), "t", chat=True).specific["skipped"])
+            b = lm.mrcr_doc(big, "t", chat=False)
+            self.assertTrue(b.specific["skipped"] and "over_context" not in b.specific and "no_generation" not in b.specific, "base: the official skip rule, as before")
+        n = None
+        with env(100000, 5000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+            n = lm.mrcr_doc(big, "t", chat=True).specific["n_tokens"]
+        self.assertTrue(n > 3000)
+        for ctx, new, want in ((n + 5000 + 64, 5000, ("full", 5000)),                    # exactly fits
+                               (n + 5000 + 64 - 1, 5000, ("reduced", 4999)),             # one token short: a reduced budget (still >= 1,024)
+                               (n + 1024 + 64, 5000, ("reduced", 1024)),                 # the floor
+                               (n + 1024 + 64 - 1, 5000, ("over", 0))):                  # below the floor: not generated
+            with env(ctx, new), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+                c = lm.mrcr_doc(big, "t", chat=True)
+            sp = c.specific
+            kind = "over" if sp["over_context"] else ("reduced" if sp["reduced_budget"] else "full")
+            self.assertEqual((kind, sp["answer_budget"]), want, (ctx, new))
+            self.assertEqual(sp.get("max_new_tokens"), want[1] if kind == "reduced" else None, "the request's own cap only for a reduced item")
+            self.assertEqual(sp["task_budget"], new)
+            self.assertEqual(bool(sp.get("no_generation")), kind == "over")
+            self.assertNotIn("skipped", sp)
+            if kind == "over":
+                self.assertEqual((c.query, c.specific["chat_messages"]), (lm.SKIP_USER, [{"role": "user", "content": lm.SKIP_USER}]))
+            else:
+                self.assertEqual(c.specific["chat_messages"], msgs)
 
     def test_scores_chat(self):
         with no_env():
             d = lm.mrcr_doc(mrcr_line(n=4), "t", chat=True)
         m = lm.mrcr_metric(base=False)
         s = score(m, d, "aYooSG8CQgpoem two")
-        self.assertEqual((s["score"], s["score_4needle"], s["prefix_ok"], s["exact"], s["skipped"]), (1.0, 1.0, 1.0, 1.0, 0.0))
+        self.assertEqual((s["score"], s["score_4needle"], s["prefix_ok"], s["exact"], s["over_context"], s["reduced_budget"]), (1.0, 1.0, 1.0, 1.0, 0.0, 0.0))
+        self.assertNotIn("skipped", s)
         self.assertTrue(math.isnan(s["score_2needle"]) and math.isnan(s["score_8needle"]))
         w = score(m, d, "aYooSG8CQgpoem one")
         self.assertTrue(0 < w["score"] < 1)
@@ -377,11 +398,29 @@ class Mrcr(unittest.TestCase):
             d = lm.mrcr_doc(mrcr_line(), "t", chat=False)
         self.assertEqual(score(lm.mrcr_metric(base=True), d, " aYooSG8CQgpoem two")["score"], 1.0)
 
-    def test_skipped_doc_scores_nan(self):
+    def test_skipped_doc_scores_nan_in_the_base_task(self):
         d = Doc(task_name="t", query="q", choices=["x"], gold_index=0, specific={"random_string": "r", "n_needles": 2, "skipped": True})
-        s = score(lm.mrcr_metric(False), d, "OK")
+        s = score(lm.mrcr_metric(True), d, "OK")
         self.assertEqual(s["skipped"], 1.0)
         self.assertTrue(all(math.isnan(v) for k, v in s.items() if k != "skipped"))
+
+    def test_over_context_doc_scores_zero_and_stays_in_the_mean_of_the_chat_task(self):
+        """Owner 11-16: the chat task counts a question that was not generated as WRONG (0, not NaN): the score is over all 300 questions, also per needle count."""
+        over = Doc(task_name="t", query="q", choices=["x"], gold_index=0, specific={"random_string": "r", "n_needles": 4, "over_context": True, "no_generation": True})
+        m = lm.mrcr_metric(False)
+        s = score(m, over, "r the model would have copied it")                       # whatever text came back is not read
+        self.assertEqual((s["score"], s["prefix_ok"], s["exact"], s["over_context"], s["reduced_budget"], s["score_4needle"]), (0.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+        self.assertTrue(math.isnan(s["score_2needle"]) and math.isnan(s["score_8needle"]))
+        ok = Doc(task_name="t", query="q", choices=["rpoem"], gold_index=0, specific={"random_string": "r", "n_needles": 4, "over_context": False, "reduced_budget": True})
+        fine = score(m, ok, "rpoem")
+        self.assertEqual((fine["score"], fine["over_context"], fine["reduced_budget"]), (1.0, 0.0, 1.0), "a reduced-budget item is scored normally and counted as reduced")
+        agg = m.corpus_level_fn
+        self.assertEqual(agg["score"]([fine["score"], s["score"]]), 0.5, "one of two questions not generated: the mean has them both")
+        self.assertEqual(agg["score_4needle"]([fine["score_4needle"], s["score_4needle"], float("nan")]), 0.5)
+        self.assertEqual(agg["over_context"]([0.0, 1.0, 0.0, 0.0]), 0.25)
+        self.assertEqual(agg["reduced_budget"]([1.0, 0.0]), 0.5)
+        self.assertEqual(lm._mrcr_names(chat=True)[-2:], ("over_context", "reduced_budget"))
+        self.assertEqual(lm._mrcr_names()[-1], "skipped")
 
     def test_task_configs(self):
         names = [c.name for c in lm.TASKS_TABLE if c.name.startswith("mrcr_")]
@@ -402,21 +441,50 @@ class Frames(unittest.TestCase):
         self.assertTrue(d.query.startswith("Answer the question below using the Wikipedia articles provided.\n\n<article 1>\nTitle: A\nURL: https://en.wikipedia.org/wiki/A\n\ntext a\n</article 1>"))
         self.assertIn("<article 2>\nTitle: B", d.query)
         self.assertTrue(d.query.endswith('Question: Who?\n\nGive your final answer on the last line as "Final answer: <answer>".'))
-        self.assertEqual((d.specific["gold"], d.specific["question"], d.specific["reasoning_type"], d.specific["truncated"]), ("Jane Ballou", "Who?", "Numerical reasoning", False))
+        self.assertEqual((d.specific["gold"], d.specific["question"], d.specific["reasoning_type"], d.specific["over_context"]), ("Jane Ballou", "Who?", "Numerical reasoning", False))
+        self.assertNotIn("no_generation", d.specific)
+        self.assertEqual(d.specific["n_tokens"], -1, "no run variables: nothing counted, nothing marked")
 
-    def test_middle_truncation_keeps_the_question(self):
-        row = dict(self.ROW, articles=json.dumps([{"title": "A", "link": "l", "text": " ".join(f"w{i}" for i in range(2000))}]))
-        with env(500, 100), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
-            d = lm.frames_chat_prompt(row, "t")
-        self.assertTrue(d.specific["truncated"])
-        self.assertTrue(d.query.endswith('"Final answer: <answer>".'))
-        self.assertIn("Question: Who?", d.query)
+    def _frames_row(self, words):
+        return dict(self.ROW, articles=json.dumps([{"title": "A", "link": "l", "text": " ".join(f"w{i}" for i in range(words))}]))
 
-    def test_metric_counts_answered_and_truncated(self):
-        d = Doc(task_name="t", query="q", choices=["x"], gold_index=0, specific={"truncated": True})
+    def test_a_prompt_that_fits_is_kept_whole(self):
+        with env(10000, 2000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+            d = lm.frames_chat_prompt(self._frames_row(300), "t")
+        sp = d.specific
+        self.assertEqual((sp["over_context"], sp["reduced_budget"], sp["answer_budget"], sp["task_budget"]), (False, False, 2000, 2000))
+        self.assertTrue(sp["n_tokens"] > 300 and sp["n_tokens"] + 2000 + lm.FRAMES_MARGIN <= 10000)
+        self.assertIn("w299", d.query)
+        self.assertTrue(d.query.endswith('"Final answer: <answer>".') and "no_generation" not in sp and "max_new_tokens" not in sp)
+
+    def test_the_answer_budget_shrinks_to_what_the_context_leaves_and_zero_below_the_floor(self):
+        """Owner 11-16 (the OLMES rule, openai_mrcr.py:41-46): budget = min(task budget, context - prompt - 64); the question is not generated only when that is below 1,024."""
+        row = self._frames_row(300)
+        with env(100000, 5000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+            n = lm.frames_chat_prompt(row, "t").specific["n_tokens"]
+        self.assertEqual(lm.FRAMES_MARGIN, 64)
+        for ctx, want in ((n + 5000 + 64, ("full", 5000)), (n + 5000 + 64 - 1, ("reduced", 4999)), (n + 1024 + 64, ("reduced", 1024)), (n + 1024 + 64 - 1, ("over", 0))):
+            with env(ctx, 5000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+                d = lm.frames_chat_prompt(row, "t")
+            sp = d.specific
+            kind = "over" if sp["over_context"] else ("reduced" if sp["reduced_budget"] else "full")
+            self.assertEqual((kind, sp["answer_budget"]), want, ctx)
+            self.assertEqual(sp.get("max_new_tokens"), want[1] if kind == "reduced" else None)
+            self.assertEqual(bool(sp.get("no_generation")), kind == "over")
+            self.assertEqual(d.query == lm.SKIP_USER, kind == "over", "an item that is not generated carries the tiny query, every other item its whole, never cut prompt")
+            if kind != "over":
+                self.assertIn("w299", d.query)
+                self.assertEqual(d.specific["n_tokens"], n)
+            self.assertEqual((sp["gold"], sp["question"]), ("Jane Ballou", "Who?"), "the judge stage always gets the question and the gold")
+
+    def test_metric_counts_answered_over_context_and_reduced_budget(self):
+        d = Doc(task_name="t", query="q", choices=["x"], gold_index=0, specific={"over_context": False, "reduced_budget": True})
         s = lm.frames_metric.sample_level_fn.compute(d, ModelResponse(text=["Final answer: x"]))
-        self.assertEqual(s, {"answered": 1.0, "truncated": 1.0})
+        self.assertEqual(s, {"answered": 1.0, "over_context": 0.0, "reduced_budget": 1.0})
         self.assertEqual(lm.frames_metric.sample_level_fn.compute(d, ModelResponse(text=["  "]))["answered"], 0.0)
+        over = Doc(task_name="t", query="q", choices=["x"], gold_index=0, specific={"over_context": True, "no_generation": True})
+        self.assertEqual(lm.frames_metric.sample_level_fn.compute(over, ModelResponse(text=[""])), {"answered": 0.0, "over_context": 1.0, "reduced_budget": 0.0})
+        self.assertEqual(lm.frames_metric.sample_level_fn.compute(over, ModelResponse(text=["OK"]))["answered"], 0.0, "whatever came back, an item not generated is not answered")
 
 
 # ------------------------------------------------------------------------------------------------------- prompt manager hook

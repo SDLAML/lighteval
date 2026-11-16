@@ -46,8 +46,11 @@ need fewer tokens than Llama-2, so fewer rows are cut than in HELMET's own Llama
 
 BASE variant (`helmet_<L>`): HELMET's `prompt_template` = user template + "\n" + the answer prefix ("Answer:", "label:", "Ranking:", ...), plain text, no chat template, greedy,
 the generation length of the HELMET config, a newline stop for RAG / re-rank / ICL; the prefix is prepended to the completion before parsing (HELMET eval.py). The
-2 in-context demos of HELMET (shots 2) are part of the prepared prompts. CHAT variant (`helmet_<L>_chat`): HELMET's `user_template` (without the answer prefix) as one user
-message through the model's chat template; the scored text is what follows the last </think>; no newline stop. Both variants score with the same HELMET functions.
+2 in-context demos of HELMET (shots 2) are part of the prepared prompts. CHAT variant (`helmet_<L>_chat`, owner 11-16): follows HELMET's own `use_chat_template` per dataset (configs/*.yaml line 6; OLMES helmet_tasks.py agrees): the datasets with false
+(recall: json_kv, niah_*; RAG: kilt_*; re-rank: msmarco; ICL) get EXACTLY the base prompt as plain text (no chat template, the answer prefix, the newline stop of `stop_new_line`; the doc's
+`specific["plain_text"]`: prompt manager and vLLM model keep the task's stop sequences) and are scored as the base variant; the datasets with true (long QA: infbench_qa / infbench_choice,
+narrativeqa, summarisation) get HELMET's `user_template` (without the answer prefix) as one user message through the model's chat template, answer = the text after the last </think>.
+Both use HELMET's own generation length per dataset and the same scoring functions; `over_context` (answer_fit.py, the OLMES rule) counts the items that do not fit the window.
 
 DATA. `titan-eval prepare helmet` (login node) cuts the shipped HELMET files with HELMET's own sampling (random.seed(42) + random.sample of the sorted question keys,
 `Dataset.shuffle(seed=42).select(100)`, per-question demo hash) into compact folders $HF_HOME/lighteval/helmet/<DATA_TAG>/base/<L>/<name>/ (one row per prompt: id, question,
@@ -78,6 +81,7 @@ from typing import Callable
 import numpy as np
 
 from lighteval.metrics.chat_metrics import ChatSamples
+from lighteval.tasks import answer_fit
 from lighteval.metrics.utils.metric_utils import SampleLevelMetricGrouping
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc, SamplingMethod
@@ -102,8 +106,8 @@ N_ICL = 100                                                         # HELMET HEA
 SHOTS = 2                                                           # HELMET: --shots 2 (demos of RAG / json_kv / re-rank / long documents); ICL has its own shots in the dataset name
 
 LENGTHS = (8192, 16384, 32768, 65536, 131072)
-CHAT_GEN = 4096                                                     # chat variant, NON-thinking: generation budget (the registry sets gen.max_new_tokens and max_model_len = L + CHAT_GEN; HELMET's own budgets are 20-200).
-                                                                    # A THINKING run gets the chat budget (32,768, capped by the model's context) on top of the prompt window L: titan_eval config.resolve, task yaml `prompt_tokens: L`
+# chat variant (owner 11-16): the generation size of a subset is HELMET's OWN generation_max_length (Spec.gen = princeton-nlp/HELMET configs/*.yaml, line 3 of recall / rag / rerank / icl / longqa),
+# like the base variant; the registry yaml has `own_gen_size: true` (gen.max_new_tokens stays unset) and max_model_len = prompt window L + CHAT_MARGIN. The chat variant runs non-thinking only.
 CHAT_MARGIN = 64                                                    # tokens the chat template adds around the user message (prepare-time check)
 
 # ----------------------------------------------------------------------------------------------------------- the subsets
@@ -142,6 +146,13 @@ SPECS: dict[str, Spec] = {s.name: s for s in [
     Spec("multi_lexsum", "Summ", "multi_lexsum", 400, False, judged=True),
 ]}
 CATEGORIES = ("Recall", "RAG", "Re-rank", "ICL", "LongQA", "Summ")
+
+
+def official_chat_template(spec: Spec) -> bool:
+    """HELMET's own `use_chat_template` per dataset (princeton-nlp/HELMET @ aeadacc6 configs/*.yaml line 6; OLMES oe_eval/data/helmet_tasks.py `use_chat_template`, applied at
+    oe_eval/tasks/oe_eval_tasks/helmet.py:185 and :308-319): false for recall (json_kv, RULER niah), RAG (kilt_*), re-rank (msmarco) and ICL, true for long QA, summarisation and ALCE.
+    The CHAT variant follows it (owner 11-16): the datasets with false get the plain base prompt (no template, answer prefix, newline stop where HELMET has it)."""
+    return spec.category in ("LongQA", "Summ")
 STAGE1 = tuple(n for n, s in SPECS.items() if s.category in ("Recall", "RAG", "Re-rank", "ICL"))
 RULE_SCORED = STAGE1 + ("infbench_qa_eng", "infbench_choice_eng")          # scored by HELMET's own rule functions: base and chat variant
 JUDGE_SCORED = ("narrativeqa", "infbench_sum_eng", "multi_lexsum")          # HELMET scores these with a GPT-4o judge: chat variant only, through the local judge stage
@@ -334,7 +345,7 @@ def ndcg_cut(run: dict[str, float], qrels: dict[str, int], k: int) -> float:
 def prefixed(spec: Spec, fields: dict, completion: str, chat: bool) -> str:
     """HELMET eval.py: a completion (no chat template) is scored together with the answer prefix that ended the prompt. A chat reply is scored as it is, except for the
     datasets with `stop_new_line` (RAG, re-rank, ICL): HELMET stops their generation at the first newline whatever the template, so the reply counts up to its first line
-    (leading blank lines skipped; the generation budget of the chat variant is 4096 tokens non-thinking and up to 32,768 thinking, not HELMET's 20 / 200: without this a long reply that mentions the gold would score)."""
+    (leading blank lines skipped: HELMET stops there, and a chat model may answer in several lines whatever the budget)."""
     if chat:
         return completion.lstrip().split("\n")[0] if spec.stop_nl else completion
     return templates_of(spec)[1].format(**fields) + completion
@@ -431,36 +442,67 @@ def scoring_fields(line: dict) -> dict:
 
 
 def make_prompt_function(spec: Spec, chat: bool) -> Callable:
+    plain = chat and not official_chat_template(spec)       # chat variant, dataset with `use_chat_template: false`: the plain base prompt, no template (`specific["plain_text"]`)
+
     def prompt(line, task_name: str = None):
         fields = scoring_fields(line)
+        query = build_prompt(spec, line, chat and not plain)
+        sp = {"fields": fields, "answers": list(line["answers"]), "id": line.get("id")}
+        if plain:
+            sp["plain_text"] = True                           # the prompt manager renders the query as it is; the vLLM model keeps the task's newline stop
+        tok_path = os.environ.get("TITAN_EVAL_TOKENIZER")
+        if chat and tok_path and answer_fit.run_context() and "n_tokens" in line:
+            # owner 11-16 (`over_context: zero`, the OLMES rule): the prompt size comes from the stored base token count (the base prompt incl. the answer prefix, counted with the
+            # run's tokenizer when the copy was prepared): a plain-text dataset sends exactly that prompt; a chat-template dataset sends the user template only (minus the prefix) plus a chat
+            # template of at most CHAT_TEMPLATE_TOKENS. An item whose dataset answer size (HELMET's own generation_max_length, also the floor) does not fit the window
+            # (context - prompt - 64) is marked `over_context` + `no_generation`: no request, scored 0
+            n_est = int(line["n_tokens"])
+            if not plain:
+                from lighteval.tasks.tasks.chat_long import _tokenizer
+
+                tail = build_prompt(spec, line, chat=False)[len(query):]
+                n_est = n_est - len(_tokenizer(tok_path).encode(tail, add_special_tokens=False)) + answer_fit.CHAT_TEMPLATE_TOKENS
+            fit = answer_fit.fit_answer(n_est, spec.gen, spec.gen)
+            answer_fit.mark(sp, fit)
+            sp["n_tokens"] = n_est
+            if fit["over_context"]:
+                query = answer_fit.SKIP_USER
         return Doc(
             task_name=task_name,
-            query=build_prompt(spec, line, chat),
+            query=query,
             choices=[""],                       # ChatSamples needs one gold; the scorer reads `specific`
             gold_index=0,
-            specific={"fields": fields, "answers": list(line["answers"]), "id": line.get("id")},
+            specific=sp,
         )
 
     prompt.__name__ = f"helmet_{spec.name}_{'chat' if chat else 'base'}_prompt"
     return prompt
 
 
+def metric_names(spec: Spec, chat: bool) -> tuple[str, ...]:
+    """Base: the one HELMET score. Chat: + `over_context` (share of items not generated: the dataset's answer size does not fit the window)."""
+    return (*METRIC_NAMES[spec.kind], "over_context") if chat else METRIC_NAMES[spec.kind]
+
+
 def make_score_function(spec: Spec, chat: bool) -> Callable[[Doc, str], dict[str, float]]:
     def score(doc: Doc, pred: str) -> dict[str, float]:
         sp = doc.specific
-        return score_completion(spec, sp["fields"], sp["answers"], pred, chat)
+        if chat and sp.get("over_context"):
+            return {"helmet_score": 0.0, "over_context": 1.0}
+        out = score_completion(spec, sp["fields"], sp["answers"], pred, chat and not sp.get("plain_text"))      # a plain-text dataset is scored as the base variant (the answer prefix is prepended)
+        return {**out, "over_context": 0.0} if chat else out
 
     return score
 
 
 def make_metric(spec: Spec, chat: bool) -> SampleLevelMetricGrouping:
-    names = METRIC_NAMES[spec.kind]
+    names = metric_names(spec, chat)
     return SampleLevelMetricGrouping(
         metric_name=list(names),
         sample_level_fn=ChatSamples(1, make_score_function(spec, chat), names, ks=()),
         category=SamplingMethod.GENERATIVE,
         corpus_level_fn={n: np.mean for n in names},
-        higher_is_better={n: True for n in names},
+        higher_is_better={n: n != "over_context" for n in names},
     )
 
 
@@ -512,8 +554,8 @@ def get_helmet_tasks(tokenizer_path: str | None, names: tuple[str, ...] | None =
                     evaluation_splits=["test"],
                     few_shots_split=None,
                     few_shots_select=None,
-                    generation_size=CHAT_GEN if chat else spec.gen,
-                    stop_sequence=[] if chat else (["\n"] if spec.stop_nl else None),
+                    generation_size=spec.gen,                            # HELMET's own generation_max_length, both variants (own_gen_size in the chat yaml)
+                    stop_sequence=(["\n"] if spec.stop_nl else None) if (not chat or not official_chat_template(spec)) else [],
                     metrics=[make_metric(spec, chat)],
                     version=0,
                 ))

@@ -302,6 +302,99 @@ def test_prompt_truncation_is_an_error_when_asked():
         raise AssertionError("chat runs must refuse to cut a prompt")
 
 
+def test_a_doc_with_no_generation_is_never_sent_to_the_engine():
+    """titan_eval `over_context: zero` (owner 11-16): docs with specific["no_generation"] get an empty response, in order, and no request; the others are generated as before."""
+    from lighteval.models.vllm.vllm_model import VLLMModelConfig
+    seen = []
+    m = _stub_model(VLLMModelConfig(model_name="m", error_on_prompt_truncation=True), {})
+    orig = m._generate
+
+    def spy(inputs, **kw):
+        seen.append(len(inputs))
+        return orig(inputs=inputs, **kw)
+
+    m._generate = spy
+    docs = []
+    for q, skip in (("ab", False), ("OK", True), ("abcd", False), ("OK", True)):
+        d = _doc(1, query=q)
+        d.specific = {"no_generation": True, "over_context": True} if skip else {}
+        docs.append(d)
+    out = m._greedy_until(docs)
+    assert seen == [2], "only the two real prompts reach the engine, in ONE call"
+    assert len(out) == 4
+    assert [r.text for r in out] == [["t"], [""], ["t"], [""]], "responses stay in the order of the docs"
+    assert out[1].finish_reasons == [] and out[1].output_tokens == [[]] and out[1].input_tokens == [0, 1], "no generation: no finish reason (titan_eval counts nothing for it)"
+    assert out[0].finish_reasons == ["stop"]
+    seen.clear()
+    only = _doc(1, query="OK")
+    only.specific = {"no_generation": True}
+    assert [r.text for r in m._greedy_until([only])] == [[""]] and seen == [], "all docs skipped: no engine call at all"
+    plain = [_doc(1, query="ab"), _doc(1, query="cd")]                       # a doc without the key: unchanged
+    assert [r.text for r in m._greedy_until(plain)] == [["t"], ["t"]] and seen == [2]
+
+
+def test_a_doc_with_its_own_max_new_tokens_gets_that_cap_and_the_others_the_run_cap():
+    """titan_eval `over_context: zero` (owner 11-16, the OLMES rule): `specific["max_new_tokens"]` is the request's own cap, one engine call per distinct cap, order kept, recorded."""
+    from lighteval.models.vllm.vllm_model import VLLMModelConfig
+    calls = []
+    m = _stub_model(VLLMModelConfig(model_name="m", error_on_prompt_truncation=True), {})
+    orig = m._generate
+
+    def spy(inputs, max_new_tokens=None, **kw):
+        calls.append((len(inputs), max_new_tokens))
+        return orig(inputs=inputs, max_new_tokens=max_new_tokens, **kw)
+
+    m._generate = spy
+    docs = []
+    for q, cap in (("ab", None), ("abc", 85), ("abcd", None), ("abcde", 85), ("x", 40)):
+        d = _doc(1, query=q)                                           # task budget (generation_size) 10
+        d.specific = {"max_new_tokens": cap} if cap else {}
+        docs.append(d)
+    out = m._greedy_until(docs)
+    assert sorted(calls) == [(1, 40), (2, 10), (2, 85)], "one engine call per distinct cap: the task's 10 for two docs, 85 for two, 40 for one"
+    assert [r.generation_cap for r in out] == [None, 85, None, 85, 40] and len(out) == 5
+    assert [len(r.input_tokens) for r in out] == [2, 3, 4, 5, 1], "responses stay in the order of the docs"
+    # the check uses each doc's own cap: 95 prompt tokens + its own cap 5 = 100 fits max length 100, with the task's 10 it would not
+    big = _doc(1, query="x" * 95)
+    big.specific = {"max_new_tokens": 5}
+    assert _stub_model(VLLMModelConfig(model_name="m", error_on_prompt_truncation=True), {})._greedy_until([big])[0].generation_cap == 5
+    try:
+        _stub_model(VLLMModelConfig(model_name="m", error_on_prompt_truncation=True), {})._greedy_until([_doc(1, query="x" * 95)])
+    except ValueError as e:
+        assert "chat template head" in str(e)
+    else:
+        raise AssertionError("without its own cap the same doc does not fit")
+
+
+def test_plain_text_docs_keep_their_stop_sequences_in_a_chat_run():
+    """titan_eval (owner 11-16, HELMET's `use_chat_template: false` datasets): a split whose docs ALL carry specific["plain_text"] keeps the task's stop sequences although the run
+    uses the chat template; any other split still gets none (the end of turn stops it)."""
+    from lighteval.models.vllm.vllm_model import VLLMModelConfig
+    seen = []
+    m = _stub_model(VLLMModelConfig(model_name="m"), {})
+    orig = m._generate
+
+    def spy(inputs, max_new_tokens=None, stop_tokens=None, **kw):
+        seen.append(list(stop_tokens or []))
+        return orig(inputs=inputs, max_new_tokens=max_new_tokens, stop_tokens=stop_tokens, **kw)
+
+    m._generate = spy
+    plain, chat = _doc(1, query="ab"), _doc(1, query="cdef")
+    plain.specific, chat.specific = {"plain_text": True}, {}
+    plain.stop_sequences = chat.stop_sequences = ["\n"]
+    m._greedy_until([plain])
+    assert seen == [["\n"]], "a plain-text split keeps the newline stop"
+    seen.clear()
+    m._greedy_until([chat])
+    assert seen == [[]], "a chat-template split does not"
+    seen.clear()
+    plain.stop_sequences = ["\n"]
+    over = _doc(1, query="OK")
+    over.specific, over.stop_sequences = {"plain_text": True, "no_generation": True}, ["\n"]
+    m._greedy_until([plain, over])
+    assert seen == [["\n"]], "an over-context doc of a plain-text dataset keeps the split plain"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

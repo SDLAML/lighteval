@@ -46,6 +46,14 @@ Read-only mode: with RULER_PREPARED_ONLY=1 a missing folder is an error (generat
 
 Task names follow the pattern: ruler_{length}:{subset}
 Example: ruler_4096:niah_single_1
+
+Chat variant (titan_eval, owner 11-16; post-trained models): ruler_{length}_chat:{subset}. The SAME prepared samples (same folders, same gold answers, same answer budget
+per subtask as the base task), but the prompt is one chat user message = the sample's `input` (the RULER prompt, its question at the end) through the model's chat template; the
+answer prefix (`gen_prefix`) is NOT part of the prompt and NOT prepended to the reply when scoring: the model answers freely and the scored text is what follows the last </think>
+(the run uses --strict-reasoning). The scorer is the base task's `ruler_match` (string match per subtask: all gold strings for NIAH / VT / CWE / FWE as a fraction, any gold for QA).
+Qwen3 technical report, Table 23: RULER 4K-128K for post-trained models in both modes ("In thinking mode, we set the thinking budget to 8192 tokens").
+NVIDIA's own chat setup (scripts/data/prepare.py: `model_template.format(task_template=...) + answer_prefix`) writes the answer prefix AFTER the assistant header (a prefill); that is
+impossible for a thinking model (its reply starts with its own think block), so neither mode prefills.
 """
 
 import contextlib
@@ -70,8 +78,10 @@ from datasets import Dataset, DatasetDict
 from tqdm import tqdm
 
 from lighteval.metrics.metrics import Metrics
+from lighteval.metrics.metrics_sample import RulerStringMatch, SampleLevelComputation
+from lighteval.metrics.utils.metric_utils import SampleLevelMetricGrouping
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
-from lighteval.tasks.requests import Doc
+from lighteval.tasks.requests import Doc, SamplingMethod
 
 
 if TYPE_CHECKING:
@@ -1726,6 +1736,63 @@ def ruler_prompt(line: dict, task_name: str = None) -> Doc:
     )
 
 
+_CHAT_NAME = re.compile(r"ruler_(\d+)_chat:([a-z0-9_]+)")
+
+
+def ruler_chat_prompt(line: dict, task_name: str = None) -> Doc:
+    """Chat variant: the user message is the sample's `input` as prepared (the RULER prompt, ending in its question); the answer prefix is left out of the prompt and, with
+    no `gen_prefix` in `specific`, the scorer (RulerStringMatch) does not prepend it to the reply either.
+    Owner 11-16 (`over_context: zero`, the OLMES rule): with the run's window and tokenizer known, the chat prompt size is ESTIMATED from the stored base token count (`length` = base prompt
+    + the subtask's answer size; minus the answer prefix, plus a chat template of at most CHAT_TEMPLATE_TOKENS), and an item whose subtask answer size does not fit the window
+    (context - prompt - 64 < answer size) is marked `over_context` + `no_generation` (no request, scored 0). The floor of RULER is the subtask's own size, so an item is either given it whole or not run."""
+    from lighteval.tasks import answer_fit as af
+
+    outputs = line["outputs"]
+    spec: dict = {}
+    query = line["input"]
+    m = _CHAT_NAME.search(task_name or "")
+    tok_path = os.environ.get("TITAN_EVAL_TOKENIZER")
+    if m and tok_path and af.run_context():
+        from lighteval.tasks.tasks.chat_long import _tokenizer
+
+        length, subset = int(m.group(1)), m.group(2)
+        gen = _gen_size(subset, length)
+        prefix = line.get("gen_prefix", "")
+        prefix_tokens = len(_tokenizer(tok_path).encode("\n" + prefix, add_special_tokens=False)) if prefix else 0
+        n_est = int(line["length"]) - gen - prefix_tokens + af.CHAT_TEMPLATE_TOKENS
+        fit = af.fit_answer(n_est, gen, gen)
+        spec = af.mark({"n_tokens": n_est}, fit)
+        if fit["over_context"]:
+            query = af.SKIP_USER
+    return Doc(
+        query=query,
+        choices=outputs,
+        gold_index=list(range(len(outputs))),
+        task_name=task_name,
+        specific=spec or None,
+    )
+
+
+class _RulerChat(SampleLevelComputation):
+    """The base task's `ruler_match` (RulerStringMatch, the same object: 0 for an item that was not generated) and `over_context` (share of items not generated)."""
+
+    def __init__(self):
+        self.match = RulerStringMatch()
+
+    def compute(self, doc: Doc, model_response, **kwargs) -> dict[str, float]:
+        over = bool((doc.specific or {}).get("over_context"))
+        return {"ruler_match": 0.0 if over else float(self.match.compute(doc, model_response)), "over_context": float(over)}
+
+
+ruler_chat_metric = SampleLevelMetricGrouping(
+    metric_name=["ruler_match", "over_context"],
+    sample_level_fn=_RulerChat(),
+    category=SamplingMethod.GENERATIVE,
+    corpus_level_fn={"ruler_match": np.mean, "over_context": np.mean},
+    higher_is_better={"ruler_match": True, "over_context": False},
+)
+
+
 # ---------------------------------------------------------------------------
 # Task config builder
 # ---------------------------------------------------------------------------
@@ -1745,7 +1812,7 @@ def get_ruler_tasks(
     lengths: list[int] | None = None,
     subsets: list[str] | None = None,
 ) -> list[LightevalTaskConfig]:
-    """Register RULER task configs for all lengths.
+    """Register RULER task configs for all lengths (the base task ruler_<L>:<subset> and its chat twin ruler_<L>_chat:<subset>).
 
     Data is generated on demand in download_dataset_worker (keyed off
     TOKENIZER_PATH) so only the lengths actually evaluated are generated.
@@ -1763,22 +1830,25 @@ def get_ruler_tasks(
             cache_path = cache_base / str(length) / subset
             metric = [Metrics.ruler_match]
             gen_size = _gen_size(subset, length)
-            tasks.append(
-                LightevalTaskConfig(
-                    name=f"ruler_{length}:{subset}",
-                    prompt_function=ruler_prompt,
-                    hf_repo=str(cache_path),  # local path → load_from_disk
-                    hf_subset="default",
-                    hf_avail_splits=["test"],
-                    evaluation_splits=["test"],
-                    few_shots_split=None,
-                    few_shots_select=None,
-                    generation_size=gen_size,
-                    metrics=metric,
-                    stop_sequence=None,
-                    version=0,
+            # base (plain text, answer prefix in the prompt) and chat (titan_eval, owner 11-16: the same data through the chat template) share the prepared folder,
+            # the answer budget and the scorer
+            for name, prompt_function, stop, metrics in ((f"ruler_{length}:{subset}", ruler_prompt, None, metric), (f"ruler_{length}_chat:{subset}", ruler_chat_prompt, [], [ruler_chat_metric])):
+                tasks.append(
+                    LightevalTaskConfig(
+                        name=name,
+                        prompt_function=prompt_function,
+                        hf_repo=str(cache_path),  # local path → load_from_disk
+                        hf_subset="default",
+                        hf_avail_splits=["test"],
+                        evaluation_splits=["test"],
+                        few_shots_split=None,
+                        few_shots_select=None,
+                        generation_size=gen_size,
+                        metrics=metrics,
+                        stop_sequence=stop,
+                        version=0,
+                    )
                 )
-            )
 
     return tasks
 

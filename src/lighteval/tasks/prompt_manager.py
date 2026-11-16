@@ -125,6 +125,11 @@ class PromptManager:
                 )
             return messages
 
+        # A doc with `specific["plain_text"]` (titan_eval, owner 11-16: HELMET's recall / RAG / re-rank / ICL datasets run WITHOUT a chat template in the official configs,
+        # `use_chat_template: false`) is rendered as its query, as it is: no template, no system prompt. The vLLM model then also gives it its own stop sequences.
+        if isinstance(doc.specific, dict) and doc.specific.get("plain_text"):
+            return doc.query if tokenize else [{"role": "user", "content": doc.query}]
+
         # Add system prompt if available
         if self.system_prompt is not None:
             messages.append({"role": "system", "content": self.system_prompt})

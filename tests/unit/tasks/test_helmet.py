@@ -386,8 +386,14 @@ class TaskTable(unittest.TestCase):
         self.assertEqual(t["helmet_8192:kilt_nq"].stop_sequence, ["\n"])
         self.assertEqual(t["helmet_8192:msmarco_rerank_psg"].generation_size, 200)
         self.assertEqual(t["helmet_8192:icl_nlu"].stop_sequence, ["\n"])
-        self.assertEqual(t["helmet_8192_chat:icl_nlu"].stop_sequence, [])                      # chat: no newline stop
-        self.assertEqual(t["helmet_8192_chat:icl_nlu"].generation_size, H.CHAT_GEN)
+        self.assertEqual(t["helmet_8192_chat:icl_nlu"].stop_sequence, ["\n"])                 # owner 11-16: the chat variant follows HELMET's per-dataset template flag: ICL runs as plain text WITH the newline stop
+        self.assertFalse(t["helmet_8192_chat:json_kv"].stop_sequence)                          # recall: plain text, no newline stop
+        self.assertEqual(t["helmet_8192_chat:infbench_qa_eng"].stop_sequence, [])              # long QA: the chat template, no stop sequence (the end of turn)
+        for name in H.AVAILABLE:                                                               # owner 11-16: the chat variant has HELMET's own generation length per dataset, as the base variant
+            self.assertEqual(t[f"helmet_8192_chat:{name}"].generation_size, H.SPECS[name].gen, name)
+        self.assertEqual({n: H.SPECS[n].gen for n in H.AVAILABLE}, {"json_kv": 100, "niah_mk_2": 50, "niah_mk_3": 100, "niah_mv": 50, "kilt_nq": 20, "kilt_triviaqa": 20, "kilt_hotpotqa": 20,
+                                                                 "kilt_popqa_3": 20, "msmarco_rerank_psg": 200, "icl_trec_coarse": 20, "icl_trec_fine": 20, "icl_banking77": 20,
+                                                                 "icl_clinic150": 20, "icl_nlu": 20, "infbench_qa_eng": 10, "infbench_choice_eng": 10}, "= HELMET configs recall / rag / rerank / icl / longqa, line 3")
 
     def test_rows_come_from_the_tokenizer_folder(self):
         t = self.tasks()
@@ -407,17 +413,82 @@ class EndToEnd(unittest.TestCase):
 
     def test_prompt_function_and_metric(self):
         for chat in (False, True):
-            spec = H.SPECS["kilt_triviaqa"]
+            spec = H.SPECS["kilt_triviaqa"]                                                   # RAG: use_chat_template false in HELMET's configs: the chat variant sends the plain base prompt
             doc = H.make_prompt_function(spec, chat)(self.line(), "helmet_8192:kilt_triviaqa")
             self.assertEqual(doc.get_golds(), [""])
             self.assertEqual(doc.specific["answers"], ["Paris", "paris, france"])
-            self.assertEqual(doc.query.endswith("Answer:"), not chat)
+            self.assertTrue(doc.query.endswith("Answer:"))                                    # the answer prefix: plain text in both variants
+            self.assertEqual(bool(doc.specific.get("plain_text")), chat)
             metric = H.make_metric(spec, chat)
             right = metric.sample_level_fn.compute(doc, ModelResponse(text=[" Paris"], text_post_processed=[" Paris"]))
             wrong = metric.sample_level_fn.compute(doc, ModelResponse(text=[" Rome"], text_post_processed=[" Rome"]))
             self.assertEqual(right["helmet_score"], 1.0)
             self.assertEqual(wrong["helmet_score"], 0.0)
-            self.assertEqual(set(right), {"helmet_score"})                                    # one metric per subtask (lighteval pads the others)
+            self.assertEqual(set(right), {"helmet_score", "over_context"} if chat else {"helmet_score"})      # one metric set per task: the chat variant adds the share of items not generated
+            if chat:
+                self.assertEqual(right["over_context"], 0.0)
+        qa = H.SPECS["infbench_qa_eng"]                                                       # long QA: use_chat_template true: the user template only, through the template
+        line = dict(self.line(), context="The story.", question="Who?")
+        doc = H.make_prompt_function(qa, True)(line, "helmet_8192_chat:infbench_qa_eng")
+        self.assertFalse(doc.specific.get("plain_text"))
+        self.assertFalse(doc.query.endswith("Answer:"))
+
+    def test_the_chat_variant_follows_helmets_template_flag_per_dataset(self):
+        """HELMET configs (aeadacc6) line 6 and OLMES helmet_tasks.py: use_chat_template false for recall / RAG / re-rank / ICL, true for long QA / summarisation / ALCE."""
+        flags = {n: H.official_chat_template(H.SPECS[n]) for n in H.SPECS}
+        self.assertEqual({n for n, f in flags.items() if f}, {"narrativeqa", "infbench_qa_eng", "infbench_choice_eng", "infbench_sum_eng", "multi_lexsum"})
+        self.assertEqual({n for n in H.AVAILABLE if not flags[n]}, {"json_kv", "niah_mk_2", "niah_mk_3", "niah_mv", "kilt_nq", "kilt_triviaqa", "kilt_hotpotqa", "kilt_popqa_3",
+                                                                    "msmarco_rerank_psg", "icl_trec_coarse", "icl_trec_fine", "icl_banking77", "icl_clinic150", "icl_nlu"})
+        t = {c.name: c for c in H.get_helmet_tasks(None, lengths=(8192,))}
+        for n in H.AVAILABLE:
+            chat, base = t[f"helmet_8192_chat:{n}"], t[f"helmet_8192:{n}"]
+            if flags[n]:
+                self.assertEqual(list(chat.stop_sequence), [])
+            else:
+                self.assertEqual(list(chat.stop_sequence), list(base.stop_sequence), f"{n}: the plain-text datasets keep HELMET's stop_new_line")
+            self.assertEqual(chat.generation_size, base.generation_size, n)
+
+    def test_plain_text_doc_is_rendered_raw(self):
+        from lighteval.tasks.prompt_manager import PromptManager
+
+        class Tok:
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kw):
+                return "".join(f"<{m['role']}>{m['content']}</{m['role']}>" for m in messages) + "<assistant>"
+
+        spec = H.SPECS["kilt_nq"]
+        line = self.line()
+        plain = H.make_prompt_function(spec, True)(line, "helmet_8192_chat:kilt_nq")
+        pm = PromptManager(True, Tok(), "a system prompt")
+        self.assertEqual(pm.prepare_prompt(plain), H.build_prompt(spec, line, chat=False), "no template, no system prompt: the base prompt as it is")
+        qa = H.SPECS["infbench_qa_eng"]
+        templ = H.make_prompt_function(qa, True)(dict(line, context="c", question="q?"), "helmet_8192_chat:infbench_qa_eng")
+        text = pm.prepare_prompt(templ)
+        self.assertTrue(text.startswith("<system>a system prompt</system><user>You are given a story") and text.endswith("<assistant>"))
+
+    def test_chat_item_that_does_not_fit_the_window_is_marked_and_scores_zero(self):
+        """Owner 11-16 (`over_context: zero`, the OLMES rule): floor = HELMET's own answer size of the dataset (20 for kilt_triviaqa); a plain-text dataset sends exactly the stored base prompt
+        (n_tokens), a chat-template dataset the user template + a chat template of at most 16 tokens."""
+        class Tok:
+            def encode(self, text, add_special_tokens=False):
+                return text.split(" ")
+
+        line = dict(self.line(), n_tokens=10000)
+        for name, template in (("kilt_triviaqa", False), ("infbench_qa_eng", True)):
+            spec = H.SPECS[name]
+            fn = H.make_prompt_function(spec, True)
+            l = dict(line, context="c " * 50, question="q?")
+            n_est = 10000 if not template else 10000 - len(H.build_prompt(spec, l, False)[len(H.build_prompt(spec, l, True)):].split(" ")) + 16
+            for ctx, over in ((n_est + spec.gen + 64, False), (n_est + spec.gen + 64 - 1, True)):
+                with mock.patch.dict(os.environ, {"TITAN_EVAL_TOKENIZER": "fake", "TITAN_EVAL_MAX_MODEL_LEN": str(ctx)}), mock.patch("lighteval.tasks.tasks.chat_long._tokenizer", return_value=Tok()):
+                    d = fn(l, f"helmet_8192_chat:{name}")
+                self.assertEqual((d.specific["over_context"], d.specific["n_tokens"]), (over, n_est), (name, ctx))
+                self.assertEqual((bool(d.specific.get("no_generation")), d.query == "Reply with the word OK."), (over, over))
+                self.assertEqual(bool(d.specific.get("plain_text")), not template, "the flag stays on a plain dataset's over docs: the split keeps its newline stop")
+                if over:
+                    m = H.make_metric(spec, True).sample_level_fn.compute(d, ModelResponse(text=["Paris"], text_post_processed=["Paris"]))
+                    self.assertEqual((m["helmet_score"], m["over_context"]), (0.0, 1.0))
+        base = H.make_prompt_function(H.SPECS["kilt_triviaqa"], False)(line, "helmet_8192:kilt_triviaqa")      # the base variant never marks
+        self.assertNotIn("over_context", base.specific)
 
     def test_unclosed_think_is_an_empty_answer(self):
         spec = H.SPECS["kilt_triviaqa"]
