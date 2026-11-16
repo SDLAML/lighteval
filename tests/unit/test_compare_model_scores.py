@@ -74,25 +74,25 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertEqual(sum(row["category"] == "Scientific QA" for row in benchmarks), 13)
         by_key = {row["task_key"]: row for row in rows}
         self.assertEqual(rows[0]["task_key"], "hellaswag:mcf_em|5")
-        self.assertEqual(float(rows[0]["std_pp"]), 50)
-        self.assertEqual(float(rows[0]["/models/A"]), 0)
+        self.assertEqual(rows[0]["std"], "0.50")
+        self.assertEqual(rows[0]["/models/A"], "0.00")
         self.assertEqual(by_key["coqa:gen|5"]["metric"], "F1")
         self.assertEqual(by_key["jeopardy_mc:mcf|5"]["metric"], "Accuracy")
-        self.assertEqual(float(by_key["mmlu:mcf_em:_average|5"]["/models/A"]), 30)
+        self.assertEqual(by_key["mmlu:mcf_em:_average|5"]["/models/A"], "0.30")
         self.assertNotIn("arc:mcf_em:_average|5", by_key)
         self.assertNotIn("supergpqa:mcf_em:_average|5", by_key)
         general = by_key["general_qa:macro_average"]
-        self.assertAlmostEqual(float(general["/models/A"]), 100 * 14 * 0.2 / 15)
-        self.assertAlmostEqual(float(general["/models/B"]), 100 * (14 * 0.6 + 1) / 15)
-        self.assertAlmostEqual(float(general["std_pp"]), (float(general["/models/B"]) - float(general["/models/A"])) / 2)
-        self.assertAlmostEqual(float(by_key["scientific_qa:macro_average"]["/models/B"]), 70)
+        self.assertEqual(general["/models/A"], "0.19")
+        self.assertEqual(general["/models/B"], "0.63")
+        self.assertEqual(general["std"], "0.22")
+        self.assertEqual(by_key["scientific_qa:macro_average"]["/models/B"], "0.70")
         markdown = self.markdown.read_text()
         self.assertIn("## General QA (15 tasks)", markdown)
         self.assertIn("## Scientific QA (13 tasks)", markdown)
-        self.assertIn("| HellaSwag | EM | 0.00 | 100.00 | 50.00 |", markdown)
-        self.assertIn("| MMLU (mean) | EM | 30.00 | 70.00 | 20.00 |", markdown)
+        self.assertIn("| HellaSwag | EM | 0.00 | 1.00 | 0.50 |", markdown)
+        self.assertIn("| MMLU (mean) | EM | 0.30 | 0.70 | 0.20 |", markdown)
         self.assertIn("**General QA aggregate (15 tasks)**", markdown)
-        self.assertIn("percentages (0-100)", markdown)
+        self.assertIn("fractions (0-1)", markdown)
 
     def test_missing_scores_keep_zero_and_do_not_create_partial_aggregates(self):
         self.write_run("/models/A", self.complete_results())
@@ -103,11 +103,11 @@ class TestCompareModelScores(unittest.TestCase):
         rows = {row["task_key"]: row for row in self.rows()}
         self.assertEqual(float(rows["hellaswag:mcf_em|5"]["B"]), 0)
         self.assertEqual(rows["coqa:gen|5"]["B"], "")
-        self.assertEqual(rows["coqa:gen|5"]["std_pp"], "")
+        self.assertEqual(rows["coqa:gen|5"]["std"], "")
         self.assertEqual(rows["general_qa:macro_average"]["B"], "")
-        self.assertEqual(rows["general_qa:macro_average"]["std_pp"], "")
-        self.assertEqual(float(rows["general_qa:macro_average"]["A"]), 20)
-        self.assertIn("| CoQA | F1 | 20.00 |  |  |", self.markdown.read_text())
+        self.assertEqual(rows["general_qa:macro_average"]["std"], "")
+        self.assertEqual(rows["general_qa:macro_average"]["A"], "0.20")
+        self.assertIn("| CoQA | F1 | 0.20 |  |  |", self.markdown.read_text())
 
     def test_strict_preserves_both_existing_outputs(self):
         self.write_run("/models/A", {"coqa:gen|5": {"f1": 0.8}})
@@ -135,7 +135,7 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertIn(str(newer), stderr)
         rows = {row["task_key"]: row for row in self.rows()}
         self.assertEqual(rows["coqa:gen|5"]["A"], "")
-        self.assertEqual(float(rows["hellaswag:mcf_em|5"]["A"]), 90)
+        self.assertEqual(rows["hellaswag:mcf_em|5"]["A"], "0.90")
 
     def test_duplicate_timestamp_ties_and_invalid_timestamps_fail(self):
         self.write_run("/models/A", {"coqa:gen|5": {"f1": 0.8}}, folder="first")
@@ -151,7 +151,7 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertFalse(self.markdown.exists())
 
     def test_raw_fewshot_custom_markdown_and_task_sort(self):
-        results = self.complete_results(general=0.825, scientific=0.625, fewshot=0)
+        results = self.complete_results(general=0.826, scientific=0.625, fewshot=0)
         results["coqa:gen|5"] = {"f1": 0.1}
         self.write_run("/models/A", results)
         custom = self.root / "markdown" / "table.md"
@@ -162,10 +162,10 @@ class TestCompareModelScores(unittest.TestCase):
         rows = self.rows()
         self.assertEqual(rows[0]["task"], "CommonsenseQA")
         coqa = next(row for row in rows if row["task_key"] == "coqa:gen|0")
-        self.assertEqual(float(coqa["A"]), 0.825)
-        self.assertEqual(float(coqa["std_pp"]), 0)
+        self.assertEqual(coqa["A"], "0.83")
+        self.assertEqual(float(coqa["std"]), 0)
         self.assertFalse(self.markdown.exists())
-        self.assertIn("| CoQA | F1 | 0.8250 | 0.00 |", custom.read_text())
+        self.assertIn("| CoQA | F1 | 0.83 | 0.00 |", custom.read_text())
         self.assertIn("fractions (0-1)", custom.read_text())
         self.assertIn("0-1 scores", stdout)
 
@@ -175,8 +175,8 @@ class TestCompareModelScores(unittest.TestCase):
         status, _, stderr = self.run_comparison("/models/A/")
         self.assertEqual(status, 0, stderr)
         rows = {row["task_key"]: row for row in self.rows()}
-        self.assertEqual(float(rows["coqa:gen|5"]["/models/A"]), 80)
-        self.assertEqual(float(rows["hellaswag:mcf_em|5"]["/models/A"]), 60)
+        self.assertEqual(rows["coqa:gen|5"]["/models/A"], "0.80")
+        self.assertEqual(rows["hellaswag:mcf_em|5"]["/models/A"], "0.60")
 
     def test_ambiguous_names_fail_and_full_paths_keep_markdown_headers_distinct(self):
         self.write_run("/models/A", {"coqa:gen|5": {"f1": 0.8}})
@@ -187,7 +187,7 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertFalse(self.output.exists())
         status, _, stderr = self.run_comparison("/models/A", "/other/A")
         self.assertEqual(status, 0, stderr)
-        self.assertIn("| Task | Metric | /models/A | /other/A | Std (pp) |", self.markdown.read_text())
+        self.assertIn("| Task | Metric | /models/A | /other/A | Std |", self.markdown.read_text())
 
     def test_model_identity_mismatch_fails_before_writing(self):
         self.write_run("/models/A", {"coqa:gen|5": {"f1": 0.8}}, recorded_model="/models/B")

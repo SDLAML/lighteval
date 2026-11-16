@@ -6,8 +6,10 @@ Run from the repository root:
         --results-dir ~/results -o reports/comparison.csv
 
 Writes reports/comparison.csv and reports/comparison.md. --markdown-output can
-choose a separate Markdown path. Both reports use percentages by default;
---raw writes 0-1 scores in both. Std (pp) always uses percentage points.
+choose a separate Markdown path. Both reports use 0-1 scores rounded to two
+decimal places by default; --percentages switches to 0-100 scores. --raw
+explicitly selects the default 0-1 format. Standard deviations use the same
+scale as scores and are also rounded to two decimal places.
 
 Models may be exact names, original model paths, or Hugging Face IDs, following
 scripts/eval.py's result-directory naming convention. Model weights need not
@@ -201,7 +203,7 @@ def read_model_scores(model: str, results_dir: Path, requested: dict[str, str], 
 def score_std(values: list[float | None]) -> float | None:
     if any(value is None for value in values):
         return None
-    return statistics.pstdev(values) * 100
+    return statistics.pstdev(values)
 
 
 def build_rows(models: list[str], scores: dict, fewshot: int, sort: str) -> list[dict]:
@@ -217,11 +219,11 @@ def build_rows(models: list[str], scores: dict, fewshot: int, sort: str) -> list
                 "metric": METRIC_LABELS[metric],
                 "task_key": task_key,
                 "values": values,
-                "std_pp": score_std(values),
+                "std": score_std(values),
                 "row_type": "benchmark",
             })
         if sort == "std":
-            benchmarks.sort(key=lambda row: (row["std_pp"] is None, -(row["std_pp"] or 0)))
+            benchmarks.sort(key=lambda row: (row["std"] is None, -(row["std"] or 0)))
         else:
             benchmarks.sort(key=lambda row: row["task"].casefold())
         rows.extend(benchmarks)
@@ -235,7 +237,7 @@ def build_rows(models: list[str], scores: dict, fewshot: int, sort: str) -> list
             "metric": "Equal-weight macro mean (mixed EM/F1/Accuracy)",
             "task_key": category.lower().replace(" ", "_") + ":macro_average",
             "values": aggregate,
-            "std_pp": score_std(aggregate),
+            "std": score_std(aggregate),
             "row_type": "aggregate",
         })
     return rows
@@ -246,12 +248,12 @@ def write_csv(output: Path, models: list[str], rows: list[dict], raw: bool):
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["category", "task", "metric", "task_key", *models, "std_pp", "row_type"])
+        writer.writerow(["category", "task", "metric", "task_key", *models, "std" if raw else "std_pp", "row_type"])
         for row in rows:
-            values = ["" if value is None else value * scale for value in row["values"]]
+            values = ["" if value is None else f"{value * scale:.2f}" for value in row["values"]]
             writer.writerow([
                 row["category"], row["task"], row["metric"], row["task_key"],
-                *values, "" if row["std_pp"] is None else row["std_pp"], row["row_type"],
+                *values, "" if row["std"] is None else f"{row['std'] * scale:.2f}", row["row_type"],
             ])
 
 
@@ -277,29 +279,30 @@ def markdown_cell(value: str) -> str:
 
 def render_markdown(models: list[str], rows: list[dict], raw: bool) -> str:
     unit = "fractions (0-1)" if raw else "percentages (0-100)"
+    std_label = "Std" if raw else "Std (pp)"
     lines = [
         "# Model score comparison", "",
-        f"Scores are {unit}. Std (pp) is the population standard deviation across all requested models.", "",
+        f"Scores are {unit}. {std_label} is the population standard deviation across all requested models.", "",
         "Category aggregates are equal-weight means of all listed tasks. Missing scores, aggregates with "
         "missing tasks, and standard deviations with missing model scores are blank.",
     ]
     names = [short_name(model) for model in models]
     # Keep model identities distinct when aliases or final path components collide.
     names = [name if names.count(name) == 1 else model for name, model in zip(names, models)]
-    scale, precision = (1, 4) if raw else (100, 2)
+    scale = 1 if raw else 100
     for category in CATEGORIES:
         group = [row for row in rows if row["category"] == category]
         count = sum(row["row_type"] == "benchmark" for row in group)
         lines.extend(["", f"## {markdown_cell(category)} ({count} tasks)", ""])
-        heads = ["Task", "Metric", *[markdown_cell(name) for name in names], "Std (pp)"]
+        heads = ["Task", "Metric", *[markdown_cell(name) for name in names], std_label]
         lines.append("| " + " | ".join(heads) + " |")
         lines.append("| :--- | :--- | " + " | ".join(["---:"] * (len(models) + 1)) + " |")
         for row in group:
             label = markdown_cell(row["task"])
             if row["row_type"] == "aggregate":
                 label = f"**{label}**"
-            values = ["" if value is None else f"{value * scale:.{precision}f}" for value in row["values"]]
-            std = "" if row["std_pp"] is None else f"{row['std_pp']:.2f}"
+            values = ["" if value is None else f"{value * scale:.2f}" for value in row["values"]]
+            std = "" if row["std"] is None else f"{row['std'] * scale:.2f}"
             lines.append("| " + " | ".join([label, row["metric"], *values, std]) + " |")
     return "\n".join(lines) + "\n"
 
@@ -311,7 +314,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", type=Path, default=Path("model_comparison.csv"), help="CSV path (default: model_comparison.csv)")
     parser.add_argument("--markdown-output", type=Path, help="Markdown path (default: CSV path with .md suffix)")
     parser.add_argument("--fewshot", type=int, default=5, help="Requested few-shot suffix (default: 5)")
-    parser.add_argument("--raw", action="store_true", help="Write 0-1 scores in both reports instead of percentages")
+    units = parser.add_mutually_exclusive_group()
+    units.add_argument("--raw", action="store_true", help="Write 0-1 scores in both reports (default)")
+    units.add_argument("--percentages", dest="raw", action="store_false", help="Write percentage scores (0-100)")
+    parser.set_defaults(raw=True)
     parser.add_argument("--strict", action="store_true", help="Fail before writing either report if any selected score is missing")
     parser.add_argument("--duplicates", choices=("error", "latest"), default="error", help="Repeated task results (default: error; latest uses filename timestamps)")
     parser.add_argument("--sort", choices=("std", "task"), default="std", help="Order within each category: descending standard deviation or task name (default: std)")
