@@ -23,8 +23,11 @@ ARC mean and SuperGPQA discipline mean are excluded to avoid counting them
 alongside their component benchmarks. Benchmark means are read directly from
 JSON; category aggregates are equal-weight macro means of the listed tasks.
 Missing scores and category aggregates with missing tasks are blank. Standard
-deviations are blank if any requested model score is missing. --strict fails
-before writing either report if any selected score is missing.
+deviations are blank if any requested model score is missing. Each category
+also includes the mean of per-task model ranks (1 is best; ties share their
+average rank). Ranks are never percentage-scaled and are blank if any model
+is missing a task in the category. --strict fails before writing either
+report if any selected score is missing.
 """
 
 import argparse
@@ -206,6 +209,16 @@ def score_std(values: list[float | None]) -> float | None:
     return statistics.pstdev(values)
 
 
+def score_ranks(values: list[float | None]) -> list[float | None]:
+    """Rank all compared models, giving tied scores their mean position."""
+    if any(value is None for value in values):
+        return [None] * len(values)
+    positions = {}
+    for position, value in enumerate(sorted(values, reverse=True), start=1):
+        positions.setdefault(value, []).append(position)
+    return [statistics.mean(positions[value]) for value in values]
+
+
 def build_rows(models: list[str], scores: dict, fewshot: int, sort: str) -> list[dict]:
     rows = []
     for category, specs in CATEGORIES.items():
@@ -228,9 +241,13 @@ def build_rows(models: list[str], scores: dict, fewshot: int, sort: str) -> list
             benchmarks.sort(key=lambda row: row["task"].casefold())
         rows.extend(benchmarks)
         aggregate = []
+        average_ranks = []
+        benchmark_ranks = [score_ranks(row["values"]) for row in benchmarks]
         for index in range(len(models)):
             values = [row["values"][index] for row in benchmarks]
             aggregate.append(None if any(value is None for value in values) else statistics.mean(values))
+            ranks = [task_ranks[index] for task_ranks in benchmark_ranks]
+            average_ranks.append(None if any(rank is None for rank in ranks) else statistics.mean(ranks))
         rows.append({
             "category": category,
             "task": f"{category} aggregate ({len(benchmarks)} tasks)",
@@ -240,16 +257,25 @@ def build_rows(models: list[str], scores: dict, fewshot: int, sort: str) -> list
             "std": score_std(aggregate),
             "row_type": "aggregate",
         })
+        rows.append({
+            "category": category,
+            "task": f"{category} average rank ({len(benchmarks)} tasks)",
+            "metric": "Mean task rank (lower is better)",
+            "task_key": category.lower().replace(" ", "_") + ":average_rank",
+            "values": average_ranks,
+            "std": None,
+            "row_type": "average_rank",
+        })
     return rows
 
 
 def write_csv(output: Path, models: list[str], rows: list[dict], raw: bool):
-    scale = 1 if raw else 100
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.writer(stream)
         writer.writerow(["category", "task", "metric", "task_key", *models, "std" if raw else "std_pp", "row_type"])
         for row in rows:
+            scale = 1 if raw or row["row_type"] == "average_rank" else 100
             values = ["" if value is None else f"{value * scale:.2f}" for value in row["values"]]
             writer.writerow([
                 row["category"], row["task"], row["metric"], row["task_key"],
@@ -284,12 +310,14 @@ def render_markdown(models: list[str], rows: list[dict], raw: bool) -> str:
         "# Model score comparison", "",
         f"Scores are {unit}. {std_label} is the population standard deviation across all requested models.", "",
         "Category aggregates are equal-weight means of all listed tasks. Missing scores, aggregates with "
-        "missing tasks, and standard deviations with missing model scores are blank.",
+        "missing tasks, and standard deviations with missing model scores are blank.", "",
+        "Category average ranks are means of per-task model ranks (1 is best; lower is better). "
+        "Ties share their average rank. Ranks stay unscaled and are blank if any requested model "
+        "is missing a task in the category.",
     ]
     names = [short_name(model) for model in models]
     # Keep model identities distinct when aliases or final path components collide.
     names = [name if names.count(name) == 1 else model for name, model in zip(names, models)]
-    scale = 1 if raw else 100
     for category in CATEGORIES:
         group = [row for row in rows if row["category"] == category]
         count = sum(row["row_type"] == "benchmark" for row in group)
@@ -298,8 +326,9 @@ def render_markdown(models: list[str], rows: list[dict], raw: bool) -> str:
         lines.append("| " + " | ".join(heads) + " |")
         lines.append("| :--- | :--- | " + " | ".join(["---:"] * (len(models) + 1)) + " |")
         for row in group:
+            scale = 1 if raw or row["row_type"] == "average_rank" else 100
             label = markdown_cell(row["task"])
-            if row["row_type"] == "aggregate":
+            if row["row_type"] in ("aggregate", "average_rank"):
                 label = f"**{label}**"
             values = ["" if value is None else f"{value * scale:.2f}" for value in row["values"]]
             std = "" if row["std"] is None else f"{row['std'] * scale:.2f}"

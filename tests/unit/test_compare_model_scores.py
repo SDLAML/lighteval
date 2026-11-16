@@ -68,7 +68,7 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertEqual(status, 0, stderr)
         self.assertEqual(stderr, "")
         rows = self.rows()
-        self.assertEqual(len(rows), 30)
+        self.assertEqual(len(rows), 32)
         benchmarks = [row for row in rows if row["row_type"] == "benchmark"]
         self.assertEqual(sum(row["category"] == "General QA" for row in benchmarks), 15)
         self.assertEqual(sum(row["category"] == "Scientific QA" for row in benchmarks), 13)
@@ -86,6 +86,10 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertEqual(general["/models/B"], "0.63")
         self.assertEqual(general["std"], "0.22")
         self.assertEqual(by_key["scientific_qa:macro_average"]["/models/B"], "0.70")
+        for key in ("general_qa:average_rank", "scientific_qa:average_rank"):
+            self.assertEqual(by_key[key]["/models/A"], "2.00")
+            self.assertEqual(by_key[key]["/models/B"], "1.00")
+            self.assertEqual(by_key[key]["std"], "")
         markdown = self.markdown.read_text()
         self.assertIn("## General QA (15 tasks)", markdown)
         self.assertIn("## Scientific QA (13 tasks)", markdown)
@@ -93,6 +97,40 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertIn("| MMLU (mean) | EM | 0.30 | 0.70 | 0.20 |", markdown)
         self.assertIn("**General QA aggregate (15 tasks)**", markdown)
         self.assertIn("fractions (0-1)", markdown)
+
+    def test_average_ranks_use_task_ranks_with_ties_and_stay_unscaled(self):
+        models = ("/models/A", "/models/B", "/other/A")
+        results = [self.complete_results(general=value, scientific=0.7) for value in (0.5, 0.4, 0.6)]
+        for task, values in (
+            ("hellaswag:mcf_em|5", (1, 0.8, 0.6)),
+            ("siqa:mcf_em|5", (0.5, 0.5, 0.3)),
+            ("commonsenseqa:mcf_em|5", (0.4, 0.8, 0.8)),
+        ):
+            for result, value in zip(results, values):
+                result[task] = {"em": value}
+        for model, result in zip(models, results):
+            self.write_run(model, result)
+        for units in ((), ("--percentages",)):
+            for sort in ("std", "task"):
+                with self.subTest(units=units, sort=sort):
+                    status, _, stderr = self.run_comparison(*models, extra=(*units, "--sort", sort))
+                    self.assertEqual(status, 0, stderr)
+                    rows = {row["task_key"]: row for row in self.rows()}
+                    general = rows["general_qa:average_rank"]
+                    # Twelve tasks rank A/B/other A as 2/3/1; the other three
+                    # rank them as 1/2/3, 1.5/1.5/3, and 3/1.5/1.5.
+                    self.assertEqual([general[model] for model in models], ["1.97", "2.73", "1.30"])
+                    self.assertEqual(general["row_type"], "average_rank")
+                    self.assertEqual(general["std" if not units else "std_pp"], "")
+                    scientific = rows["scientific_qa:average_rank"]
+                    self.assertEqual([scientific[model] for model in models], ["2.00"] * 3)
+                    markdown = self.markdown.read_text()
+                    self.assertIn(
+                        "| **General QA average rank (15 tasks)** | Mean task rank (lower is better) "
+                        "| 1.97 | 2.73 | 1.30 |  |", markdown,
+                    )
+                    expected_score = "100.00" if units else "1.00"
+                    self.assertEqual(rows["hellaswag:mcf_em|5"][models[0]], expected_score)
 
     def test_missing_scores_keep_zero_and_do_not_create_partial_aggregates(self):
         self.write_run("/models/A", self.complete_results())
@@ -107,6 +145,10 @@ class TestCompareModelScores(unittest.TestCase):
         self.assertEqual(rows["general_qa:macro_average"]["B"], "")
         self.assertEqual(rows["general_qa:macro_average"]["std"], "")
         self.assertEqual(rows["general_qa:macro_average"]["A"], "0.20")
+        for key in ("general_qa:average_rank", "scientific_qa:average_rank"):
+            self.assertEqual(rows[key]["A"], "")
+            self.assertEqual(rows[key]["B"], "")
+            self.assertEqual(rows[key]["std"], "")
         self.assertIn("| CoQA | F1 | 0.20 |  |  |", self.markdown.read_text())
 
     def test_strict_preserves_both_existing_outputs(self):
@@ -164,6 +206,9 @@ class TestCompareModelScores(unittest.TestCase):
         coqa = next(row for row in rows if row["task_key"] == "coqa:gen|0")
         self.assertEqual(coqa["A"], "0.83")
         self.assertEqual(float(coqa["std"]), 0)
+        for row in rows:
+            if row["row_type"] == "average_rank":
+                self.assertEqual(row["A"], "1.00")
         self.assertFalse(self.markdown.exists())
         self.assertIn("| CoQA | F1 | 0.83 | 0.00 |", custom.read_text())
         self.assertIn("fractions (0-1)", custom.read_text())
