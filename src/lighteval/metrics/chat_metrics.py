@@ -144,6 +144,11 @@ def _drop_percent(text: str) -> str:
     return text.replace("\\%", "").replace("%", "")
 
 
+# Digit groups written with a thin-space escape inside a number: 6\,753, 27\;648, 1\ 000. math-verify reads `6{,}753` and `6,753` as 6753 but `6\,753` as 0 (stored omega_chat, think arm:
+# "\boxed{6\,753}" for gold 6753 scored 0; 1 of 55,299 stored samples, review 11-16). Only an escape between a digit and exactly three digits is removed, so a list such as `1\,2` is untouched.
+_DIGIT_GROUP_SPACE = re.compile(r"(?<=\d)(?:\\[,;:!]|\\ )(?=\d{3}(?!\d))")
+
+
 def _math_scores(extractor: MultilingualExtractiveMatchMetric) -> Callable[[Doc, str], dict[str, float]]:
     """One extraction per sample: lenient = the permissive score; strict = the same score when the text holds a \\boxed (the box has priority 0 in
     the extractor, so it is what gets compared), else 0 (exactly BoxedOnlyExtractiveMatchMetric, without its `model_response[i]` slicing)."""
@@ -153,7 +158,7 @@ def _math_scores(extractor: MultilingualExtractiveMatchMetric) -> Callable[[Doc,
             return {"avg@n": 0.0, "avg@n_lenient": 0.0}
         # Percent signs are dropped on both sides, as the official MATH normaliser does (hendrycks/math `strip_string`, also Qwen2.5-Math
         # evaluation): math-verify reads "50\%" as 0.5, so "\boxed{50\%}" scored 0 against gold "50" (GSM8K) and even against gold "$50\%$".
-        pred = _drop_percent(pred)
+        pred = _DIGIT_GROUP_SPACE.sub("", _drop_percent(pred))
         if any("%" in c for c in doc.choices):
             doc = copy.copy(doc)
             doc.choices = [_drop_percent(c) for c in doc.choices]

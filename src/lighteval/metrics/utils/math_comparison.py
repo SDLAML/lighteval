@@ -133,7 +133,14 @@ def sympy_numeric_eq(a: Basic | MatrixBase, b: Basic | MatrixBase, precision: in
 
     else:
         try:
-            return (a - b).evalf(chop=True) == 0  # type: ignore
+            if (a - b).evalf(chop=True) != 0:  # type: ignore
+                return False
+            # evalf(chop=True) turns ANY difference below the working precision into 0, so two different tiny numbers compare equal: 1/4**2016 == (90/121)**2016 == 0
+            # (review 11-16: polymath_en_chat, 2 stored false positives). Both values non-zero: they must also agree in RELATIVE terms (mpf has no exponent underflow).
+            fa, fb = a.evalf(), b.evalf()  # type: ignore
+            if fa == 0 or fb == 0:
+                return fa == fb
+            return bool(abs(fa / fb - 1) < 1e-9)
         except TimeoutError:
             raise
         except Exception:  # noqa: E722
