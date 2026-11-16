@@ -20,6 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import logging
 import re
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -37,6 +38,9 @@ from lighteval.tasks.templates.utils.translation_literals import TRANSLATION_LIT
 from lighteval.utils.imports import requires
 from lighteval.utils.language import Language
 from lighteval.utils.timeout import timeout
+
+
+logger = logging.getLogger(__name__)
 
 
 @requires("latex2sympy2_extended")
@@ -572,6 +576,17 @@ def extract_match(
         return extract_indices(match, target_type, timeout_seconds=timeout_seconds)
 
 
+def _finditer_with_timeout(pattern: re.Pattern, pred: str, timeout_seconds: int) -> list:
+    """All matches of `pattern` in `pred`, or none when the search runs longer than `timeout_seconds` (titan_eval 11-16: a long looping answer made
+    one AIME26 base pattern backtrack for hours, which blocked the whole scoring step; the regex engine checks signals, so the alarm interrupts it).
+    Without a timeout the result is exactly `list(pattern.finditer(pred))`."""
+    try:
+        return timeout(max(1, int(timeout_seconds)))(lambda: list(pattern.finditer(pred)))()
+    except TimeoutError:
+        logger.warning("extractive match: a pattern search timed out after %ss on a %d-char prediction; treated as no match", timeout_seconds, len(pred))
+        return []
+
+
 def extract_target_from_pred(
     pred: str,
     target_res: list[tuple[list[tuple[re.Pattern[str], int]], ExtractionTarget]],
@@ -613,7 +628,7 @@ def extract_target_from_pred(
         matches_with_pos = (
             (match, match.start(), match.end(), target_type)
             for pattern, target_type, _ in patterns_group
-            for match in pattern.finditer(pred)
+            for match in _finditer_with_timeout(pattern, pred, timeout_seconds)
         )
 
         # Sort matches by end position (rightmost first) and then by start position (leftmost first)
