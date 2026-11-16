@@ -178,6 +178,8 @@ def eval_one(model_name: str, tasks: str):
         model_cfg = VLLMModelConfig(
             **model_cfg_kwargs,
             max_model_length=MAX_MODEL_LENGTH,
+            # Gemma 4 reserves 2,496 tokens per video item, even for text-only evals.
+            max_num_batched_tokens=4096 if "gemma-4" in model_name.lower() else 2048,
             seed=SEED,
             enforce_eager=True if any(x in model_name for x in ENFORCE_EAGER_MODELS) else False,
             distributed_backend="mp",
