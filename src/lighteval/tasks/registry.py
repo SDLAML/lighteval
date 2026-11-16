@@ -301,10 +301,19 @@ class Registry:
         Deeper names expose every hierarchy prefix and the same variant alias,
         e.g. ``supergpqa:engineering:hard:cf`` belongs to ``supergpqa``,
         ``supergpqa:engineering``, ``supergpqa:engineering:hard``, and ``supergpqa:cf``.
+
+        A config with ``superset_keys`` belongs to exactly those supersets and to none of the
+        automatic ones: ``supergpqa:agronomy:easy:mcf_em`` is in ``supergpqa:easy:mcf_em`` only, so
+        ``supergpqa:mcf_em`` stays the 13 discipline tasks.
         """
         superset_dict: dict[str, list[str]] = collections.defaultdict(list)
 
         for task in sorted(self._task_registry.keys()):
+            explicit = getattr(self._task_registry[task], "superset_keys", None)
+            if explicit is not None:
+                for key in explicit:
+                    superset_dict[key].append(task)
+                continue
             parts = task.split(":")
             superset_dict[parts[0]].append(task)
             if len(parts) >= 3:

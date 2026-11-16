@@ -10,8 +10,13 @@ SuperGPQA evaluates graduate-level knowledge across 285 disciplines using
 multiple-choice questions with four to ten options. The full benchmark is
 published in the train split; all variants evaluate that split. Subtasks filter
 by discipline (13 tasks, all difficulties each), with names such as
-supergpqa:engineering:cf. The difficulty of each question is kept in the per-item
-details (Doc.specific["difficulty"]), not as separate tasks.
+supergpqa:engineering:cf; `supergpqa:mcf_em` is these 13 tasks. The difficulty of
+each question is kept in the per-item details (Doc.specific["difficulty"]).
+The letter-scoring generation task `mcf_em` also has the three difficulty tasks
+`supergpqa:easy:mcf_em`, `supergpqa:middle:mcf_em` and `supergpqa:hard:mcf_em`
+(7,731 / 11,748 / 7,050 questions): each is 13 cells `supergpqa:<discipline>:<difficulty>:mcf_em`
+that evaluate the questions of one difficulty with exactly the prompts of the
+discipline task (see `_difficulty_cell`).
 
 languages:
 english
@@ -72,6 +77,10 @@ def supergpqa_cf_prompt(line, task_name: str = None):
         choices=[option if option and option[0].isspace() else f" {option}" for option in line["options"]],
         gold_index=ascii_uppercase.index(line["answer_letter"]),
     )
+
+
+def _doc_has_difficulty(doc, difficulty: str):
+    return doc.specific["difficulty"] == difficulty
 
 
 def supergpqa_mcf_prompt(line, task_name: str = None):
@@ -188,6 +197,26 @@ supergpqa_cot = LightevalTaskConfig(
     **_SUPERGPQA_COMMON,
 )
 
+
+def _task_slug(discipline: str) -> str:
+    return discipline.lower().replace(" ", "_")
+
+
+def _difficulty_cell(discipline: str, difficulty: str) -> LightevalTaskConfig:
+    """`supergpqa:<discipline>:<difficulty>:mcf_em` (owner 11-16: three tasks easy / middle / hard). The cell evaluates the questions of ONE difficulty of one discipline with
+    EXACTLY the prompt they have in the discipline task `supergpqa:<discipline>:mcf_em`: the same `hf_filter` (so the same few-shot pool = the whole discipline, not the cell), the
+    same shuffle and random stream, and the difficulty is applied afterwards (`eval_doc_filter`: every question of the discipline is drawn for, only the cell's are scored). It is in
+    the supersets `supergpqa:<difficulty>:mcf_em` only (`superset_keys`), so `supergpqa:mcf_em` stays the 13 discipline tasks and no question is evaluated twice by one name."""
+    return replace(
+        supergpqa_mcf_em,
+        name=f"supergpqa:{_task_slug(discipline)}:{difficulty}:mcf_em",
+        hf_filter=partial(_matches_subset, discipline=discipline, difficulty=None),
+        filter=partial(_matches_sample_subset, discipline=discipline, difficulty=difficulty),
+        eval_doc_filter=partial(_doc_has_difficulty, difficulty=difficulty),
+        superset_keys=(f"supergpqa:{difficulty}:mcf_em",),
+    )
+
+
 # Keep the variant settings shared across discipline and difficulty subtasks.
 TASKS_TABLE = [
     replace(
@@ -201,9 +230,14 @@ TASKS_TABLE = [
     )
     for config in [supergpqa_cf, supergpqa_mcf, supergpqa_mcf_em, supergpqa_cot]
     for discipline in _SUPERGPQA_DISCIPLINES
-    # Only the 13 discipline tasks (all difficulties). The discipline x difficulty cells (`_SUPERGPQA_DIFFICULTIES`)
+    # The 13 discipline tasks (all difficulties) of every variant. The discipline x difficulty cells of the other variants
     # are NOT registered: they re-score the same questions (53,058 evaluations for 26,529 questions) and the
     # `supergpqa:<variant>` superset would average all 52 tasks, 1-question cells included. A difficulty breakdown
     # comes from `Doc.specific["difficulty"]` in the per-item details.
     for difficulty in [None]
+] + [
+    # `mcf_em` only (owner 11-16): the 39 cells of the three difficulty tasks (supersets supergpqa:easy|middle|hard:mcf_em, 13 cells each; they are in no other superset).
+    _difficulty_cell(discipline, difficulty)
+    for difficulty in _SUPERGPQA_DIFFICULTIES
+    for discipline in _SUPERGPQA_DISCIPLINES
 ]

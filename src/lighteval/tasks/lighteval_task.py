@@ -551,6 +551,15 @@ class LightevalTaskConfig:
             Defaults to None (latest).
         hf_filter (Callable[[dict], bool] | None, optional): Filter function to
             apply to dataset items. Defaults to None.
+        eval_doc_filter (Callable[[Doc], bool] | None, optional): Keeps only the
+            evaluation docs it accepts, AFTER the few-shot examples of every doc
+            were drawn: the evaluation order, the random stream and the few-shot
+            pool are those of the task without the filter, so each kept doc gets
+            exactly the prompt it has there (SuperGPQA by difficulty). Defaults to None.
+        superset_keys (tuple[str, ...] | None, optional): The task belongs to
+            exactly these supersets (names a run can ask for) and to none of the
+            automatic ones that its colon-separated name implies (see
+            `Registry._task_superset_dict`). Defaults to None (automatic).
         hf_avail_splits (ListLike[str], optional): Available dataset splits.
             Defaults to ["train", "validation", "test"].
 
@@ -615,6 +624,8 @@ class LightevalTaskConfig:
     # Additional hf dataset config
     hf_revision: str | None = None
     hf_filter: Callable[[dict], bool] | None = None
+    eval_doc_filter: Callable[["Doc"], bool] | None = None
+    superset_keys: tuple[str, ...] | None = None
     hf_avail_splits: ListLike[str] = field(
         default_factory=lambda: ["train", "validation", "test"]
     )
@@ -935,7 +946,9 @@ class LightevalTask:
 
         docs = []
 
-        for doc in eval_docs[:n_samples]:
+        # With an `eval_doc_filter` every doc is drawn for (the random stream and the shots stay those of the unfiltered task), then the filter keeps its docs.
+        keep = self.dataset_config.eval_doc_filter
+        for doc in eval_docs if keep is not None else eval_docs[:n_samples]:
             num_fewshots = self.dataset_config.num_fewshots
             doc.task_name = self.full_name
             doc.fewshot_samples = self.fewshot_sampler.sample_fewshot_examples(
@@ -947,6 +960,11 @@ class LightevalTask:
             doc.stop_sequences = self.stop_sequence
             doc.num_samples = max(self.num_samples)
             docs.append(doc)
+
+        if keep is not None:
+            docs = [doc for doc in docs if keep(doc)][:n_samples]
+            if not docs:
+                raise ValueError(f"Task {self.name} has no documents to evaluate after its eval_doc_filter.")
 
         if self.dataset_config.num_fewshots > 0 and docs:
             # The shots a prompt really gets can be fewer than K (small pool, demos equal to the evaluated item).
