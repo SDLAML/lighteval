@@ -98,10 +98,16 @@ def test_default_is_the_full_set_for_every_supporting_task():
         for table in tables:
             for t in table:
                 assert t.hf_filter is None, f"{t.name}: a filter without the flag cuts the set"
-        gsm = [t for t in lm.TASKS_TABLE if t.name.startswith("gsm_infinite_")]
-        assert len(gsm) == 20 and all(t.hf_filter is None for t in gsm)
+        gsm = [t for t in lm.TASKS_TABLE if t.name.startswith("gsm_infinite_") and "symbolic" not in t.name]
+        chat = [t for t in gsm if t.name.endswith("_chat")]
+        base = [t for t in gsm if not t.name.endswith("_chat")]
+        assert len(chat) == 12 and len(base) == 10 and all(t.hf_filter is None for t in chat), "the chat tasks read the whole prepared file (ops 2 .. 30 where it has them)"
+        # the BASE tasks share the files and stay at the ops of the 11-14 build: an op filter (no per-group cut) even without the flag
+        assert all(isinstance(t.hf_filter, lm.GsmLimit) and t.hf_filter.limit is None and t.hf_filter.max_op == 20 for t in base)
+        assert all(t.hf_filter is None for t in lm.TASKS_TABLE if t.name.startswith("gsm_infinite_symbolic")), "the symbolic subset has no groups: no flag"
     with env(20):
         assert all(isinstance(t.hf_filter, lm.GsmLimit) and t.hf_filter.limit == 20 for t in lm._build_gsm_tasks()), "the flag reaches every GSM-Infinite task"
+        assert all(t.hf_filter.max_op == (20 if not t.name.endswith("_chat") else None) for t in lm._build_gsm_tasks())
 
 
 def test_flag_reaches_every_group():

@@ -1,4 +1,4 @@
-"""Tests of the long-context tasks of the fork module tasks/tasks/long_more.py: LongBench v2 base, GSM-Infinite (base + chat), MRCR (base + chat), FRAMES (chat), and the
+"""Tests of the long-context tasks of the fork module tasks/tasks/long_more.py: LongBench v2 base, GSM-Infinite (base + chat + zero-noise + symbolic), MRCR (base + chat), FRAMES (chat), and the
 `chat_messages` hook of the prompt manager.
 
 Plain functions: run with pytest, or `python tests/unit/tasks/test_long_more.py`. Nothing here needs a GPU. Tests that read the prepared data
@@ -246,20 +246,42 @@ class GsmInfinite(unittest.TestCase):
         self.assertNotIn("chat_messages", d.specific)
         self.assertNotIn("helpful assistant", d.query)
 
-    def test_item_that_does_not_fit_is_skipped_with_a_tiny_prompt(self):
+    def test_base_item_that_does_not_fit_is_skipped_with_a_tiny_prompt(self):
+        """BASE tasks (unchanged): skipped = NaN, counted in `skipped`."""
         long_line = gsm_line(problem=" ".join(["w"] * 5000))
         with env(4000, 1000), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
-            d = lm.gsm_doc(long_line, "t", "hard", chat=True)
-            d2 = lm.gsm_doc(gsm_line(), "t", "hard", chat=True)
+            d = lm.gsm_doc(long_line, "t", "hard", chat=False)
+            d2 = lm.gsm_doc(gsm_line(), "t", "hard", chat=False)
         self.assertTrue(d.specific["skipped"])
-        self.assertEqual(d.specific["chat_messages"], [{"role": "user", "content": lm.SKIP_USER}])
+        self.assertEqual(d.query, lm.SKIP_USER)
         self.assertFalse(d2.specific["skipped"])
-        self.assertEqual(d2.specific["chat_messages"][0]["role"], "system")
+        self.assertNotIn("over_context", d.specific)
 
-    def test_no_env_never_skips(self):
+    def test_chat_item_that_does_not_fit_is_not_generated_and_scores_zero(self):
+        """CHAT tasks (owner 11-16, `over_context: zero`, the OLMES rule): budget = min(cap, context - prompt - 64); below the floor 1,024 no generation, else generated with the smaller budget."""
+        fake = {"ctx": 20000, "cap": 8192}
+        small, mid, long = gsm_line(problem="w " * 100), gsm_line(problem=" ".join(["w"] * 12000)), gsm_line(problem=" ".join(["w"] * 19500))
+        with env(fake["ctx"], fake["cap"]), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+            d_small, d_mid, d_long = (lm.gsm_doc(x, "t", "hard", chat=True) for x in (small, mid, long))
+        # the prompt counts words + 6 per message (3 messages): small ~ 120, mid ~ 12,040, long ~ 19,540
+        self.assertEqual((d_small.specific["over_context"], d_small.specific["reduced_budget"], d_small.specific["answer_budget"]), (False, False, 8192))
+        self.assertNotIn("no_generation", d_small.specific)
+        self.assertEqual(d_small.specific["chat_messages"][0]["role"], "system")
+        self.assertEqual((d_mid.specific["over_context"], d_mid.specific["reduced_budget"]), (False, True))
+        self.assertEqual(d_mid.specific["max_new_tokens"], d_mid.specific["answer_budget"])
+        self.assertEqual(d_mid.specific["answer_budget"], 20000 - d_mid.specific["n_tokens"] - lm.GSM_MARGIN)
+        self.assertGreaterEqual(d_mid.specific["answer_budget"], lm.GSM_MIN_ANSWER)
+        self.assertTrue(d_long.specific["over_context"] and d_long.specific["no_generation"] and d_long.specific["answer_budget"] == 0)
+        self.assertEqual(d_long.specific["chat_messages"], [{"role": "user", "content": lm.SKIP_USER}])
+        self.assertNotIn("skipped", d_long.specific)
+
+    def test_no_env_never_skips_or_marks(self):
         with no_env():
             d = lm.gsm_doc(gsm_line(problem=" ".join(["w"] * 50000)), "t", "hard", chat=False)
+            c = lm.gsm_doc(gsm_line(problem=" ".join(["w"] * 50000)), "t", "hard", chat=True)
         self.assertFalse(d.specific["skipped"])
+        self.assertFalse(c.specific["over_context"] or c.specific["reduced_budget"])
+        self.assertNotIn("no_generation", c.specific)
 
     def _score(self, text, **kw):
         with no_env():
@@ -288,14 +310,176 @@ class GsmInfinite(unittest.TestCase):
         self.assertAlmostEqual(fns["skipped"]([1.0, 0.0, 0.0, 0.0]), 0.25)
         self.assertEqual(set(lm.GSM_NAMES), set(fns))
 
-    def test_20_task_configs(self):
+    def test_26_task_configs(self):
+        """20 as built (hard / medium x 8k .. 128k, base + chat) + the 2 zero-noise chat tasks + the 4 symbolic chat tasks (owner 11-16)."""
         names = sorted(c.name for c in lm.TASKS_TABLE if c.name.startswith("gsm_infinite"))
-        self.assertEqual(len(names), 20)
-        base = [c for c in lm.TASKS_TABLE if c.name == "gsm_infinite_hard_65536"][0]
-        chat = [c for c in lm.TASKS_TABLE if c.name == "gsm_infinite_hard_65536_chat"][0]
+        self.assertEqual(len(names), 26)
+        self.assertEqual(sorted(n for n in names if "symbolic" in n), sorted(f"gsm_infinite_symbolic_{n}_chat" for n in lm.GSM_SYMBOLIC_OPS))
+        self.assertEqual(sorted(n for n in names if n.endswith("_0_chat") and "symbolic" not in n), ["gsm_infinite_hard_0_chat", "gsm_infinite_medium_0_chat"])
+        by = {c.name: c for c in lm.TASKS_TABLE}
+        base, chat = by["gsm_infinite_hard_65536"], by["gsm_infinite_hard_65536_chat"]
         self.assertTrue(base.hf_repo.endswith("xdg/gsm_infinite_hard_64k"))
         self.assertEqual((base.generation_size, base.stop_sequence), (4096, ["\nProblem:"]))
         self.assertEqual((chat.generation_size, chat.stop_sequence), (8192, []))
+        self.assertEqual((base.version, chat.version), (0, 1), "the base tasks are unchanged; the chat tasks are version 1 (official-setup alignment, 11-16)")
+        self.assertTrue(all(by[n].version == 1 for n in names if n.endswith("_chat")) and all(by[n].version == 0 for n in names if not n.endswith("_chat")))
+        self.assertTrue(by["gsm_infinite_medium_0_chat"].hf_repo.endswith("xdg/gsm_infinite_medium_0") and by["gsm_infinite_symbolic_8192_chat"].hf_repo.endswith("xdg/gsm_infinite_symbolic_8k"))
+        self.assertEqual(by["gsm_infinite_hard_8192_chat"].metrics[0].metric_name, list(lm.gsm_chat_names(range(2, 31))))
+        self.assertEqual(by["gsm_infinite_hard_131072_chat"].metrics[0].metric_name, list(lm.gsm_chat_names(range(2, 21))))
+        self.assertEqual(by["gsm_infinite_hard_0_chat"].metrics[0].metric_name, list(lm.gsm_chat_names(range(2, 31))))
+        self.assertEqual(by["gsm_infinite_hard_8192"].metrics[0].metric_name, list(lm.GSM_NAMES), "the base metric is unchanged")
+        self.assertEqual(by["gsm_infinite_symbolic_0_chat"].metrics[0].metric_name, ["answered", "over_context", "reduced_budget"])
+        self.assertEqual((by["gsm_infinite_symbolic_0_chat"].generation_size, by["gsm_infinite_symbolic_0_chat"].stop_sequence), (8192, []))
+        self.assertIsNone(by["gsm_infinite_hard_8192_chat"].hf_filter, "the chat tasks read the whole prepared file (no op filter)")
+        self.assertIsNotNone(by["gsm_infinite_hard_8192"].hf_filter, "the base tasks drop the rows above op 20 of the shared file")
+        self.assertEqual(by["gsm_infinite_hard_8192"].hf_filter.max_op, 20)
+        self.assertEqual({n: tuple(v) for n, v in lm.GSM_SYMBOLIC_OPS.items()}, {0: (1, 50), 8192: (1, 30), 16384: (1, 20), 32768: (1, 10)})
+
+
+def chat_gsm_doc(op, over=False, reduced=False, mode="normalforward", answer=6):
+    spec = {"op": op, "mode": mode, "over_context": over, "reduced_budget": reduced}
+    return Doc(task_name="t", query="q", choices=[str(answer)], gold_index=0, specific=spec)
+
+
+class GsmChatScoring(unittest.TestCase):
+    """The chat metric (owner 11-16): over-context items score 0 and stay in the denominator (official: a failed request becomes an "Error: ..." reply, parsed as wrong), `no_answer` counts generated
+    replies only, the official AUC next to `acc`."""
+
+    OPS = tuple(range(2, 31))
+
+    def test_names_and_aggregations(self):
+        m = lm.gsm_chat_metric(self.OPS)
+        self.assertEqual(m.metric_name[:7], ["acc", "auc", "acc_forward", "acc_reverse", "no_answer", "over_context", "reduced_budget"])
+        self.assertEqual(len(m.metric_name), 7 + 29)
+        self.assertEqual(set(m.corpus_level_fn), set(m.metric_name))
+        self.assertTrue(m.higher_is_better["acc"] and m.higher_is_better["auc"] and not m.higher_is_better["no_answer"] and not m.higher_is_better["over_context"])
+
+    def test_correct_wrong_missing_and_zero(self):
+        m = lm.gsm_chat_metric(self.OPS)
+        s = score(m, chat_gsm_doc(5), "Define A as 3. Answer: 6.")
+        self.assertEqual((s["acc"], s["acc_op5"], s["acc_forward"], s["no_answer"], s["over_context"], s["reduced_budget"]), (1.0, 1.0, 1.0, 0.0, 0.0, 0.0))
+        self.assertEqual(s["auc"], 5.5)
+        self.assertTrue(math.isnan(s["acc_op4"]) and math.isnan(s["acc_reverse"]))
+        w = score(m, chat_gsm_doc(25, mode="forwardreverse"), "Answer: 7.")
+        self.assertEqual((w["acc"], w["acc_op25"], w["acc_reverse"], w["no_answer"], w["auc"]), (0.0, 0.0, 0.0, 0.0, 25.0))
+        self.assertEqual(score(m, chat_gsm_doc(5), "I cannot say")["no_answer"], 1.0)
+        z = score(m, chat_gsm_doc(30, over=True), "")
+        self.assertEqual((z["acc"], z["acc_op30"], z["acc_forward"], z["over_context"], z["auc"]), (0.0, 0.0, 0.0, 1.0, 30.0), "wrong, a member of its op and of the denominator")
+        self.assertTrue(math.isnan(z["no_answer"]), "no reply: `no_answer` is the share of GENERATED replies without an integer")
+        r = score(m, chat_gsm_doc(6, reduced=True), "Answer: 6.")
+        self.assertEqual((r["reduced_budget"], r["acc"]), (1.0, 1.0))
+        o = score(m, chat_gsm_doc(6, over=True, reduced=True), "")
+        self.assertEqual(o["reduced_budget"], 0.0, "an over-context item is never counted as generated with a reduced budget")
+
+    def test_over_context_items_stay_in_the_mean_and_the_per_op_accuracy(self):
+        fns = lm.gsm_chat_metric(self.OPS).corpus_level_fn
+        self.assertAlmostEqual(fns["acc"]([1.0, 0.0, 0.0, 1.0]), 0.5)                      # a zeroed item is a 0.0 in the list, not a NaN
+        self.assertAlmostEqual(fns["acc_op7"]([float("nan"), 1.0, 0.0, 0.0]), 1 / 3)
+        self.assertAlmostEqual(fns["over_context"]([1.0, 0.0, 0.0, 0.0]), 0.25)
+        self.assertAlmostEqual(fns["no_answer"]([float("nan"), 1.0, 0.0, 0.0]), 1 / 3)                 # a zeroed item has no reply: not a member of `no_answer`
+
+    def test_auc_is_the_official_trapezoid_of_the_per_op_accuracy(self):
+        """gsm-infinite/app.py:65-73 `calculate_auc`: sorted x, np.trapezoid(y, x) * 100; x = the op counts present, y = the accuracy per op (weighted mean over the op's questions)."""
+        rng = np.random.default_rng(0)
+        for ops in (range(2, 31), range(2, 21), [2, 3, 5, 9], [4]):
+            vals, per_op = [], {}
+            for op in ops:
+                n = int(rng.integers(1, 40))
+                ok = (rng.random(n) < (1.0 - op / 40)).astype(float)
+                per_op[op] = ok.mean()
+                vals += [lm.gsm_auc_code(op, k) for k in ok]
+            rng.shuffle(vals)                                                               # the order of the items does not matter
+            xs = sorted(per_op)
+            want = 0.0 if len(xs) < 2 else float(np.trapezoid([per_op[x] for x in xs], xs) * 100)
+            self.assertAlmostEqual(lm.gsm_auc(vals), want, places=9, msg=str(list(ops)))
+        # exact values: all correct 2..30 = 2800 (the maximum), all wrong = 0, a straight line from 1 to 0 = 1400
+        self.assertAlmostEqual(lm.gsm_auc([lm.gsm_auc_code(o, 1.0) for o in range(2, 31) for _ in range(3)]), 2800.0)
+        self.assertEqual(lm.gsm_auc([lm.gsm_auc_code(o, 0.0) for o in range(2, 31)]), 0.0)
+        self.assertAlmostEqual(lm.gsm_auc([lm.gsm_auc_code(o, 1.0 if o <= 16 else 0.0) for o in range(2, 31) for _ in range(1)]), (14 + 0.5) * 100, places=6)
+        self.assertEqual(lm.gsm_auc([lm.gsm_auc_code(7, 1.0)] * 5), 0.0, "one op count: no area (the official returns 0 for fewer than two points)")
+        self.assertTrue(math.isnan(lm.gsm_auc([float("nan")])))
+        self.assertAlmostEqual(lm.gsm_auc([2.5, 2.0, 3.5, 3.5, 4.0, 4.0]), 125.0)
+
+    def test_auc_with_several_samples_per_item(self):
+        """`ChatSamples` averages the per-sample values of an item: op + 0.5 x (share correct); the decoded per-op accuracy is the mean share (the official `correct_num / len(replies)`)."""
+        m = lm.gsm_chat_metric(range(2, 4))
+        with no_env():
+            d = chat_gsm_doc(2)
+            out = m.sample_level_fn.compute(d, ModelResponse(text=["Answer: 6.", "Answer: 1.", "Answer: 6.", "Answer: 6."]))
+        self.assertEqual(out["acc"], 0.75)
+        self.assertEqual(out["auc"], 2.375)
+        self.assertAlmostEqual(lm.gsm_auc([out["auc"], lm.gsm_auc_code(3, 1.0)]), ((0.75 + 1.0) / 2) * 100)
+
+    def test_the_sample_level_function_returns_exactly_the_declared_names(self):
+        m = lm.gsm_chat_metric(range(2, 21))
+        out = m.sample_level_fn.compute(chat_gsm_doc(9), ModelResponse(text=["Answer: 6."]))
+        self.assertEqual(set(out), set(m.metric_name))
+
+
+class GsmOpFilter(unittest.TestCase):
+    """The base tasks read the chat tasks' (larger) files: `GsmLimit(max_op=20)` keeps them at ops 2 .. 20 exactly as built."""
+
+    def rows(self):
+        out = []
+        for op in range(2, 31):
+            for template, mode, n in (("crazy_zootopia", "normalforward", 80), ("movie_festival_awards", "normalforward", 10), ("teachers_in_school", "normalforward", 10),
+                                      ("crazy_zootopia", "forwardreverse", 80), ("movie_festival_awards", "forwardreverse", 10), ("teachers_in_school", "forwardreverse", 10)):
+                out += [{"op": op, "template": template, "mode": mode, "k": i} for i in range(n)]
+        return out
+
+    def test_max_op_only(self):
+        rows = self.rows()
+        keep = lm.GsmLimit(None, 20).pick(rows)
+        self.assertEqual(sorted({rows[i]["op"] for i in keep}), list(range(2, 21)))
+        self.assertEqual(len(keep), 19 * 200)
+        self.assertEqual(keep, [i for i, r in enumerate(rows) if r["op"] <= 20], "no reordering, no other row dropped")
+
+    def test_max_op_with_the_limit_flag(self):
+        rows = self.rows()
+        keep = lm.GsmLimit(20, 20).pick(rows)
+        self.assertEqual(len(keep), 19 * 20)
+        self.assertEqual(keep, [i for i in lm.GsmLimit(20).pick(rows) if rows[i]["op"] <= 20])
+
+    def test_default_filter_function(self):
+        with mock.patch.dict(os.environ, {"TITAN_EVAL_SAMPLE_PER_GROUP": ""}):
+            self.assertIsNone(lm.gsm_limit_filter())
+            self.assertEqual((lm.gsm_limit_filter(20).limit, lm.gsm_limit_filter(20).max_op), (None, 20))
+        with mock.patch.dict(os.environ, {"TITAN_EVAL_SAMPLE_PER_GROUP": "40"}):
+            f = lm.gsm_limit_filter()
+            self.assertEqual((f.limit, f.max_op), (40, None))
+            self.assertEqual((lm.gsm_limit_filter(20).limit, lm.gsm_limit_filter(20).max_op), (40, 20))
+
+
+def symbolic_line(op=3, answer_list=("V4", "V9"), answer_q=5, problem="<context>\nassign V4 = 5.\n</context>\n\nWhich variables equal 5?"):
+    return {"id": f"symbolic_8k_op{op}_000", "src_id": 1, "op": op, "n": 7, "length": 8000, "d": 2, "answer_q": answer_q, "answer_list": json.dumps(list(answer_list)), "question": "Which variables equal 5?",
+            "solution": "x", "messages": json.dumps([{"role": "user", "content": problem}]), "n_chars": len(problem)}
+
+
+class GsmSymbolic(unittest.TestCase):
+    def test_doc_carries_the_messages_the_gold_list_and_the_value(self):
+        with no_env():
+            d = lm.gsm_symbolic_doc(symbolic_line(), "t")
+        self.assertEqual(d.specific["chat_messages"], [{"role": "user", "content": symbolic_line()["messages"] and json.loads(symbolic_line()["messages"])[0]["content"]}])
+        self.assertEqual(d.specific["gold"], ["V4", "V9"])
+        self.assertEqual((d.specific["op"], d.specific["answer_q"], d.specific["question"]), (3, 5, "Which variables equal 5?"))
+        self.assertEqual(d.choices, ["V4, V9"])
+        self.assertFalse(d.specific["over_context"])
+
+    def test_over_context_item_is_not_generated(self):
+        long = symbolic_line(problem=" ".join(["w"] * 20000))
+        with env(8000, 8192), mock.patch.object(lm, "_tokenizer", return_value=FakeTok()):
+            d = lm.gsm_symbolic_doc(long, "t")
+        self.assertTrue(d.specific["over_context"] and d.specific["no_generation"])
+        self.assertEqual(d.specific["chat_messages"], [{"role": "user", "content": lm.SKIP_USER}])
+        self.assertEqual(d.specific["gold"], ["V4", "V9"], "the gold stays: the judge stage counts the item wrong without a call")
+
+    def test_lighteval_metric_is_the_generation_stage_only(self):
+        c = [x for x in lm.TASKS_TABLE if x.name == "gsm_infinite_symbolic_16384_chat"][0]
+        names = c.metrics[0].metric_name
+        self.assertEqual(names, ["answered", "over_context", "reduced_budget"])
+        d = lm.gsm_symbolic_doc(symbolic_line(), "t")
+        s = c.metrics[0].sample_level_fn.compute(d, ModelResponse(text=["V4, V9"]))
+        self.assertEqual((s["answered"], s["over_context"]), (1.0, 0.0))
 
 
 # -------------------------------------------------------------------------------------------------------------------- MRCR
@@ -522,15 +706,19 @@ class RealGsmData(unittest.TestCase):
         import pandas as pd
 
         df = pd.read_parquet(XDG / "gsm_infinite_hard_8k" / "data.parquet")
-        self.assertEqual(len(df), 19 * 200)
-        self.assertEqual(sorted(df.op.unique()), list(range(2, 21)))
+        if df.op.max() == 20:
+            self.skipTest("the cache still holds the 11-14 build (ops 2..20); run `titan-eval prepare gsm_infinite`")
+        self.assertEqual(len(df), 29 * 200)
+        self.assertEqual(sorted(df.op.unique()), list(range(2, 31)))                  # 11-16: the official ops_config of config.sh
         for op, g in df.groupby("op"):
             self.assertEqual(len(g), 200)
             self.assertEqual(g.groupby(["template", "mode"]).size().to_dict(),
                              {("crazy_zootopia", "forwardreverse"): 80, ("crazy_zootopia", "normalforward"): 80, ("movie_festival_awards", "forwardreverse"): 10,
                               ("movie_festival_awards", "normalforward"): 10, ("teachers_in_school", "forwardreverse"): 10, ("teachers_in_school", "normalforward"): 10})
         small = df.iloc[lm.GsmLimit(20).pick(df.to_dict("records"))]
-        self.assertEqual(len(small), 19 * 20)
+        self.assertEqual(len(small), 29 * 20)
+        base = df.iloc[lm.GsmLimit(None, 20).pick(df.to_dict("records"))]
+        self.assertEqual((len(base), sorted(base.op.unique())), (19 * 200, list(range(2, 21))), "the base task's view of the file = the 11-14 build")
         for op, g in small.groupby("op"):
             self.assertEqual(g.groupby(["template", "mode"]).size().to_dict(),
                              {("crazy_zootopia", "forwardreverse"): 8, ("crazy_zootopia", "normalforward"): 8, ("movie_festival_awards", "forwardreverse"): 1,
@@ -538,6 +726,40 @@ class RealGsmData(unittest.TestCase):
         row = df.iloc[0]
         d = lm.gsm_doc(row.to_dict(), "t", "hard", chat=True)
         self.assertEqual(d.get_golds(), [str(int(row["answer"]))])
+
+
+def _prepared(name):
+    import pandas as pd
+
+    f = XDG / name / "data.parquet"
+    return pd.read_parquet(f) if f.is_file() else None
+
+
+@unittest.skipUnless((XDG / "gsm_infinite_symbolic_0" / "data.parquet").is_file() and (XDG / "gsm_infinite_hard_0" / "data.parquet").is_file(), "prepared zero-noise / symbolic data not on disk")
+class RealZeroNoiseAndSymbolicData(unittest.TestCase):
+    def test_zero_noise_files(self):
+        for sub in ("hard", "medium"):
+            df = _prepared(f"gsm_infinite_{sub}_0")
+            self.assertEqual((len(df), sorted(df.op.unique())), (29 * 200, list(range(2, 31))))
+            self.assertEqual(set(df.groupby("op").size()), {200})
+            for op, g in df.groupby("op"):
+                self.assertEqual(g.groupby(["template", "mode"]).size().to_dict()[("crazy_zootopia", "normalforward")], 80)
+            d = lm.gsm_doc(df.iloc[0].to_dict(), "t", sub, chat=True)
+            self.assertEqual([m["role"] for m in d.specific["chat_messages"]], ["system", "user", "user"])
+            self.assertTrue(d.specific["chat_messages"][2]["content"].endswith("Solution: "))
+
+    def test_symbolic_files(self):
+        for length, (lo, hi) in ((0, (1, 50)), (8192, (1, 30)), (16384, (1, 20)), (32768, (1, 10))):
+            df = _prepared(f"gsm_infinite_symbolic_{lm.GSM_LABEL[length]}")
+            self.assertEqual((len(df), sorted(df.op.unique())), (100 * (hi - lo + 1), list(range(lo, hi + 1))), length)
+            self.assertEqual(set(df.groupby("op").size()), {100})
+            for _, row in df.head(40).iterrows():
+                d = lm.gsm_symbolic_doc(row.to_dict(), "t")
+                msgs = d.specific["chat_messages"]
+                self.assertEqual([m["role"] for m in msgs], ["user"])
+                self.assertTrue(msgs[0]["content"].startswith("<context>") and "Show your step-by-step reasoning" in msgs[0]["content"])
+                self.assertGreaterEqual(len(d.specific["gold"]), 1)
+                self.assertTrue(all(v.startswith("V") for v in d.specific["gold"]))
 
 
 @unittest.skipUnless((XDG / "mrcr_8192" / "data.parquet").is_file() and os.path.isdir(QWEN), "prepared MRCR data / tokenizer not on disk")

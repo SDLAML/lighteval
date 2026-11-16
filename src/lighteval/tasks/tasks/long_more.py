@@ -26,12 +26,17 @@ longbench_v2_base_<L>   LongBench v2 (zai-org/LongBench-v2, 503 four-choice ques
                         the official middle truncation of the whole prompt to L (the question and the choices stay at the end), then the answer prefix "The correct answer is (" and a greedy
                         generation of a few tokens: the first letter A-D. Metrics: acc, the official breakdowns (easy / hard, short / medium / long words), token buckets of the untruncated prompt,
                         acc_untruncated / acc_truncated and the share of cut prompts. (The chat twin is `longbench_v2_chat`, module chat_long.py.)
-gsm_infinite_<hard|medium>_<L>[_chat]   GSM-Infinite (InfiniAILab, arXiv 2502.05252): noise-filled reasoning problems, L = 8192 .. 131072 (the dataset's 8k .. 128k), op counts 2 .. 20, accuracy per
-                        op count. Data: the prepared sample of titan_eval/evals/long_data.py (official `limit` rule, 200 per op). Chat = the dataset's messages as given; base = the same text as plain
+gsm_infinite_<hard|medium>_<L>[_chat]   GSM-Infinite (InfiniAILab, arXiv 2502.05252): noise-filled reasoning problems, L = 8192 .. 131072 (the dataset's 8k .. 128k), accuracy per op count.
+                        Data: the prepared sample of titan_eval/evals/long_data.py (official `limit` rule, 200 per op). Chat = the dataset's messages as given; base = the same text as plain
                         text (instruction, then "Problem: ... Question: ... Solution:"), zero-shot (the paper has no base protocol). Answer = the official parser (eval_realistic.py criteriaoutput).
                         The prepared sample is the OFFICIAL one: 200 per op (the `limit` of the official run script; owner rule 11-14: full official set). The opt-in flag
                         `data.sample_per_group=N` (titan_eval) applies the same official rule at limit N (the first int(N * pct) rows of each filter_config group of every op, a multiple
-                        of 20 gives exactly N per op); no seed: the official rule is deterministic.
+                        of 20 gives exactly N per op); no seed: the official rule is deterministic. BASE tasks: op counts 2 .. 20, as built (they ignore the rows above 20 of the files).
+                        CHAT tasks (owner 11-16, "kind ok": the official setup of config.sh): op counts 2 .. 30 at the lengths 0 (zero noise: `gsm_infinite_<hard|medium>_0_chat`), 8k, 16k, 32k,
+                        2 .. 20 at 64k / 128k (our extension, the HF datasets stop at 20); `over_context: zero` with the OLMES min-budget rule (below); the official AUC next to `acc`.
+gsm_infinite_symbolic_<L>_chat   the symbolic subset (config.sh: lengths 0 / 8k / 16k / 32k, ops 1 .. 50 / 30 / 20 / 10, 100 per op): the model answers through lighteval (metrics `answered`,
+                        `over_context`, `reduced_budget`), the official answer extraction (eval_symbolic.py: a Qwen2.5-7B-Instruct judge reads the variable names out of the reply) is the judge stage of
+                        titan_eval (grader `gsm_symbolic`), which also computes `accuracy`, `acc_op<N>` and the AUC.
 mrcr_<L>[_chat]         OpenAI MRCR (openai/mrcr, MIT): 2 / 4 / 8 needles, the bin of L = 8192 .. 262144 tokens (prompt + answer), 100 rows per needle count. Chat = the conversation as given; base = the
                         same conversation as a "User: / Assistant:" transcript ending in "Assistant:". Official grader verbatim (prefix check, then SequenceMatcher ratio). BASE: items whose prompt does
                         not fit the run's context are skipped as in the official script (NaN, not in the mean, counted: `skipped`). CHAT (owner 11-16, task key `over_context: zero`, as FRAMES): the window
@@ -234,12 +239,18 @@ TASKS_TABLE = [_lb2_base_config(n) for n in LB2B_LENGTHS]
 
 # ======================================================================================================== GSM-Infinite
 GSM_SUBSETS = ("hard", "medium")
-GSM_LABEL = {8192: "8k", 16384: "16k", 32768: "32k", 65536: "64k", 131072: "128k"}
-GSM_OPS = tuple(range(2, 21))
+GSM_LABEL = {0: "0", 8192: "8k", 16384: "16k", 32768: "32k", 65536: "64k", 131072: "128k"}      # task length -> the dataset's name (0 = zero noise)
+GSM_BASE_LENGTHS = (8192, 16384, 32768, 65536, 131072)                  # the base tasks (as built 11-14; ops 2 .. 20, whatever the file holds above)
+GSM_CHAT_LENGTHS = (0,) + GSM_BASE_LENGTHS                              # the chat tasks add the zero-noise datasets (owner 11-16)
+GSM_OPS = tuple(range(2, 21))                                           # BASE tasks: the op counts of the first build
+GSM_OPS_OFFICIAL = tuple(range(2, 31))                                  # config.sh ops_config["{0,8k,16k,32k}_{medium,hard}"] = '{"start": 2, "end": 30, "stride": 1}'
+GSM_SYMBOLIC_OPS = {0: (1, 50), 8192: (1, 30), 16384: (1, 20), 32768: (1, 10)}      # config.sh ops_config["<length>_symbolic"]: start 1, stride 1 (the lengths 0 / 8k / 16k / 32k)
+GSM_VERSION = 1                         # chat tasks: 1 = the official-setup alignment of 11-16 (over_context zero, ops 2 .. 30 where the data exist, `auc`, zero-noise / symbolic tasks); base: 0, unchanged
 GSM_BASE_NEW = 4096                     # base generation cap = the official max_tokens: gsm-infinite/config.sh `max_tokens=4096` ("Token limits"; run.sh passes it as --max-tokens, pred/model_handler.py defaults to 4096 too)
                                         # @ Infini-AI-Lab/gsm_infinite caa53880. The official code has NO separate base / completion path (OpenAI chat.completions only), so a base model gets the same cap.
-GSM_CHAT_NEW = 8192                     # chat default cap (the registry yaml sets it; thinking models may need more)
+GSM_CHAT_NEW = 8192                     # chat non-thinking cap (the registry yaml sets it; a thinking run takes the yaml's `think_budget` 32,768): 2x the official 4,096, docs/evals/tasks/gsm_infinite.md
 GSM_MARGIN = 64
+GSM_MIN_ANSWER = 1024                   # chat: the floor of the answer budget (the OLMES MRCR rule openai_mrcr.py:44 `min_acceptable_gen_toks`, as MRCR / FRAMES): below it the item is not generated and scores 0
 GSM_BASE_STOP = ["\nProblem:"]         # a base model that has answered goes on with a new "Problem:"
 
 _GSM_KEYWORDS = ["answer: ", "solution: ", "oxed{", "**answer:** ", "**answer: ", "final answer: answer: ", "\nanswer: ", r"\text{answer: } ", "is ", "answer: "]
@@ -297,25 +308,44 @@ def _count_messages(messages: list[dict], tok) -> int:
 
 def gsm_doc(line, task_name: str, subset: str, chat: bool) -> Doc:
     messages = json.loads(line["messages"])
+    if chat:
+        return _gsm_chat_doc(line, task_name, subset, messages)
     skipped, n_prompt = False, -1
     tok_path = os.environ.get(ENV_TOKENIZER)
     if tok_path:
         tok = _tokenizer(tok_path)
-        if chat:
-            n_prompt = _count_messages(messages, tok)
-        else:
-            n_prompt = len(tok.encode(_gsm_plain(messages), add_special_tokens=False))
-        skipped = not _fit(n_prompt, run_new_tokens(GSM_CHAT_NEW if chat else GSM_BASE_NEW), GSM_MARGIN)
+        n_prompt = len(tok.encode(_gsm_plain(messages), add_special_tokens=False))
+        skipped = not _fit(n_prompt, run_new_tokens(GSM_BASE_NEW), GSM_MARGIN)
     spec = {"id": line["id"], "op": int(line["op"]), "template": line["template"], "mode": line["mode"], "n_tokens": n_prompt, "skipped": skipped, "subset": subset}
+    query = SKIP_USER if skipped else _gsm_plain(messages)
     if skipped:
-        spec["chat_messages"] = [{"role": "user", "content": SKIP_USER}] if chat else None
+        spec["chat_messages"] = None
+    return Doc(task_name=task_name, query=query, choices=[str(int(line["answer"]))], gold_index=0, specific={k: v for k, v in spec.items() if v is not None})
+
+
+def _gsm_chat_fit(messages: list[dict], spec: dict) -> bool:
+    """The OLMES answer-budget rule for one chat item (owner 11-16, task key `over_context: zero`; MRCR / FRAMES do the same): budget = min(the run's generation cap, context - prompt - 64);
+    below GSM_MIN_ANSWER the item is NOT generated and scores 0 (the official script's failed request: the reply becomes "Error: ..." which the parser scores 0, the item stays in N);
+    a smaller budget that still reaches the floor is the item's own cap (`max_new_tokens`, counted by `reduced_budget`). Writes the marks into `spec`. -> over_context?
+    Without the run's tokenizer / context (unit tests, `lighteval tasks inspect`) nothing is marked."""
+    new = run_new_tokens(GSM_CHAT_NEW)
+    tok_path = os.environ.get(ENV_TOKENIZER)
+    n_prompt = _count_messages(messages, _tokenizer(tok_path)) if tok_path else -1
+    spec["n_tokens"] = n_prompt
+    fit = af.fit_answer(n_prompt, new, GSM_MIN_ANSWER, GSM_MARGIN) if tok_path else af.no_fit(new)
+    af.mark(spec, fit)
+    return fit["over_context"]
+
+
+def _gsm_chat_doc(line, task_name: str, subset: str, messages: list[dict]) -> Doc:
+    spec = {"id": line["id"], "op": int(line["op"]), "template": line["template"], "mode": line["mode"], "subset": subset}
+    if _gsm_chat_fit(messages, spec):
+        spec["chat_messages"] = [{"role": "user", "content": SKIP_USER}]
         query = SKIP_USER
-    elif chat:
+    else:
         spec["chat_messages"] = messages
         query = messages[-1]["content"]
-    else:
-        query = _gsm_plain(messages)
-    return Doc(task_name=task_name, query=query, choices=[str(int(line["answer"]))], gold_index=0, specific={k: v for k, v in spec.items() if v is not None})
+    return Doc(task_name=task_name, query=query, choices=[str(int(line["answer"]))], gold_index=0, specific=spec)
 
 
 def _gsm_plain(messages: list[dict]) -> str:
@@ -326,6 +356,7 @@ def _gsm_plain(messages: list[dict]) -> str:
 
 
 def _gsm_score(doc: Doc, pred: str) -> dict[str, float]:
+    """BASE tasks (as built 11-14): an item that did not fit is skipped (NaN in every metric, counted in `skipped`)."""
     spec = doc.specific or {}
     if spec.get("skipped"):
         return {name: NAN for name in GSM_NAMES if name != "skipped"} | {"skipped": 1.0}
@@ -353,6 +384,68 @@ def gsm_metric() -> SampleLevelMetricGrouping:
     )
 
 
+# ---- the official AUC (gsm-infinite/app.py:65-73 `calculate_auc`, called with the per-op accuracies of one length / subset at app.py:178-214; the leaderboard numbers of docs/LEADERBOARDS.md are these)
+# AUC = trapezoid rule of the accuracy over the op count (x = the op counts present, sorted; y = the accuracy at each) x 100; fewer than 2 points: 0. The accuracy at an op = the mean over that op's
+# questions (eval_realistic.py:159-191 `correct_num / len(replies)`, 1 sample here), an item that did not fit the context counts wrong (it stays in N, as the official failed request does).
+# The corpus-level function only sees the list of one metric's per-item values, so the per-item value carries its op count: `auc` = op + 0.5 x (share of the item's samples that are correct)
+# (the op is the integer part; the fraction is 0 or 0.5, a half-integer is never an op), decoded by `gsm_auc`. The details files therefore show `auc` values like 12.5 (op 12, correct).
+def gsm_auc_code(op, ok: float) -> float:
+    return float(op) + 0.5 * float(ok)
+
+
+def gsm_auc(values) -> float:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return float("nan")
+    ops = np.floor(arr)
+    acc = {int(o): float(np.mean(2.0 * (arr[ops == o] - o))) for o in np.unique(ops)}        # per-op accuracy (decoded)
+    xs = sorted(acc)
+    if len(xs) < 2:
+        return 0.0
+    return float(sum((xs[i + 1] - xs[i]) * (acc[xs[i]] + acc[xs[i + 1]]) / 2.0 for i in range(len(xs) - 1)) * 100.0)       # np.trapz(y, x) * 100 written out (np.trapz is gone in newer numpy)
+
+
+def gsm_chat_names(ops) -> tuple[str, ...]:
+    """The metrics of a CHAT realistic task (medium / hard): `acc` is the headline (the mean over all items = the mean of the per-op accuracies), `auc` the official aggregate."""
+    return ("acc", "auc", "acc_forward", "acc_reverse", "no_answer", "over_context", "reduced_budget", *[f"acc_op{n}" for n in ops])
+
+
+def _gsm_chat_score_fn(ops):
+    names = gsm_chat_names(ops)
+
+    def score(doc: Doc, pred: str) -> dict[str, float]:
+        spec = doc.specific or {}
+        op, mode, over = spec.get("op"), spec.get("mode"), bool(spec.get("over_context"))
+        if over:                                       # not generated: wrong, stays in N (official: the failed request is an "Error: ..." reply, scored 0); no reply to parse: `no_answer` is not defined
+            ok, no_answer = 0.0, NAN
+        else:
+            gold = int(doc.get_golds()[0])
+            parsed = gsm_extract(pred) if pred and pred.strip() else None
+            ok = 1.0 if parsed is not None and parsed == gold else 0.0
+            no_answer = 0.0 if parsed is not None else 1.0
+        out = {"acc": ok, "auc": gsm_auc_code(op, ok), "no_answer": no_answer, "over_context": float(over), "reduced_budget": float(bool(spec.get("reduced_budget")) and not over),
+               "acc_forward": _nan_if(mode == "normalforward", ok), "acc_reverse": _nan_if(mode == "forwardreverse", ok)}
+        for n in ops:
+            out[f"acc_op{n}"] = _nan_if(op == n, ok)
+        assert set(out) == set(names)
+        return out
+
+    return score
+
+
+def gsm_chat_metric(ops) -> SampleLevelMetricGrouping:
+    names = gsm_chat_names(ops)
+    shares = ("over_context", "reduced_budget")
+    return SampleLevelMetricGrouping(
+        metric_name=list(names),
+        sample_level_fn=ChatSamples(N_SAMPLES, _gsm_chat_score_fn(ops), names, ks=()),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn={name: (np.mean if name in shares else gsm_auc if name == "auc" else _members_avg) for name in names},
+        higher_is_better={name: name not in ("no_answer", *shares) for name in names},
+    )
+
+
 # gsm-infinite/config.sh `filter_config` (Infini-AI-Lab/gsm_infinite @ caa53880), in the official order: (percentage, template, mode). The same list is long_data.GSM_FILTER of
 # titan_eval (the preparation); the fork cannot import it.
 GSM_FILTER = (
@@ -367,16 +460,24 @@ GSM_FILTER = (
 
 class GsmLimit:
     """`hf_filter` object of the opt-in flag: the official `limit` rule at `limit` per op count. The prepared file holds, per op, the first int(200 * pct) rows of each
-    filter_config group in dataset order; the first int(limit * pct) rows of each group are a prefix of that, i.e. exactly the rows the official script takes at that limit."""
+    filter_config group in dataset order; the first int(limit * pct) rows of each group are a prefix of that, i.e. exactly the rows the official script takes at that limit.
+    `max_op`: rows of a higher op count are dropped (the BASE tasks read the same files as the chat tasks, which hold ops 21 .. 30 at the lengths 0 / 8k / 16k / 32k; the base tasks stay at 2 .. 20).
+    `limit=None`: no per-group cap (only the op filter)."""
 
-    def __init__(self, limit: int):
-        self.limit = int(limit)
+    def __init__(self, limit: int | None, max_op: int | None = None):
+        self.limit = None if limit is None else int(limit)
+        self.max_op = None if max_op is None else int(max_op)
 
     def pick(self, rows) -> list[int]:
         """Indices (ascending) of the kept rows of one split."""
         seen: dict[tuple, int] = {}
         keep = []
         for i, r in enumerate(rows):
+            if self.max_op is not None and int(r["op"]) > self.max_op:
+                continue
+            if self.limit is None:
+                keep.append(i)
+                continue
             pct = next((p for p, t, m in GSM_FILTER if t == r["template"] and m == r["mode"]), None)
             if pct is None:
                 continue
@@ -397,13 +498,18 @@ class GsmLimit:
         return self._one(dataset)
 
     def __repr__(self) -> str:
-        return f"GsmLimit({self.limit})"
+        return f"GsmLimit({self.limit}, max_op={self.max_op})"
 
 
-def gsm_limit_filter():
-    """None (the full prepared sample, 200 per op) unless the run set data.sample_per_group."""
+def gsm_limit_filter(max_op: int | None = None):
+    """None (the full prepared sample, 200 per op) unless the run set data.sample_per_group or the task caps the op count (`max_op`: the base tasks, ops <= 20)."""
     n = sample_per_group()
-    return None if n is None else GsmLimit(n)
+    return None if n is None and max_op is None else GsmLimit(n, max_op)
+
+
+def gsm_chat_ops(length: int) -> tuple[int, ...]:
+    """Op counts of a CHAT realistic task: the official 2 .. 30 where the datasets have them (0 / 8k / 16k / 32k), 2 .. 20 at 64k / 128k (our extension; the HF datasets stop at 20)."""
+    return GSM_OPS_OFFICIAL if length <= 32768 else GSM_OPS
 
 
 def _gsm_config(subset: str, length: int, chat: bool) -> LightevalTaskConfig:
@@ -423,14 +529,16 @@ def _gsm_config(subset: str, length: int, chat: bool) -> LightevalTaskConfig:
         few_shots_select=None,
         generation_size=GSM_CHAT_NEW if chat else GSM_BASE_NEW,
         stop_sequence=[] if chat else GSM_BASE_STOP,
-        hf_filter=gsm_limit_filter(),
-        metrics=[gsm_metric()],
-        version=0,
+        hf_filter=gsm_limit_filter(None if chat else GSM_OPS[-1]),
+        metrics=[gsm_chat_metric(gsm_chat_ops(length)) if chat else gsm_metric()],
+        version=GSM_VERSION if chat else 0,
     )
 
 
 def _build_gsm_tasks() -> list[LightevalTaskConfig]:
-    return [_gsm_config(s, n, chat) for s in GSM_SUBSETS for n in GSM_LABEL for chat in (False, True)]
+    base = [_gsm_config(s, n, False) for s in GSM_SUBSETS for n in GSM_BASE_LENGTHS]
+    chat = [_gsm_config(s, n, True) for s in GSM_SUBSETS for n in GSM_CHAT_LENGTHS]
+    return base + chat
 
 
 TASKS_TABLE += _build_gsm_tasks()
@@ -637,3 +745,42 @@ TASKS_TABLE += [
         version=0,
     ),
 ]
+
+
+# ================================================================================================ GSM-Infinite symbolic (chat, judge-graded)
+# The symbolic subset of the official run (gsm-infinite/config.sh: lengths 0 / 8k / 16k / 32k, ops 1 .. 50 / 30 / 20 / 10, `limit_symbolic=100` = every row of the op splits, temperature 1.0 official). The prompt is the
+# dataset's `messages` as given (ONE user message: `<context>` + the question). The official answer reading (pred/eval_symbolic.py) is an LLM extraction (Qwen2.5-7B-Instruct, temperature 0, 2,048 tokens) of
+# the variable names out of the reply, then `re.findall(r'\bV\d+\b')` and set equality with the dataset's `answer_list`: that is the judge stage of titan_eval (judge_graders.py grader `gsm_symbolic`), so
+# the lighteval metrics here are only `answered`, `over_context` and `reduced_budget` (as FRAMES). The same OLMES answer-budget rule as the realistic chat tasks (`_gsm_chat_fit`).
+def gsm_symbolic_doc(line, task_name: str = None) -> Doc:
+    messages = json.loads(line["messages"])
+    gold = json.loads(line["answer_list"])
+    spec = {"id": line["id"], "op": int(line["op"]), "n": int(line["n"]), "answer_q": int(line["answer_q"]), "question": line["question"], "gold": gold, "subset": "symbolic"}
+    if _gsm_chat_fit(messages, spec):
+        spec["chat_messages"] = [{"role": "user", "content": SKIP_USER}]
+        query = SKIP_USER
+    else:
+        spec["chat_messages"] = messages
+        query = messages[-1]["content"]
+    return Doc(task_name=task_name, query=query, choices=[", ".join(gold)], gold_index=0, specific=spec)
+
+
+def _gsm_symbolic_config(length: int) -> LightevalTaskConfig:
+    return LightevalTaskConfig(
+        name=f"gsm_infinite_symbolic_{length}_chat",
+        prompt_function=gsm_symbolic_doc,
+        hf_repo=prepared(f"gsm_infinite_symbolic_{GSM_LABEL[length]}"),
+        hf_subset="default",
+        hf_revision=None,
+        hf_avail_splits=["train"],
+        evaluation_splits=["train"],
+        few_shots_split=None,
+        few_shots_select=None,
+        generation_size=GSM_CHAT_NEW,
+        stop_sequence=[],
+        metrics=[frames_metric],
+        version=GSM_VERSION,
+    )
+
+
+TASKS_TABLE += [_gsm_symbolic_config(n) for n in GSM_SYMBOLIC_OPS]
