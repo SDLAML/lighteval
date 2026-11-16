@@ -1043,6 +1043,14 @@ class LightevalTask:
                 dataset = apply_dataset_filter(dataset, task.dataset_filter)
             return dataset  # type: ignore
 
+        if task.dataset_path == "agieval_local":      # the official AGIEval v1 files (owner 11-16), pinned by sha256 in tasks/tasks/agieval.py
+            from lighteval.tasks.tasks.agieval import load_agieval
+
+            dataset = load_agieval(task.dataset_config_name)
+            if task.dataset_filter is not None:
+                dataset = apply_dataset_filter(dataset, task.dataset_filter)
+            return dataset  # type: ignore
+
         if task.dataset_path == "rbridge_local":
             dataset = _load_rbridge_dataset(task.dataset_config_name)
             if task.dataset_filter is not None:

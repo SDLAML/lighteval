@@ -181,7 +181,7 @@ TASKS_TABLE = [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[longbench_v2_metric()],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
     ),
 ]
 

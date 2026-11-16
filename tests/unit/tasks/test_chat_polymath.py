@@ -8,11 +8,9 @@ Plain functions: run with pytest, or `python tests/unit/tasks/test_chat_polymath
 import unittest
 from collections import Counter
 
-from lighteval.metrics.chat_metrics import chat_math_metric
 from lighteval.models.model_output import ModelResponse
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.tasks import chat_polymath as cp
-from lighteval.tasks.tasks.chat_evals import MATH_PROMPT
 
 
 def _cfg(name):
@@ -103,10 +101,66 @@ def test_polymath_metric_names_and_samples():
 
 
 def test_mgsm_prompt_and_scoring():
-    doc = _cfg("mgsm_chat:sw").prompt_function({"question": "Ni kiasi gani?", "answer": "18"}, "t")
-    assert doc.query == MATH_PROMPT.format(problem="Ni kiasi gani?") and doc.choices == ["$18$"]
-    assert chat_math_metric(1).sample_level_fn.compute(doc, ModelResponse(text=["x \\boxed{18}"], text_post_processed=["x \\boxed{18}"]))["avg@n"] == 1.0
-    assert _cfg("mgsm_chat:sw").metrics[0].sample_level_fn.num_samples() == 1
+    """B4 (owner 11-16): the dataset's own per-language instruction + answer prefix, simple-evals parse / score."""
+    line = {"question": "Ni kiasi gani?", "answer": "18", "instruction": 'Suluhisha tatizo hili. Jibu: "Jibu:".', "answer_prefix": "Jibu"}
+    doc = _cfg("mgsm_chat:sw").prompt_function(line, "t")
+    assert doc.query == 'Suluhisha tatizo hili. Jibu: "Jibu:".\n\nNi kiasi gani?' and doc.choices == ["18"] and doc.specific == {"answer_prefix": "Jibu"}
+    m = _cfg("mgsm_chat:sw").metrics[0]
+    assert m.sample_level_fn.num_samples() == 1 and m.sample_level_fn.primary == "avg@n" and set(m.sample_level_fn.names) == {"avg@n", "no_answer_prefix"}
+    assert m.higher_is_better["no_answer_prefix"] is False and m.higher_is_better["avg@n"] is True
+
+    def score(text, gold="18"):
+        d = _cfg("mgsm_chat:sw").prompt_function({**line, "answer": gold}, "t")
+        return m.sample_level_fn.compute(d, ModelResponse(text=[text], text_post_processed=[text]))
+    assert score("reasoning...\nJibu: 18")["avg@n"] == 1.0
+    assert score("Jibu: 1,000", "1000")["avg@n"] == 1.0, "commas are removed (simple-evals parse_answer / score_mgsm)"
+    assert score("Jibu: 18.0")["avg@n"] == 1.0 and score("Jibu: 18.")["avg@n"] == 1.0, "a trailing .0 / . is dropped (score_mgsm)"
+    assert score("Jibu: 18.5")["avg@n"] == 0.0 and score("Jibu: 180")["avg@n"] == 0.0
+    assert score("Jibu: 17 ... Jibu: 18")["avg@n"] == 1.0, "the text after the LAST prefix"
+    assert score("Jibu: 18 times 2 is 36")["avg@n"] == 0.0, "the LAST number after the prefix (simple-evals returns numbers[-1])"
+    r = score("The answer is \\boxed{18}")
+    assert r["avg@n"] == 0.0 and r["no_answer_prefix"] == 1.0, "no prefix = no answer, a box does not count"
+    assert score("")["avg@n"] == 0.0 and score("   ")["no_answer_prefix"] == 1.0
+    assert score("Jibu: 18")["no_answer_prefix"] == 0.0
+    assert cp.mgsm_parse_answer("x", "Jibu") == "" and cp.mgsm_parse_answer("Jibu: 1,234.50 kg", "Jibu") == "1234.50"
+    assert cp.mgsm_score_one("1234.5", "1234.50") and not cp.mgsm_score_one("12", "1.2")
+    assert _cfg("mgsm_chat:sw").version == 1
+
+
+def test_mgsm_functions_are_the_simple_evals_ones():
+    """parse_answer / score_mgsm are compared with the downloaded simple-evals file (skipped when it is not there)."""
+    import ast
+    import os
+    path = "/e/scratch/trustllm-eu/wang55/tmp/chatfix-src/simple-evals/mgsm_eval.py"
+    if not os.path.isfile(path):
+        print("skip: simple-evals mgsm_eval.py not on disk")
+        return
+    ns = {"re": __import__("re")}
+    tree = ast.parse(open(path).read())
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in ("parse_answer", "score_mgsm"):
+            exec(compile(ast.Module([node], []), path, "exec"), ns)       # two pure string functions of the reference file
+    for text, prefix in [("a Answer: 1,234.50 x", "Answer"), ("no prefix 12", "Answer"), ("Antwort: 7 und Antwort: 8.", "Antwort"), ("答え: 42。", "答え"), ("Jibu: ", "Jibu"), ("Ответ 3.0", "Ответ")]:
+        assert cp.mgsm_parse_answer(text, prefix) == ns["parse_answer"](text, prefix), (text, prefix)
+    for target, pred in [("18", "18"), ("1,000", "1000"), ("18", "18.0"), ("18", "18.00"), ("5", "50"), ("0", "0.0"), ("10", "10"), ("100", "10.0")]:
+        assert cp.mgsm_score_one(target, pred) == ns["score_mgsm"](target, pred), (target, pred)
+
+
+def test_mgsm_prompts_on_the_pinned_data():
+    """The first row of every one of the 40 languages: instruction + question, the prefix is in the instruction, the gold a digit string; skipped without the cached data."""
+    import glob
+    import re
+    base = glob.glob("/e/scratch/trustllm-eu/wang55/titan_eval/.cache/huggingface/hub/datasets--CohereLabs--global-mgsm/snapshots/29087245*/")
+    if not base:
+        print("skip: global-mgsm not cached")
+        return
+    import pandas as pd
+    for task in [c for c in cp.TASKS_TABLE if c.name.startswith("mgsm_chat:")]:
+        d = pd.read_parquet(f"{base[0]}{task.hf_subset}/test.parquet")
+        row = d.iloc[0].to_dict()
+        doc = task.prompt_function(row, "t")
+        assert doc.query.startswith(row["instruction"].strip()) and doc.query.endswith(row["question"].strip()) and row["answer_prefix"] in row["instruction"]
+        assert re.fullmatch(r"\d+", doc.choices[0]) and doc.specific["answer_prefix"] == row["answer_prefix"] and len(d) == 250
 
 
 def test_unscorable_golds_are_counted_not_removed():

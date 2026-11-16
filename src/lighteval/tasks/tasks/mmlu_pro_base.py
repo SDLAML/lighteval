@@ -16,9 +16,10 @@ the first "answer is (X)" (letters A-J), else "answer: X", else the last stand-a
 Differences from the official script (documented in docs/evals/tasks/mmlu_pro_base_cot.md): (1) an output with NO letter at all scores 0 (the script
 guesses a random option); (2) the script drops shots when the prompt would exceed 2048 tokens (its 4096-token context); here the context is 8192 and
 all 5 shots are always shown; (3) options equal to "N/A" are dropped as in the script (none occur in the test split); (4) the gold is the `answer` letter, as the script compares it (one question,
-3983, has `answer_index` 1 for `answer` "C"). One pooled task over all 12,032
-test questions: the score is the overall accuracy (the official "total"), as the paper and the Qwen3 / Qwen2.5 base reports use it; the category is
-kept in `doc.specific` for a breakdown from the details. Metrics: acc, answer_is_rate (share of outputs with the first-level "answer is (X)").
+3983, has `answer_index` 1 for `answer` "C"). One lighteval task over all 12,032
+test questions; `acc` of the lighteval task is the pooled accuracy (the official "total", TIGER-Lab `evaluate_from_local.py`), the category is kept in `doc.specific`. The HEADLINE of titan_eval is the mean over
+the 14 categories (owner 11-16, registry `aggregate: item_group_mean`, `item_group: category`) and the pooled value is the second metric `acc_micro`. Dataset revision (owner 11-16): b189ec76, the HEAD the official script loads (the
+previous pin 3373e0b3 lacked 173 corrected golds, 161 corrected questions, 644 corrected option lists and the corrected validation shot question_id 9). Metrics: acc, answer_is_rate (share of outputs with the first-level "answer is (X)").
 
 languages:
 english
@@ -43,10 +44,11 @@ from lighteval.tasks.requests import Doc, SamplingMethod
 
 
 REPO = "TIGER-Lab/MMLU-Pro"
-REVISION = "3373e0b32277875b8db2aa555a333b78a08477ea"  # the pin of mmlu_pro_chat too (card license: MIT)
+REVISION = "b189ec765aa7ed75c8acfea42df31fdae71f97be"  # the pin of mmlu_pro_chat too (card license: MIT). Owner 11-16: the dataset HEAD (2026-05-02), which the official evaluate script loads (`load_dataset` without a
+# revision); until then 3373e0b3 (2024-10-18), which lacks the later corrections (173 test golds, 161 questions, 644 option lists, the validation shot question_id 9). Prompt parity with the official builders: 12,032 / 12,032 on this revision.
 MAX_NEW_TOKENS = 2048  # official: max_new_tokens
 STOP_SEQUENCES = ["Question:"]  # official: stop=["Question:"]
-TASK_VERSION = 0
+TASK_VERSION = 1   # 0 -> 1 (owner 11-16): dataset revision b189ec76 (the headline rule, the mean over the 14 categories, is the registry's: titan_eval `item_group_mean`)
 
 # cot_prompt_lib/initial_prompt.txt is "<line>\n\n\n" and the script adds "\n" before the first example: four newlines. lighteval joins the
 # instruction, every shot and the question with "\n\n", so the instruction itself ends with two newlines.
@@ -89,7 +91,7 @@ def mmlu_pro_base_prompt(line, task_name: str = None):
         task_name=task_name,
         query=f"{_question_block(line)} Let's think step by step.",
         choices=letters,
-        gold_index=letters.index(line["answer"]),     # the letter, as the official script compares it (question 3983 has answer_index 1 for answer "C": the script scores by `answer`)
+        gold_index=letters.index(line["answer"]),     # the letter, as the official script compares it (on 3373e0b3 question 3983 had answer_index 1 for answer "C"; the two columns agree on b189ec76; the script scores by `answer`)
         instruction=HEADER.format(category=category),
         specific={"category": category, "fewshot_group": category, "question_id": int(line["question_id"]), "n_options": len(letters)},
     )

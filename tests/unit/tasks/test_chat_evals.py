@@ -152,6 +152,24 @@ def test_anchored_letter_variants():
     assert anchored_letter("Answer: C\n\nThe answer I gave above is final.", 10) == "C" and anchored_letter("Answer C", 4) is None and anchored_letter("Answer: B\nAnswer: C", 4) == "C"
 
 
+def test_anchored_letter_reads_through_markup_like_simple_evals():
+    """A2 (owner 11-16): the text is normalised as simple-evals `normalize_response` (common.py l.355) before the anchor is matched; the hedge and the last-match rules still apply."""
+    from lighteval.metrics.chat_metrics import anchored_letter, normalize_response
+    reads = {"**Answer:** **B**.": "B", "Answer: \\(\\boxed{I}\\)": "I", "Answer: \\( \\boxed{I} \\)": "I", "**Answer: C**": "C", "Answer: $\\boxed{D}$": "D", "**The answer is B**": "B",
+             "text**Answer: D**": "D", "\u0b95\u0b9f\u0bc1**Answer: D**": "D", "Answer:**B**": "B", "Answer: \\textbf{B}": None, "Answer: $\\mathbf{B}$": "B", "Answer: \\mathrm{C}": "C"}
+    for text, want in reads.items():
+        assert anchored_letter(text, 10) == want, (text, anchored_letter(text, 10))
+    # the hedge rule sees through the markup too: a second letter after the first is no answer, whatever wraps it
+    for h in ("The answer is **C** or **D**", "**Answer: A** and **B**.", "Answer: \\boxed{B \\text{ or } C}", "Answer: **B**, **C**"):
+        assert anchored_letter(h, 10) is None, h
+    assert anchored_letter("Answer: $A$E$G$I$J$", 10) is None, "a list of letters is no single answer"
+    assert anchored_letter("**Answer:** A ... then **Answer:** C", 4) == "C", "the LAST anchored answer"
+    assert anchored_letter("Answer: **E**", 4) is None and anchored_letter("Answer: **E**", 5) == "E"
+    # the function is the simple-evals one except that `**` becomes a space
+    assert "**" not in normalize_response("a**b") and normalize_response("a**b") == "a b"
+
+
+
 def test_unbiased_pass_at_k():
     assert unbiased_pass_at_k(10, 0, 3) == 0.0 and unbiased_pass_at_k(10, 10, 3) == 1.0
     assert abs(unbiased_pass_at_k(10, 3, 1) - 0.3) < 1e-12 and unbiased_pass_at_k(4, 3, 2) == 1.0
@@ -172,8 +190,11 @@ def test_prompts_have_no_instruction_and_a_fixed_gpqa_order():
     assert d1.query == d2.query and d1.gold_index == d2.gold_index, "no random.randint: the same order in every run"
     assert d1.instruction is None and d1.choices == ["A", "B", "C", "D"]
     assert f"{'ABCD'[d1.gold_index]}) right" in d1.query
-    mp = chat_evals.mmlu_pro_chat_prompt({"question": "Q", "options": [str(i) for i in range(9)], "answer_index": 3, "category": "law", "question_id": 1}, "t")
+    mp = chat_evals.mmlu_pro_chat_prompt({"question": "Q", "options": [str(i) for i in range(9)], "answer": "D", "answer_index": 3, "category": "law", "question_id": 1}, "t")
     assert mp.choices == list("ABCDEFGHI") and mp.gold_index == 3 and "one of ABCDEFGHI." in mp.query
+    # A3 (owner 11-16): the gold is the LETTER `answer` (TIGER-Lab evaluate_from_api.py l.263), not `answer_index`: question_id 3983 has answer "C" and answer_index 1
+    q3983 = chat_evals.mmlu_pro_chat_prompt({"question": "Q", "options": [str(i) for i in range(4)], "answer": "C", "answer_index": 1, "category": "law", "question_id": 3983}, "t")
+    assert q3983.gold_index == 2
     ifd = chat_evals.ifeval_chat_prompt({"prompt": "  Write.  ", "instruction_id_list": ["a:b"], "kwargs": [{}]}, "t")
     assert ifd.query == "  Write.  " and ifd.instruction is None and ifd.specific["instructions_id_list"] == ["a:b"]
     ibd = chat_evals.ifbench_chat_prompt({"prompt": "P", "instruction_id_list": ["a:b"], "kwargs": [{}]}, "t")

@@ -122,7 +122,7 @@ def _build_tasks():
                 stop_sequence=[],
                 hf_filter=subset_filter(f"{SEED}:mmmlu:{locale}", _mmmlu_key, ["test"]),      # None = the full test split
                 metrics=[chat_choice_metric(1)],
-                version=0,
+                version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
             )
         )
     for language, code in _LANGUAGES.items():
@@ -141,7 +141,7 @@ def _build_tasks():
                 stop_sequence=[],
                 hf_filter=subset_filter(f"{SEED}:include:{language}", include_row_key, ["test"]),
                 metrics=[chat_choice_metric(1)],
-                version=0,
+                version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
             )
         )
     return tasks

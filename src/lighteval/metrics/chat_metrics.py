@@ -103,9 +103,34 @@ _ANSWER = re.compile(
 _HEDGE = re.compile(r"[ \t]*[\)\]\}\$\*]*[ \t]*(?:/|,|&|(?:\\text\{[ \t]*)?\b(?:or|and)\b(?:[ \t]*\})?)[ \t]*[\(\[]?\$?[ \t]*[A-J](?![A-Za-z0-9])")
 
 
+def normalize_response(response: str) -> str:
+    """Remove the markdown and LaTeX markup that hides an "Answer: X" line, exactly as OpenAI simple-evals does before it matches the answer: `normalize_response` in
+    github.com/openai/simple-evals `common.py` (l.355-376; `mmlu_eval.py` l.106 calls it on the response before the answer regex is matched). "**Answer:** **B**" and "Answer: \\(\\boxed{I}\\)"
+    become " Answer:  B " and "Answer: I\\)". The ONE change to the simple-evals code: a bold marker `**` becomes a space, not nothing, so that "text**Answer: D**" keeps the word boundary
+    before "Answer" (nothing is glued to the previous word; 1 of 196,588 stored MMMLU answers, "...non-ASCII word**Answer: D**", was lost with the plain removal). Used by `anchored_letter`
+    and by the BBH letter reader (chat_reasoning._bbh_letter) (A2, owner 11-16)."""
+    return (
+        response.replace("**", " ")
+        .replace("$\\boxed{", "")
+        .replace("}$", "")
+        .replace("\\$", "")
+        .replace("$\\text{", "")
+        .replace("$", "")
+        .replace("\\mathrm{", "")
+        .replace("\\{", "")
+        .replace("\\text", "")
+        .replace("\\(", "")
+        .replace("\\mathbf{", "")
+        .replace("{", "")
+        .replace("\\boxed", "")
+    )
+
+
 def anchored_letter(pred: str, n_options: int) -> str | None:
     """The letter of the LAST anchored answer in `pred` ("Answer: X" and its variants, see _ANSWER), None when there is none, when it is a hedge (a second letter
-    follows it, see _HEDGE) or when it is not one of the n options."""
+    follows it, see _HEDGE) or when it is not one of the n options. The text is first normalised as simple-evals does (`normalize_response`: bold markers, `$`, `\\(`,
+    `\\boxed`, `\\text`, `{` removed), so "**Answer:** **B**" and "Answer: \\(\\boxed{I}\\)" are read; the last-match and the hedge rule are applied to the normalised text."""
+    pred = normalize_response(pred)
     last = None
     for m in _ANSWER.finditer(pred):
         last = None if _HEDGE.match(pred, m.end()) else m.group(1)

@@ -163,11 +163,15 @@ def gpqa_chat_prompt(line, task_name: str = None):
 
 def mmlu_pro_chat_prompt(line, task_name: str = None):
     options = list(line["options"])
+    letters = list(ascii_uppercase[: len(options)])
+    # Gold = the LETTER column `answer`, as TIGER-Lab's official script compares it (MMLU-Pro/evaluate_from_api.py l.263 `each["pred"] == each["answer"]`) and as the base twin does
+    # (mmlu_pro_base.py: `doc.choices[doc.gold_index]` of the `answer` letter). On the old pin 3373e0b3 the two columns disagreed in exactly one of the 12,032 rows, question_id 3983 (`answer` "C", `answer_index` 1)
+    # and this task scored `answer_index` until 11-16 (A3); on b189ec76 (the pin since 11-16) they agree everywhere.
     return Doc(
         task_name=task_name,
         query=mc_query(line["question"], options),
-        choices=list(ascii_uppercase[: len(options)]),
-        gold_index=int(line["answer_index"]),
+        choices=letters,
+        gold_index=letters.index(line["answer"]),
         specific={"category": line["category"], "question_id": line["question_id"]},
     )
 
@@ -213,14 +217,14 @@ TASKS_TABLE += [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[chat_choice_metric(N_GPQA)],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
     ),
     LightevalTaskConfig(
         name="mmlu_pro_chat",
         prompt_function=mmlu_pro_chat_prompt,
         hf_repo="TIGER-Lab/MMLU-Pro",
         hf_subset="default",
-        hf_revision="3373e0b32277875b8db2aa555a333b78a08477ea",
+        hf_revision="b189ec765aa7ed75c8acfea42df31fdae71f97be",      # owner 11-16: the dataset HEAD (the revision the official script loads); was 3373e0b3, which lacked 173 corrected golds, 161 questions, 644 option lists
         hf_avail_splits=["test", "validation"],
         evaluation_splits=["test"],
         few_shots_split=None,
@@ -228,7 +232,7 @@ TASKS_TABLE += [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[chat_choice_metric(1)],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16): A2 reader, A3 gold letter, dataset revision b189ec76
     ),
 ]
 
@@ -246,7 +250,7 @@ TASKS_TABLE += [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[chat_choice_metric(1)],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
     )
     for subset in _MMLU_SUBSETS
 ]

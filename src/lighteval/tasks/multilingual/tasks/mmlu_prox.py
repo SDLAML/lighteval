@@ -110,6 +110,7 @@ def mmlu_prox_cf_prompt(line, task_name: str = None):
         query=f"Question: {line['question'].strip()}\nAnswer:",
         choices=choices,
         gold_index=line["answer_index"],
+        specific={"category": line.get("category")},     # owner 11-16: the item group of the headline (mean over the 14 categories of each language), stored in the details
     )
 
 
@@ -127,6 +128,7 @@ def mmlu_prox_mcf_prompt(line, task_name: str = None):
         query=query,
         choices=[" " + lbl for lbl in labels],
         gold_index=line["answer_index"],
+        specific={"category": line.get("category")},     # owner 11-16: the item group of the headline (mean over the 14 categories of each language), stored in the details
     )
 
 
@@ -149,6 +151,7 @@ TASKS_TABLE = [
         few_shots_split="validation",
         hf_filter=_valid_filter,
         metrics=metrics,
+        version=1,  # 0 -> 1 (owner 11-16): doc.specific carries the `category` (the item group of the headline); prompts and scoring are unchanged
     )
     for language in _LANGUAGES
     for suffix, prompt_fn, metrics in [
@@ -171,6 +174,7 @@ TASKS_TABLE += [
         generation_size=5,
         stop_sequence=["\n"],
         metrics=[Metrics.exact_match],
+        version=1,  # 0 -> 1 (owner 11-16): doc.specific carries the `category` (the item group of the headline); prompts and scoring are unchanged
     )
     for language in _LANGUAGES
 ]

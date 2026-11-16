@@ -35,7 +35,7 @@ reference answer, ...metadata}`. titan_eval/evals/judge.py then reads the answer
 model (titan_eval/evals/judge_graders.py) and adds the benchmark's metrics to scores.json. Tasks are named `<name>_chat`.
   simpleqa_chat       question only, as simple-evals (one user message, no system prompt); 4,321 test questions (+ 5 few-shot rows, not scored)
   simpleqa_verified_chat  the same bare question; the 1,000 questions of SimpleQA Verified (google/simpleqa-verified: numeric golds carry their acceptable range)
-  aa_omniscience_chat the dataset card's OMNISCIENCE_ANSWER_PROMPT (domain, subtopic) + the question in ONE user message (as the fork's aa_omniscience); 600 questions
+  aa_omniscience_chat the dataset card's OMNISCIENCE_ANSWER_PROMPT (domain, subtopic) as a SYSTEM message (paper Appendix A.1 \"Answerer System Prompt\") + the question as the user message; 600 questions
   aa_lcr_chat         the dataset card's prompt template: the documents of the question's set (in the order of data_source_filenames) + the question; 100 questions with 72k to 115k tokens
                       (cl100k_base) of input: needs vllm.max_model_len >= ~160k (the task yaml sets it); the documents come from the dataset's extracted_text zip
   hle_chat            the question as the user message; the repo's SYSTEM_PROMPT (Explanation / Answer / Confidence) is the run's system prompt (the task yaml's chat.system_prompt);
@@ -131,8 +131,13 @@ OMNISCIENCE_ANSWER_PROMPT = (
 
 
 def aa_omniscience_chat_prompt(line, task_name: str = None):
-    query = OMNISCIENCE_ANSWER_PROMPT.format(domain=line["domain"], subtopic=line["subtopic"]) + "\n\n" + line["question"]
-    return _doc(task_name, query, line["question"], line["answer"], domain=line["domain"], topic=line["topic"], subtopic=line["subtopic"], question_id=int(line["question_id"]))
+    """The answerer instructions are a SYSTEM message, the question alone is the user message: the AA-Omniscience paper (arXiv 2511.13029, Appendix A.1) calls the text the "Answerer
+    System Prompt" (A6, owner 11-16; until then both were ONE user message, as the fork's aa_omniscience). `specific["chat_messages"]` is rendered as given (prompt_manager.py
+    `_prepare_chat_template`; a model-level system prompt is not added to a conversation that has its own system message). The placeholders are the card's {domain} / {subtopic}
+    (the data columns; the paper writes {topic} / {category})."""
+    system = OMNISCIENCE_ANSWER_PROMPT.format(domain=line["domain"], subtopic=line["subtopic"])
+    return _doc(task_name, line["question"], line["question"], line["answer"], domain=line["domain"], topic=line["topic"], subtopic=line["subtopic"],
+                question_id=int(line["question_id"]), chat_messages=[{"role": "system", "content": system}, {"role": "user", "content": line["question"]}])
 
 
 # ------------------------------------------------------------------------------------------------------- AA-LCR
@@ -211,7 +216,7 @@ def hle_chat_prompt(line, task_name: str = None):
                 raw_subject=line["raw_subject"])
 
 
-def _cfg(name, prompt_fn, repo, revision, split, subset="default"):
+def _cfg(name, prompt_fn, repo, revision, split, subset="default", version=0):
     return LightevalTaskConfig(
         name=name,
         prompt_function=prompt_fn,
@@ -225,14 +230,14 @@ def _cfg(name, prompt_fn, repo, revision, split, subset="default"):
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[answered_metric],
-        version=0,
+        version=version,
     )
 
 
 TASKS_TABLE = [
     _cfg("simpleqa_chat", simpleqa_chat_prompt, SIMPLEQA_REPO, SIMPLEQA_REVISION, "test"),
     _cfg("simpleqa_verified_chat", simpleqa_verified_chat_prompt, SQV_REPO, SQV_REVISION, "eval", subset="simpleqa_verified"),
-    _cfg("aa_omniscience_chat", aa_omniscience_chat_prompt, OMNISCIENCE_REPO, OMNISCIENCE_REVISION, "train"),
+    _cfg("aa_omniscience_chat", aa_omniscience_chat_prompt, OMNISCIENCE_REPO, OMNISCIENCE_REVISION, "train", version=1),     # 0 -> 1 (owner 11-16, A6): the answerer instructions are a system message
     _cfg("aa_lcr_chat", aa_lcr_chat_prompt, LCR_REPO, LCR_REVISION, "test"),
     _cfg("hle_chat", hle_chat_prompt, HLE_REPO, HLE_REVISION, "test"),
 ]

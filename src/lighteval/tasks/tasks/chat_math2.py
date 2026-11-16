@@ -201,7 +201,7 @@ def mmlu_prox_tasks(prefix: str, seed_name: str, repo: str, revision: str) -> li
             stop_sequence=[],
             hf_filter=subset_filter(f"{SEED}:{seed_name}:{lang}", _prox_key, ["test"]),
             metrics=[chat_choice_metric(1)],
-            version=0,
+            version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
         )
         for lang in MMLU_PROX_LANGS
     ]

@@ -22,7 +22,7 @@
 
 """
 name:
-Chat reasoning / knowledge (titan_eval, post-trained models): MMLU (chat), GPQA main (chat)
+Chat reasoning / knowledge (titan_eval, post-trained models): MMLU (chat), GPQA main (chat), AGIEval English (chat), BBH CoT (chat)
 
 dataset:
 lighteval/mmlu (the revision of the base task mmlu:mcf_em; the same questions as cais/mmlu test, 14,042), Idavidrein/gpqa gpqa_main (448, gated)
@@ -47,10 +47,10 @@ import re
 from functools import partial
 from string import ascii_uppercase
 
-from lighteval.metrics.chat_metrics import _ANSWER, _HEDGE, _grouping, chat_choice_metric
+from lighteval.metrics.chat_metrics import _ANSWER, _HEDGE, _grouping, chat_choice_metric, normalize_response
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
-from lighteval.tasks.tasks.agieval import _REVISION as _AGIEVAL_REVISION, AGIEVAL_SUBSETS, _is_valid_sample, record_to_sample
+from lighteval.tasks.tasks.agieval import AGIEVAL_COMMIT, AGIEVAL_REPO, AGIEVAL_SUBSETS, _is_valid_sample, agieval_file, record_to_sample
 from lighteval.tasks.tasks.bigbench_hard import _BBH_SUBSETS
 from lighteval.tasks.tasks.chat_evals import BUDGET, N_GPQA, gpqa_chat_prompt, mc_query
 from lighteval.tasks.tasks.mmlu import _MMLU_REVISION, _MMLU_SUBSETS
@@ -88,7 +88,7 @@ TASKS_TABLE = [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[chat_choice_metric(1)],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
     )
     for subset in _MMLU_SUBSETS
 ]
@@ -108,7 +108,7 @@ TASKS_TABLE += [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[chat_choice_metric(N_GPQA)],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
     ),
 ]
 
@@ -116,7 +116,7 @@ TASKS_TABLE += [
 # ------------------------------------------------------------------------------------------------------------ AGIEval
 def agieval_en_chat_prompt(line, task_name: str = None):
     """The English AGIEval multiple-choice item (the base task's record_to_sample: passage + question, options, label) as a chat_evals MC prompt.
-    Rows the base task filters out (_is_valid_sample: two identical SAT-English rows) return None."""
+    Rows the base task filters out (_is_valid_sample: the two identical SAT-English rows, in `sat-en` and in `sat-en-without-passage`) return None."""
     sample = record_to_sample(line)
     if not _is_valid_sample(sample):
         return None
@@ -129,21 +129,23 @@ def agieval_en_chat_prompt(line, task_name: str = None):
     )
 
 
+# The OFFICIAL AGIEval data, all nine English multiple-choice files (owner 11-16; github.com/ruixiangcui/AGIEval `data/v1` @ 84ab72d9, see tasks/agieval.py), the same files as the base task
+# `agieval_eng:*:mcf_em`. Until 11-16 these were the 7 files of the hub copy lighteval/agi_eval_en (no gaokao-english, no sat-en-without-passage).
 TASKS_TABLE += [
     LightevalTaskConfig(
         name=f"agieval_en_chat:{subset}",
         prompt_function=agieval_en_chat_prompt,
-        hf_repo="lighteval/agi_eval_en",
-        hf_subset=subset,
-        hf_revision=_AGIEVAL_REVISION,
-        hf_avail_splits=["train", "validation"],
+        hf_repo=AGIEVAL_REPO,
+        hf_subset=agieval_file(subset),
+        hf_revision=AGIEVAL_COMMIT,
+        hf_avail_splits=["train"],
         evaluation_splits=["train"],
         few_shots_split=None,
         few_shots_select=None,
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[chat_choice_metric(1)],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16): the official AGIEval v1 files, 9 English subsets; the letter reader normalises markup (A2)
     )
     for subset in AGIEVAL_SUBSETS
 ]
@@ -167,11 +169,17 @@ _BBH_TEXT_FORMAT = {
 _BBH_LETTERS = ascii_uppercase[:18]                       # A-R
 _ANSWER_R = re.compile(_ANSWER.pattern.replace("A-J", "A-R"))
 _HEDGE_R = re.compile(_HEDGE.pattern.replace("A-J", "A-R"))
-_TEXT_ANSWER = re.compile(r"(?i)\banswer\b[ \t]*(?:is)?[ \t]*[:\uff1a][ \t]*([^\n]*)")
+_TEXT_ANSWER = re.compile(r"(?i)\banswer\b[ \t]*(?:is)?[ \t]*[:\uff1a][ \t]*([^\n]*)")                  # "Answer: X" (the format the prompt asks for) = the primary form
+_TEXT_ANSWER_IS = re.compile(r"(?i)\banswer\b[ \t]+is\b[ \t]*:?[ \t]*([^\n]*)")                      # "So the answer is X." without a colon: the official BBH phrase
+# (suzgunmirac/BIG-Bench-Hard `cot-prompts/*.txt`: every worked example ends "So the answer is X."; OLMES `bbh.py` l.228-229 reads `(?i)So the answer is ($ANS$)` first and `(?i)answer is ($ANS$)`
+# second). It is read ONLY when the text has no "Answer:" line, so a response that has the colon form scores exactly as before (A1, owner 11-16).
+# A wrapper around the whole answer is removed as OLMES `bbh.py` l.246-257 does (`special_delimiters_to_strip`, in this order): $...$, \(...\), (...), **...**, ***...***, \[...\], '...', `...`, "...".
+_STRIP_PAIRS = (("$", "$"), ("\\(", "\\)"), ("(", ")"), ("**", "**"), ("***", "***"), ("\\[", "\\]"), ("'", "'"), ("`", "`"), ('"', '"'))
 
 
 def _bbh_letter(pred: str, n_options: int) -> str | None:
-    """anchored_letter of chat_metrics with the letters A-R (the same rules: hedges and out-of-range letters give None)."""
+    """anchored_letter of chat_metrics with the letters A-R (the same rules: simple-evals `normalize_response` first, hedges and out-of-range letters give None)."""
+    pred = normalize_response(pred)
     last = None
     for m in _ANSWER_R.finditer(pred):
         last = None if _HEDGE_R.match(pred, m.end()) else m.group(1)
@@ -180,10 +188,23 @@ def _bbh_letter(pred: str, n_options: int) -> str | None:
     return last
 
 
-def _norm_text(s: str) -> str:
+def _norm_text(s: str, brackets: bool = False) -> str:
+    """The text answer of a BBH subset normalised for the comparison. First the normalisation of the first version, unchanged (bold markers and backticks removed, `$` stripped from both ends,
+    blanks collapsed, a final period stripped, lower case); then, until nothing changes, ONE wrapper around the whole answer is removed as OLMES `bbh.py` l.246-257 does
+    (`special_delimiters_to_strip`: `$..$`, `\\(..\\)`, `(..)`, `**..**`, `***..***`, `\\[..\\]`, quotes, backticks) and blanks / a final period are stripped again. The result is a function of the
+    first version's result, so two texts that were equal before stay equal (no item that scored 1 loses credit). `brackets=True` (dyck_languages, whose answers are brackets) leaves the pair
+    `(..)` alone, as OLMES skips a delimiter that is itself a valid answer there."""
     s = s.replace("**", "").replace("`", "").strip().strip("$").strip()
-    s = re.sub(r"\s+", " ", s).rstrip(".").strip()
-    return s.lower()
+    s = re.sub(r"\s+", " ", s).rstrip(".").strip().lower()
+    while True:
+        for left, right in _STRIP_PAIRS:
+            if brackets and left == "(":
+                continue
+            if len(s) >= len(left) + len(right) and s.startswith(left) and s.endswith(right):
+                s = s[len(left): len(s) - len(right)].strip().rstrip(".").strip()
+                break
+        else:
+            return s
 
 
 def _bbh_score(doc: Doc, pred: str) -> dict[str, float]:
@@ -194,10 +215,11 @@ def _bbh_score(doc: Doc, pred: str) -> dict[str, float]:
     if re.fullmatch(r"\([A-R]\)", gold):                    # letter subset
         letter = _bbh_letter(pred, len(doc.specific["n_options"]))
         return {"em": 1.0 if letter is not None and f"({letter})" == gold else 0.0}
-    found = _TEXT_ANSWER.findall(pred)
+    found = _TEXT_ANSWER.findall(pred) or _TEXT_ANSWER_IS.findall(pred)
     if not found:
         return {"em": 0.0}
-    return {"em": 1.0 if _norm_text(found[-1]) == _norm_text(gold) else 0.0}
+    brackets = doc.specific.get("subset") == "dyck_languages"
+    return {"em": 1.0 if _norm_text(found[-1], brackets) == _norm_text(gold, brackets) else 0.0}
 
 
 def bbh_chat_prompt(line, task_name: str = None, *, subset: str):
@@ -234,7 +256,7 @@ TASKS_TABLE += [
         generation_size=BUDGET,
         stop_sequence=[],
         metrics=[_grouping(1, _bbh_score, ("em",))],
-        version=0,
+        version=1,  # 0 -> 1 (owner 11-16, A1 + A2): LaTeX wrappers stripped, "the answer is X" read without a colon, the letter reader normalises markup
     )
     for subset in _BBH_SUBSETS
 ]

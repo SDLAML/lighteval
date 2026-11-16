@@ -100,7 +100,7 @@ def test_fewshot_examples_demonstrate_the_requested_answer_format(record):
 
 
 def test_mcf_scores_answer_letters_without_generation(record):
-    config = replace(MCF_CONFIGS["aqua_rat"], num_fewshots=1)
+    config = replace(MCF_CONFIGS["aqua-rat"], num_fewshots=1)      # the mcf tasks read the official file names (11-16)
     task = LightevalTask(config)
     task.dataset = {
         "train": [record],

@@ -54,8 +54,13 @@ low / medium / high / top, divided by 15). dw_acc is stored per item as correct 
 four level accuracies (the primary). The per-subtask dw_acc of one level is that level's value times 4 w / 15 (read the avg@n of a level
 subtask for its accuracy).
 
-mgsm_chat: the question in its own language (Global-MGSM), the English chat math instruction (MATH_PROMPT, "\\boxed{ANSWER}") as in
-fusion_aya_math_chat, 250 items per language, all 40 languages of the base task (no English: English GSM is gsm8k_chat), avg@n with one sample (as gsm8k_chat).
+mgsm_chat: the OFFICIAL MGSM protocol of OpenAI simple-evals `mgsm_eval.py` (owner 11-16, B4; until then the English chat math instruction with "\\boxed{ANSWER}" and the math checker):
+0-shot, ONE user message = the dataset's own per-language `instruction` (Global-MGSM column; for the 10 languages of simple-evals it is that file's text, checked) + a blank line + the question in its
+own language. The answer is the LAST number after the LAST occurrence of the dataset's `answer_prefix` ("Answer" / "Antwort" / ...) in the scored text (simple-evals `parse_answer`, l.83-94:
+`answer.split(answer_prefix)[-1]`, commas removed, `\\d+\\.?\\d*`, the last number, a final "." dropped; no prefix = no answer), compared as a string with the gold after `score_mgsm` (l.97-104: a
+trailing ".0" / zeros of a decimal are dropped, commas removed). Metrics: avg@n (primary, exact match, n = 1 sample as gsm8k_chat) and no_answer_prefix (diagnostic, lower is better: the share
+of samples without the prefix, which score 0). The scored text is what follows the LAST </think> (an unclosed block gives no answer). 250 items per language, all 40 languages of the base
+task (no English: English GSM is gsm8k_chat).
 The opt-in flag `data.sample_per_group=N` keeps a seeded N per language (seed chat_polymath-v2:mgsm:<lang>, key = the question text).
 
 languages:
@@ -69,13 +74,14 @@ paper:
 https://arxiv.org/abs/2504.18428 (PolyMath); https://arxiv.org/abs/2210.03057 (MGSM)
 """
 
+import re
 from functools import lru_cache, partial
 
-from lighteval.metrics.chat_metrics import _grouping, _math_extractor, _math_scores, chat_math_metric
+from lighteval.metrics.chat_metrics import _grouping, _math_extractor, _math_scores
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.sampling import subset_filter
-from lighteval.tasks.tasks.chat_evals import BUDGET, MATH_PROMPT
+from lighteval.tasks.tasks.chat_evals import BUDGET
 
 
 SEED = "chat_polymath-v2"      # seed prefix of the opt-in subsets (data.sample_per_group); the full sets use no seed. v2: the draw is over all 125 problems of a cell (v1 left out the unscorable golds)
@@ -194,12 +200,47 @@ def _mgsm_key(row) -> str:
     return str(row["question"])
 
 
+def mgsm_parse_answer(answer: str, answer_prefix: str) -> str:
+    """simple-evals `parse_answer` (mgsm_eval.py l.83-94, github.com/openai/simple-evals @ 652c89d0), unchanged: no prefix -> ""; else the last number after the LAST prefix, commas removed,
+    a final "." dropped."""
+    if answer_prefix not in answer:
+        return ""
+    answer_text = answer.split(answer_prefix)[-1].strip()
+    numbers = re.findall(r"\d+\.?\d*", answer_text.replace(",", ""))
+    return numbers[-1].rstrip(".") if numbers else ""
+
+
+def mgsm_score_one(target: str, prediction: str) -> bool:
+    """simple-evals `score_mgsm` (mgsm_eval.py l.97-104), unchanged: zeros of a decimal prediction are dropped, commas removed on both sides, string equality."""
+    if "." in prediction:
+        prediction = prediction.rstrip("0").rstrip(".")
+    target = target.replace(",", "")
+    prediction = prediction.replace(",", "")
+    return target == prediction
+
+
+def _mgsm_scores(doc: Doc, pred: str) -> dict[str, float]:
+    if not pred or not pred.strip():
+        return {"avg@n": 0.0, "no_answer_prefix": 1.0}
+    prefix = doc.specific["answer_prefix"]
+    return {"avg@n": float(mgsm_score_one(doc.get_golds()[0], mgsm_parse_answer(pred, prefix))), "no_answer_prefix": float(prefix not in pred)}
+
+
+def mgsm_metric(n: int):
+    metric = _grouping(n, _mgsm_scores, ("avg@n", "no_answer_prefix"))
+    metric.higher_is_better["no_answer_prefix"] = False       # a diagnostic: the share of samples that never wrote the answer prefix
+    return metric
+
+
 def mgsm_chat_prompt(line, task_name: str = None):
+    """The dataset's own prompt: `instruction` (per language) + blank line + `question`; the gold is the dataset's `answer` (an integer string). Global-MGSM card: "build the prompt by
+    concatenating instruction and question"; simple-evals: `instruction.format(input=question)` with the instruction ending "\\n\\n{input}"."""
     return Doc(
         task_name=task_name,
-        query=MATH_PROMPT.format(problem=line["question"].strip()),
-        choices=[_bare_gold(line["answer"])],
+        query=f"{line['instruction'].strip()}\n\n{line['question'].strip()}",
+        choices=[str(line["answer"]).strip()],
         gold_index=0,
+        specific={"answer_prefix": line["answer_prefix"]},
     )
 
 
@@ -245,8 +286,8 @@ def _build_tasks():
                 generation_size=BUDGET,
                 stop_sequence=[],
                 hf_filter=subset_filter(f"{SEED}:mgsm:{language}", _mgsm_key, ["test"]),       # None = the full 250 problems
-                metrics=[chat_math_metric(N_MGSM)],
-                version=0,
+                metrics=[mgsm_metric(N_MGSM)],
+                version=1,          # 0 -> 1 (owner 11-16, B4): the dataset's own instruction + answer prefix, simple-evals parse / score (was: English MATH_PROMPT + \\boxed, math checker)
             )
         )
     return tasks

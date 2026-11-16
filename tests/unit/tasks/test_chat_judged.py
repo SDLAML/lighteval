@@ -39,13 +39,35 @@ def test_simpleqa_verified_prompt_is_the_bare_question_and_keeps_the_acceptable_
     assert (t.hf_repo, t.hf_subset, t.hf_revision, list(t.evaluation_splits)) == ("google/simpleqa-verified", "simpleqa_verified", "0dc97e0d28d8233463e005cdc4475cc2a13ba2dc", ["eval"])
 
 
-def test_omniscience_prompt_is_the_cards_answer_prompt_plus_the_question():
+def test_omniscience_prompt_is_the_cards_answer_prompt_as_a_system_message():
+    """A6 (owner 11-16): the answerer instructions are a SYSTEM message (paper Appendix A.1 "Answerer System Prompt"), the question alone is the user message."""
     row = {"domain": "Law", "topic": "Tort", "subtopic": "Negligence", "question_id": 7, "question": "Which case?", "answer": "Donoghue v Stevenson"}
     d = cj.aa_omniscience_chat_prompt(row, "x")
-    assert d.query == ("You are answering questions about Law, and in particular Negligence.\nYou will be given a question, answer with JUST the answer (no explanation).\n"
-                       "If you do not know the answer, or you need more context or tools to answer the question,\n"
-                       "be clear about this - it is better that you say this than get the wrong answer.\n\nWhich case?")
-    assert d.specific == {"question": "Which case?", "gold": "Donoghue v Stevenson", "domain": "Law", "topic": "Tort", "subtopic": "Negligence", "question_id": 7}
+    system = ("You are answering questions about Law, and in particular Negligence.\nYou will be given a question, answer with JUST the answer (no explanation).\n"
+              "If you do not know the answer, or you need more context or tools to answer the question,\n"
+              "be clear about this - it is better that you say this than get the wrong answer.")
+    assert d.query == "Which case?"
+    assert d.specific["chat_messages"] == [{"role": "system", "content": system}, {"role": "user", "content": "Which case?"}]
+    assert {k: v for k, v in d.specific.items() if k != "chat_messages"} == {"question": "Which case?", "gold": "Donoghue v Stevenson", "domain": "Law", "topic": "Tort", "subtopic": "Negligence", "question_id": 7}
+    assert next(t for t in cj.TASKS_TABLE if t.name == "aa_omniscience_chat").version == 1
+    assert all(t.version == 0 for t in cj.TASKS_TABLE if t.name != "aa_omniscience_chat")
+
+
+def test_omniscience_messages_are_rendered_as_given_by_the_prompt_manager():
+    """prompt_manager.py renders `specific["chat_messages"]` as the conversation; a model-level system prompt is not added to it."""
+    from lighteval.tasks.prompt_manager import PromptManager
+    row = {"domain": "Law", "topic": "Tort", "subtopic": "Negligence", "question_id": 7, "question": "Which case?", "answer": "x"}
+    d = cj.aa_omniscience_chat_prompt(row, "x")
+
+    class Tok:
+        def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **kw):
+            return "|".join(f"{m['role']}:{m['content'][:12]}" for m in messages)
+
+    for system_prompt in (None, "a model system prompt"):
+        pm = PromptManager.__new__(PromptManager)
+        pm.system_prompt, pm.tokenizer, pm.chat_template_kwargs = system_prompt, Tok(), {}
+        msgs = pm._prepare_chat_template(d, tokenize=False)
+        assert [m["role"] for m in msgs] == ["system", "user"] and msgs[0]["content"].startswith("You are answering questions about Law") and msgs[1]["content"] == "Which case?", system_prompt
 
 
 def test_hle_prompt_drops_image_questions_and_keeps_the_text():
