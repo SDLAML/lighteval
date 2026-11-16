@@ -389,3 +389,233 @@ def test_ruler_chat_rows_are_counted_in_one_batch_before_the_per_row_calls():
         with mock.patch.dict(os.environ, {"TITAN_EVAL_MAX_MODEL_LEN": ""}):
             ruler.ruler_chat_prompt.prefetch(rows, "ruler_4096:qa_1|0")                       # not a chat name / no window: nothing counted
         assert calls == [3]
+
+
+# ---------------------------------------------------------------------------
+# NVIDIA RULER main (db43f92) fallbacks, no length switch of ours (owner 11-16): CWE words from the wonderwords list while it holds enough, else from the Randle list
+# (common_words_extraction.py:86-89); QA documents once, repeated when more are asked for than exist (qa.py:130-141)
+# ---------------------------------------------------------------------------
+
+
+def _ww(n):
+    return [f"ww{i}" for i in range(n)]
+
+
+def _randle(n):
+    return [f"rw{i}" for i in range(n)]
+
+
+def _words_of(context):
+    import re
+
+    return re.findall(r"\b(?:ww|rw)\d+\b", context)
+
+
+def _main_prompt(cwe_input):
+    """the words of the task itself (the in-context example before it always uses the wonderwords list)"""
+    return cwe_input.split("Below is a numbered list")[-1]
+
+
+def test_cwe_example_uses_wonderwords_up_to_and_including_the_list_size():
+    import random
+    from unittest import mock
+
+    words = _ww(50)
+
+    def boom():
+        raise AssertionError("the Randle list must not be read while the wonderwords list holds enough words")
+
+    with mock.patch.object(ruler, "_get_randle_words", boom):
+        for num in (10, 49, 50):  # NVIDIA: `if num_words <= len(words)`
+            random.seed(3)
+            context, common = ruler._cwe_get_example(num, words, 3, 1, 10)
+            random.seed(3)
+            assert common == random.sample(words, num)[:10]
+            assert set(_words_of(context)) <= set(words) and set(common) <= set(words)
+
+
+def test_cwe_example_falls_back_to_the_randle_list_when_more_words_are_asked_for_than_exist():
+    import random
+    from unittest import mock
+
+    words, randle = _ww(50), _randle(400)
+    with mock.patch.object(ruler, "_get_randle_words", lambda: randle):
+        random.seed(11)
+        context, common = ruler._cwe_get_example(51, words, 3, 1, 10)  # NVIDIA: `else: random.sample(randle_words, num_words)`
+        random.seed(11)
+        expected = random.sample(randle, 51)
+        assert common == expected[:10], "the same draw (random.sample on the global RNG, over the Randle list) as NVIDIA"
+        seen = _words_of(context)
+        assert set(seen) <= set(randle) and not any(w.startswith("ww") for w in seen), "no mixing of the two lists"
+        assert len(seen) == 10 * 3 + 41 * 1 and len(set(seen)) == 51, "10 common words x 3, 41 other words x 1, 51 distinct words"
+        random.seed(11)
+        ruler._cwe_get_example(300, words, 3, 1, 10)  # far beyond the wonderwords list
+        with mock.patch.object(ruler, "_get_randle_words", lambda: randle[:100]):
+            try:
+                ruler._cwe_get_example(101, words, 3, 1, 10)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("random.sample raises beyond the longest list, as in NVIDIA")
+
+
+class _WordTokenizer:
+    """one token per whitespace-separated piece"""
+
+    def __call__(self, text):
+        return type("Tokens", (), {"input_ids": text.split()})()
+
+
+def test_cwe_sizing_runs_past_the_end_of_the_wonderwords_list_into_the_randle_list():
+    from unittest import mock
+
+    words, randle = _ww(80), _randle(2000)
+    with mock.patch.object(ruler, "_get_cwe_words", lambda: words), mock.patch.object(ruler, "_get_randle_words", lambda: randle):
+        # the in-context example costs ~480 tokens, the task 2 tokens x (10 x 30 + 3 x (N - 10)) for N words: 1,400 tokens hold ~60 words, 3,000 tokens ~330 (more than the 80 wonderwords)
+        short = ruler._cwe_generate_samples(_WordTokenizer(), 1400, num_samples=3, incremental=10)
+        long = ruler._cwe_generate_samples(_WordTokenizer(), 3000, num_samples=3, incremental=10)
+    short_words = {w for s in short for w in _words_of(_main_prompt(s["input"]))}
+    long_words = {w for s in long for w in _words_of(_main_prompt(s["input"]))}
+    assert short_words and all(w.startswith("ww") for w in short_words), "within the wonderwords list: unchanged, no Randle word"
+    assert long_words and all(w.startswith("rw") for w in long_words), "beyond it: the Randle words only (NVIDIA draws the whole list from one source)"
+    assert all(s["length"] <= 3000 - ruler.PROMPT_SAFETY_MARGIN for s in long)
+    assert min(s["length"] for s in long) > 0.9 * 3000, "the budget is filled although the wonderwords list holds 80 words (the old generator stopped there)"
+
+
+def test_cwe_sizing_stops_at_the_longest_list_instead_of_raising():
+    from unittest import mock
+
+    words, randle = _ww(50), _randle(70)
+    with mock.patch.object(ruler, "_get_cwe_words", lambda: words), mock.patch.object(ruler, "_get_randle_words", lambda: randle):
+        out = ruler._cwe_generate_samples(_WordTokenizer(), 10**6, num_samples=2, incremental=10)
+    main = _words_of(_main_prompt(out[0]["input"]))
+    assert len(out) == 2 and len(main) == 10 * 30 + 60 * 3 and len(set(main)) == 70, "70 words = the longest list: 10 common x 30 + 60 others x 3"
+
+
+def test_qa_documents_are_repeated_when_more_are_asked_for_than_exist():
+    import random
+
+    docs = ["alpha doc", "beta doc", "gamma doc"]
+    qas = [{"query": "Q?", "outputs": ["a"], "context": [1], "more_context": [0, 2]}]
+
+    def asked(num_docs):
+        random.seed(0)
+        text, answers = ruler._qa_generate_input_output(0, num_docs, qas=qas, docs=docs)
+        assert answers == ["a"]
+        body = text.split("The following are given documents.\n\n", 1)[1].split("\n\nAnswer the question", 1)[0]
+        return [part.split("\n", 1)[1] for part in body.split("\n\n")]
+
+    before = list(docs)
+    assert sorted(asked(2)) == sorted(["beta doc", "alpha doc"]) or sorted(asked(2)) == sorted(["beta doc", "gamma doc"]), "fewer than exist: the gold document and a sample, as before"
+    assert sorted(asked(3)) == sorted(docs), "NVIDIA: `num_docs < len(DOCS)` is false at equality, the list once (a copy: the shared list is not shuffled in place)"
+    assert sorted(asked(7)) == sorted((docs * 3)[:7]), "(DOCS * ceil(7/3))[:7]: alpha, beta, gamma, alpha, beta, gamma, alpha"
+    assert asked(7).count("alpha doc") == 3 and asked(7).count("gamma doc") == 2
+    assert "beta doc" in asked(4) and len(asked(4)) == 4
+    assert docs == before, "the document list of the reader is never reordered"
+
+
+def test_qa_sizing_runs_past_the_number_of_documents():
+    from unittest import mock
+
+    docs = [f"document number {i} " + "x " * 20 for i in range(30)]
+    qas = [{"query": "Q?", "outputs": ["a"], "context": [i], "more_context": [(i + 1) % 30]} for i in range(30)]
+    out = ruler._qa_generate_samples(_WordTokenizer(), docs, qas, 2000, num_samples=3)
+    assert len(out) == 3
+    assert max(s["length"] for s in out) <= 2000 - ruler.PROMPT_SAFETY_MARGIN
+    assert min(s["length"] for s in out) > 0.9 * 2000, "the budget is filled although the 30 documents are only ~700 tokens (it used to stop at 30 documents)"
+    for s in out:
+        assert s["input"].count("Document ") > 30, "documents are repeated"
+
+
+def test_cwe_and_qa_1_prepared_folders_need_the_current_data_revision():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        for length in (4096, 262144):
+            for subset in ("cwe", "qa_1", "vt"):
+                (base / str(length) / subset).mkdir(parents=True)
+                (base / str(length) / subset / "dataset_dict.json").write_text("{}")
+        pairs = lambda: ruler._missing_pairs(base, [4096, 262144], ["cwe", "qa_1", "vt"])  # noqa: E731
+        assert pairs() == [(4096, "cwe"), (4096, "qa_1"), (262144, "cwe"), (262144, "qa_1")], "no manifest: the two source-limited subtasks are not current, vt (no source limit) is"
+        (base / "manifest.json").write_text(json.dumps({"data": {"4096": {"cwe": {"gen_rev": ruler.DATA_REV}, "qa_1": {"gen_rev": "older"}}, "262144": {"cwe": {}}}}))
+        assert pairs() == [(4096, "qa_1"), (262144, "cwe"), (262144, "qa_1")]
+        assert ruler._stale_pairs(base, pairs() + [(8192, "cwe")]) == pairs(), "a missing folder is not stale"
+        (base / "manifest.json").write_text("{not json")
+        assert (4096, "cwe") in pairs(), "an unreadable manifest never makes old data current"
+        st = ruler.prepared_status(str(base / "tok"), [4096], ["vt"])
+        assert st["missing"] == [(4096, "vt")]
+
+
+def test_prepare_archives_a_stale_folder_and_stamps_the_new_one():
+    import json
+    import tempfile
+    from pathlib import Path
+    from unittest import mock
+
+    sample = {"input": "x", "outputs": ["y"], "length": 5, "max_length": 4096, "gen_prefix": "A:"}
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "key"
+        old = base / "4096" / "cwe"
+        old.mkdir(parents=True)
+        (old / "dataset_dict.json").write_text("{}")
+        (old / "OLD").write_text("old data")
+        (base / "manifest.json").write_text(json.dumps({"data": {"4096": {"cwe": {"n": 1}}}}))
+        with mock.patch.object(ruler, "_get_cache_dir", lambda t: base), mock.patch.object(ruler, "_load_tokenizer", lambda t: object()), mock.patch.object(
+            ruler, "_generate_subset", lambda subset, length, tok: [dict(sample)]
+        ):
+            ruler.ensure_ruler_cache("tok", [4096], ["cwe", "vt"], prepared_only=False)
+            assert ruler._missing_pairs(base, [4096], ["cwe", "vt"]) == []
+            man = json.loads((base / "manifest.json").read_text())
+            assert man["data"]["4096"]["cwe"]["gen_rev"] == ruler.DATA_REV and man["generator"]["data_rev"] == ruler.DATA_REV
+            assert "gen_rev" not in man["data"]["4096"]["vt"]
+            assert man["sources"]["randle_words"]["sha256"] == ruler.RANDLE_WORDS_SHA256
+            archived = Path(man["data"]["4096"]["cwe"]["replaced_folder"])
+            assert archived.parent == base / "_archive" and (archived / "OLD").read_text() == "old data", "the old folder is moved, not deleted"
+            assert not (base / "4096" / "cwe" / "OLD").exists() and (base / "4096" / "cwe" / "dataset_dict.json").exists()
+            # nothing is regenerated, nothing archived again
+            before = sorted(p.name for p in (base / "_archive").iterdir())
+            ruler.ensure_ruler_cache("tok", [4096], ["cwe", "vt"], prepared_only=False)
+            assert sorted(p.name for p in (base / "_archive").iterdir()) == before
+        with mock.patch.object(ruler, "_get_cache_dir", lambda t: base):
+            old2 = base / "8192" / "qa_1"
+            old2.mkdir(parents=True)
+            (old2 / "dataset_dict.json").write_text("{}")
+            try:
+                ruler.ensure_ruler_cache("tok", [8192], ["qa_1"], prepared_only=True)
+            except RuntimeError as e:
+                assert "older generator revision" in str(e) and "titan-eval prepare ruler" in str(e)
+            else:
+                raise AssertionError("RULER_PREPARED_ONLY must refuse a folder of an older revision")
+
+
+def test_randle_words_file_is_checked_against_the_pinned_sha256():
+    import os
+    import tempfile
+    from pathlib import Path
+    from unittest import mock
+
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "english_words.json"
+        f.write_text('{"0": "a", "1": "aa"}')
+        ruler._get_randle_words.cache_clear()
+        try:
+            with mock.patch.dict(os.environ, {ruler.RANDLE_WORDS_ENV: str(f)}):
+                try:
+                    ruler._get_randle_words()
+                except ValueError as e:
+                    assert ruler.RANDLE_WORDS_SHA256 in str(e)
+                else:
+                    raise AssertionError("a file that is not the pinned one must be refused")
+            with mock.patch.dict(os.environ, {ruler.RANDLE_WORDS_ENV: str(Path(tmp) / "missing.json")}):
+                try:
+                    ruler._get_randle_words()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise AssertionError("a missing local copy must be an error, not a download")
+        finally:
+            ruler._get_randle_words.cache_clear()
+    assert len(ruler.RANDLE_WORDS_SHA256) == 64 and ruler.RANDLE_WORDS_URL.endswith(f"{ruler.RANDLE_WORDS_COMMIT}/scripts/data/synthetic/json/english_words.json")

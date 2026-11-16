@@ -110,9 +110,10 @@ SUBSETS = [
 ]
 
 # 262144 (owner 11-16: "ruler is ok to go 256k"): the tasks `ruler_262144:<subset>` / `ruler_262144_chat:<subset>` exist for the models with a >= 262,144-token context (Qwen3.5-35B-A3B, Nemotron-3.5 Lightning).
-# The generator is the same code as at every other length. Two limits of its sources bind there (the lm-evaluation-harness generator this one is ported from has the same two caps: cwe_utils.py `num_words > len(WORDS)`, qa_utils.py `num_docs > len(docs)`): CWE has 8,166 distinct words
-# (wonderwords nouns + adjectives + verbs; ~198k tokens with the Qwen3.5 tokenizer) and QA-1 has the 1,204 distinct SQuAD v2 dev paragraphs (~213k tokens): those two subtasks stop at the cap, shorter than the
-# nominal length (the per-subtask token statistics are in manifest.json). NVIDIA's current main reaches further by a longer word list (CWE) and by repeating documents (QA).
+# Two sources of this generator run out around 200k tokens (the lm-evaluation-harness generator it is ported from stops there: cwe_utils.py `num_words > len(WORDS)`, qa_utils.py `num_docs > len(docs)`): CWE has 8,166 distinct
+# wonderwords words (~198k tokens with the Qwen3.5 tokenizer) and QA-1 has the 1,204 distinct SQuAD v2 dev paragraphs (~213k tokens). Owner 11-16 ("take NV code as it is"): both follow NVIDIA RULER main (db43f92) at EVERY length,
+# with no length switch of ours: CWE draws its words from the wonderwords list while it holds enough of them and from NVIDIA's 370,101 English words otherwise (common_words_extraction.py:86-89), QA builds the haystack from the
+# paragraphs once and repeats the list when more are asked for than exist (qa.py:130-141).
 DEFAULT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
 
 # NUM_SAMPLES = 500
@@ -813,6 +814,53 @@ def _get_cwe_words() -> list[str]:
     return words
 
 
+# NVIDIA's own English word list (NVIDIA/RULER scripts/data/synthetic/json/english_words.json, Apache-2.0, 370,101 words, `{"0": "a", "1": "aa", ...}`), the source of CWE words once the wonderwords list is exhausted
+# (common_words_extraction.py:80-83 loads it as `randle_words = list(json.load(f).values())`). Pinned like the SQuAD file: fetched on first use (login node) into $HF_HOME/lighteval/ruler_qa_cache, the sha256 is checked on
+# EVERY read (a changed or truncated file is an error, never other words). Only read when a CWE size asks for more words than the wonderwords list holds. RULER_ENGLISH_WORDS_FILE = a local copy (same sha256 required).
+RANDLE_WORDS_COMMIT = "db43f92ff634bbce1c33d1fb15858aec4bba509a"  # NVIDIA/RULER main, "Merge pull request #117 from damienen/fix/ruler-01"
+RANDLE_WORDS_URL = f"https://raw.githubusercontent.com/NVIDIA/RULER/{RANDLE_WORDS_COMMIT}/scripts/data/synthetic/json/english_words.json"
+RANDLE_WORDS_SHA256 = "affcd6d45fdf3cc843d585c99c97ad615094e760e6c4756b654bab6c73bc2eca"
+RANDLE_WORDS_BYTES = 8564991
+RANDLE_WORDS_LICENSE = "Apache-2.0"  # NVIDIA/RULER LICENSE
+RANDLE_WORDS_ENV = "RULER_ENGLISH_WORDS_FILE"
+
+
+def _randle_words_file() -> Path:
+    local = os.environ.get(RANDLE_WORDS_ENV)
+    if local:
+        return Path(local)
+    hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+    return Path(hf_home) / "lighteval" / "ruler_qa_cache" / f"english_words-{RANDLE_WORDS_SHA256[:12]}.json"
+
+
+def _randle_words_bytes(path: Path) -> bytes:
+    raw = path.read_bytes()
+    got = hashlib.sha256(raw).hexdigest()
+    if got != RANDLE_WORDS_SHA256:
+        raise ValueError(f"{path}: sha256 {got} is not the pinned NVIDIA/RULER@{RANDLE_WORDS_COMMIT[:7]} english_words.json ({RANDLE_WORDS_SHA256})")
+    return raw
+
+
+@lru_cache(maxsize=1)
+def _get_randle_words() -> list[str]:
+    path = _randle_words_file()
+    if not path.is_file():
+        if os.environ.get(RANDLE_WORDS_ENV):
+            raise FileNotFoundError(f"{RANDLE_WORDS_ENV}={path} does not exist")
+        import requests
+
+        logger.info(f"Downloading {RANDLE_WORDS_URL} ...")
+        response = requests.get(RANDLE_WORDS_URL, timeout=120)
+        response.raise_for_status()
+        if hashlib.sha256(response.content).hexdigest() != RANDLE_WORDS_SHA256:
+            raise ValueError(f"{RANDLE_WORDS_URL}: the downloaded file is not the pinned one (sha256 {RANDLE_WORDS_SHA256})")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".tmp{os.getpid()}")
+        tmp.write_bytes(response.content)
+        os.replace(tmp, path)
+    return list(json.loads(_randle_words_bytes(path)).values())
+
+
 def _cwe_get_example(
     num_words: int,
     words: list[str],
@@ -820,7 +868,12 @@ def _cwe_get_example(
     uncommon_repeats: int = 3,
     common_nums: int = 10,
 ):
-    word_list_full = random.sample(words, num_words)
+    # NVIDIA RULER db43f92 common_words_extraction.py:86-89, same branch, same draw (`random.sample` on the global RNG): the wonderwords words while the list holds num_words of them,
+    # otherwise num_words of NVIDIA's English words (no mixing of the two lists). No length condition of ours.
+    if num_words <= len(words):
+        word_list_full = random.sample(words, num_words)
+    else:
+        word_list_full = random.sample(_get_randle_words(), num_words)
     common, uncommon = word_list_full[:common_nums], word_list_full[common_nums:]
     word_list = common * int(common_repeats) + uncommon * int(uncommon_repeats)
     _CWE_RNG.shuffle(word_list)
@@ -863,8 +916,9 @@ def _cwe_generate_samples(
             num_words -= incremental
             break
         num_words += incremental
-        if num_words > len(words):
-            num_words = len(words)
+        # NVIDIA has no data bound in its sizing (a binary search up to 2x an estimate, common_words_extraction.py:144-167); the only hard limit is the longest list, since random.sample raises ValueError beyond it (l.89)
+        if num_words > len(words) and num_words > len(_get_randle_words()):
+            num_words = len(_get_randle_words())
             break
 
     num_words = max(incremental, num_words)
@@ -1217,7 +1271,10 @@ def _qa_generate_input_output(
             all_docs = curr_docs + random.sample(curr_more, num_docs - len(curr_docs))
         all_docs = [docs[idx] for idx in all_docs]
     else:
-        all_docs = docs
+        # NVIDIA RULER db43f92 qa.py:138-141: more documents asked for than exist (`num_docs >= len(DOCS)`, the branch condition at qa.py:130 is the one above): repeat the list as many times as needed and cut at num_docs.
+        # A new list (the old `all_docs = docs` was the shared list itself, shuffled in place below).
+        repeats = (num_docs + len(docs) - 1) // len(docs)  # ceiling division
+        all_docs = (docs * repeats)[:num_docs]
 
     random.Random(RANDOM_SEED + index).shuffle(all_docs)
     context = "\n\n".join(
@@ -1248,10 +1305,7 @@ def _qa_generate_samples(
         if total_tokens + tokens_to_generate > budget:
             num_docs -= incremental
             break
-        num_docs += incremental
-        if num_docs > len(docs):
-            num_docs = len(docs)
-            break
+        num_docs += incremental  # no bound at len(docs): NVIDIA repeats the documents (qa.py:138-141), its sizing (binary search up to 3x an estimate, qa.py:159-193) has no data bound either
 
     num_docs = max(incremental, num_docs)
 
@@ -1449,13 +1503,39 @@ def _prepared_only() -> bool:
     return os.environ.get("RULER_PREPARED_ONLY", "") not in ("", "0", "false", "False")
 
 
+# Data revision of the two subtasks whose sources can run out (CWE words, QA-1 paragraphs). owner 11-16: they follow NVIDIA RULER main (see DEFAULT_LENGTHS). A prepared folder of these two is current only when manifest.json
+# says it was generated by this revision; a folder from before (the generator that stopped at the end of the wonderwords list / the SQuAD paragraphs: 256k items filled 76% / 81%) counts as NOT prepared, so it is never read
+# by a run (RULER_PREPARED_ONLY=1 names `titan-eval prepare ruler`) and `prepare` replaces it, moving the old folder to <key>/_archive/ (never deleting it). The other 11 subtasks have no such source and carry no revision.
+DATA_REV = "nvmain-db43f92"
+REV_SUBSETS = ("cwe", "qa_1")
+
+
+def _read_manifest(cache_base: Path) -> dict:
+    try:
+        return json.loads((cache_base / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def _missing_pairs(cache_base: Path, lengths: list[int], subsets: list[str]) -> list[tuple[int, str]]:
-    return [
-        (l, s)
-        for l in lengths
-        for s in subsets
-        if not (cache_base / str(l) / s / "dataset_dict.json").exists()
-    ]
+    """(length, subset) pairs to generate: no folder, or (CWE / QA-1) a folder that is not of the current data revision."""
+    man = None
+    out = []
+    for l in lengths:
+        for s in subsets:
+            if not (cache_base / str(l) / s / "dataset_dict.json").exists():
+                out.append((l, s))
+                continue
+            if s in REV_SUBSETS:
+                man = _read_manifest(cache_base) if man is None else man
+                if man.get("data", {}).get(str(l), {}).get(s, {}).get("gen_rev") != DATA_REV:
+                    out.append((l, s))
+    return out
+
+
+def _stale_pairs(cache_base: Path, pairs: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """The pairs of `pairs` that have a complete folder of an older data revision (replaced by `prepare`, the old folder is archived)."""
+    return [(l, s) for l, s in pairs if (cache_base / str(l) / s / "dataset_dict.json").exists()]
 
 
 def prepared_status(
@@ -1477,8 +1557,10 @@ def prepared_status(
 
 def _not_prepared_message(tokenizer_name: str, cache_base: Path, missing: list[tuple[int, str]]) -> str:
     lens = sorted({l for l, _ in missing})
+    stale = _stale_pairs(cache_base, missing)
+    old = f" ({len(stale)} of them are folders of an older generator revision, {DATA_REV} is current; `prepare` archives them)" if stale else ""
     return (
-        f"RULER data is not prepared for tokenizer {tokenizer_name}: {len(missing)} (length, subset) pair(s) missing, "
+        f"RULER data is not prepared for tokenizer {tokenizer_name}: {len(missing)} (length, subset) pair(s) missing{old}, "
         f"lengths {lens}, folder {cache_base}. Generation is disabled here (RULER_PREPARED_ONLY=1). "
         f"Run `titan-eval prepare ruler --model {tokenizer_name} --lengths {','.join(map(str, lens))}` on the login node."
     )
@@ -1548,6 +1630,14 @@ def _sources(subsets: list[str]) -> dict:
     out = {}
     if any(s in ("niah_single_2", "niah_single_3", "niah_multikey_1", "niah_multiquery", "niah_multivalue") for s in subsets):
         out["essays"] = {"repo": ESSAYS_REPO, "revision": _essays_revision()}
+    if "cwe" in subsets:  # only read when a CWE size asks for more words than the wonderwords list holds (sha256 of the file is the pin)
+        out["randle_words"] = {
+            "url": RANDLE_WORDS_URL,
+            "commit": RANDLE_WORDS_COMMIT,
+            "sha256": RANDLE_WORDS_SHA256,
+            "bytes": RANDLE_WORDS_BYTES,
+            "license": RANDLE_WORDS_LICENSE,
+        }
     for key, subset, url in (("squad_v2_dev", "qa_1", SQUAD_URL), ("hotpotqa_dev_distractor", "qa_2", HOTPOTQA_URL)):
         if subset in subsets:
             f = _qa_cache_file(url)
@@ -1585,7 +1675,7 @@ def _update_manifest(
             "key": key_full[:KEY_LEN],
             "key_sha256": key_full,
             "architecture": _get_model_arch(tokenizer_name),
-            "generator": {"fork_commit": _fork_state(), "module": "lighteval.tasks.tasks.ruler"},
+            "generator": {"fork_commit": _fork_state(), "module": "lighteval.tasks.tasks.ruler", "data_rev": DATA_REV},
             "seed": RANDOM_SEED,
             "n_samples": NUM_SAMPLES,
             "prompt_safety_margin": PROMPT_SAFETY_MARGIN,
@@ -1661,8 +1751,14 @@ def ensure_ruler_cache(
                 tmp = subset_dir.parent / f".tmp-{subset}-{os.getpid()}"
                 shutil.rmtree(tmp, ignore_errors=True)
                 DatasetDict({"test": Dataset.from_list(samples)}).save_to_disk(str(tmp))
-                if subset_dir.exists():  # a half-written folder of an interrupted run (no dataset_dict.json)
-                    shutil.rmtree(subset_dir)
+                archived = None
+                if subset_dir.exists():
+                    if (subset_dir / "dataset_dict.json").exists():  # complete, but of an older data revision (see DATA_REV): moved aside, never deleted
+                        archived = cache_base / "_archive" / f"{length}-{subset}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                        archived.parent.mkdir(parents=True, exist_ok=True)
+                        os.rename(subset_dir, archived)
+                    else:  # a half-written folder of an interrupted run (no dataset_dict.json)
+                        shutil.rmtree(subset_dir)
                 os.rename(tmp, subset_dir)
                 stats[(length, subset)] = {
                     "n": len(samples),
@@ -1671,6 +1767,8 @@ def ensure_ruler_cache(
                     "created": _now(),
                     "generator_commit": fork["commit"],
                     "generator_ruler_py_sha256": fork["ruler_py_sha256"][:16],
+                    **({"gen_rev": DATA_REV} if subset in REV_SUBSETS else {}),
+                    **({"replaced_folder": str(archived)} if archived else {}),
                 }
                 logger.info(f"Saved {len(samples)} samples to {subset_dir}")
             except Exception as e:
