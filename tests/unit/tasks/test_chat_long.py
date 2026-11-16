@@ -285,13 +285,11 @@ class LongBenchProMetrics(unittest.TestCase):
     def test_metric_value_empty_is_zero(self):
         self.assertEqual(chat_long.lbp_metric_value("T3.2 Single-Hop Fact QA", ["x"], "", False), 0.0)
 
-    def test_thinking_switch_selects_question(self):
-        with mock.patch.dict(os.environ, {chat_long.ENV_THINKING: "0"}):
-            self.assertEqual(chat_long.lbp_prompt(lbp_line(), "t").query, "ctx " * 20 + "\n\n\n\nNONTHINK Q")
-        with mock.patch.dict(os.environ, {chat_long.ENV_THINKING: "1"}):
-            self.assertTrue(chat_long.lbp_prompt(lbp_line(), "t").query.endswith("THINK Q"))
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertTrue(chat_long.lbp_prompt(lbp_line(), "t").query.endswith("THINK Q"))   # unset = thinking (Qwen3 default)
+    def test_prompt_is_always_the_nonthinking_question(self):
+        # LongBench Pro paper 5.1 / README line 43: thinking and mixed-thinking models get the NON-thinking prompt in both modes; the thinking prompt is for instruct models only
+        for env in ({chat_long.ENV_THINKING: "0"}, {chat_long.ENV_THINKING: "1"}, {}):
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(chat_long.lbp_prompt(lbp_line(), "t").query, "ctx " * 20 + "\n\n\n\nNONTHINK Q")
 
     def test_breakdowns_and_names(self):
         self.assertEqual(len(chat_long.LBP_NAMES), 1 + 4 + 6 + 2 + 2 + 11)

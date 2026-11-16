@@ -227,8 +227,11 @@ for _k in ("T4.1", "T4.2"):
 
 
 def lbp_prompt(line, task_name: str = None):
-    thinking = os.environ.get(ENV_THINKING, "1") != "0"
-    question = line["question_thinking"] if thinking else line["question_nonthinking"]
+    # LongBench Pro paper section 5.1 + README line 43: "For thinking models, we use the non-thinking prompt and report their thinking scores. For mixed-thinking models, we use
+    # non-thinking prompts and report both the non-thinking and thinking scores under the disabled and enabled thinking states." The thinking prompt ("Think step by step ... <Your
+    # thinking process> [Answer]") is for NON-thinking (instruct) models only. Every model of ours thinks (or not) through its own chat template, so the prompt is always the
+    # non-thinking one; `question_thinking` is never sent (a native thinking block would otherwise be repeated as visible text before "[Answer]", and the Summary items T4 score the whole text).
+    question = line["question_nonthinking"]
     prompt = f"{line['context']}\n\n\n\n{question}".strip()
     budget = prompt_budget()
     tok_path = os.environ.get(ENV_TOKENIZER)
@@ -309,7 +312,7 @@ def lbp_pairwise(answers, prediction):
 
 def lbp_ndcg(answers, prediction):
     """pytrec_eval's ndcg_cut.<len(answers)> as the official code calls it: qrels rel = len - i (gain = rel, discount 1 / log2(rank + 1)),
-    the run ranks the prediction lines by their position, lines that are not answers have gain 0, IDCG over all qrels."""
+    the run is the dict of the DISTINCT prediction lines scored by position, lines that are not answers have gain 0, IDCG over all qrels."""
     import math
 
     answers, predictions = _norm_answers(answers), _norm_prediction(prediction)
@@ -317,7 +320,10 @@ def lbp_ndcg(answers, prediction):
         return 0.0
     k = len(answers)
     qrels = {a: len(answers) - i for i, a in enumerate(answers)}
-    ranking = [p for p in predictions]                               # the run: earlier line = higher score
+    # the official run is a DICT {line: len(predictions) - i} (utils.py NDCG): a line that is written twice is ONE document (its score is the one of its LAST
+    # occurrence), so a repeated answer line can never be credited twice (the score stays <= 1); pytrec_eval ranks by score, best first
+    run = {p: len(predictions) - i for i, p in enumerate(predictions)}
+    ranking = [d for d, _ in sorted(run.items(), key=lambda kv: (-kv[1], kv[0]))]
     gains = [qrels.get(p, 0) for p in ranking][:k]
     dcg = sum(g / math.log2(i + 2) for i, g in enumerate(gains))
     ideal = sorted(qrels.values(), reverse=True)[:k]
