@@ -23,11 +23,14 @@ paper:
 https://arxiv.org/abs/1910.11856
 """
 
+from functools import partial
+
 from langcodes import standardize_tag
 
 from lighteval.metrics.dynamic_metrics import MultilingualSquadOfficialMetric
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
+from lighteval.tasks.tasks.euroeval_shots import heldout_contexts, scored_only
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.templates.qa import get_qa_prompt_function
 from lighteval.utils.language import Language
@@ -75,15 +78,39 @@ def _bpb_prompt(language: Language):
     return fn
 
 
+# Few-shot (owner 11-16): XQuAD has no official few-shot protocol and only the evaluated split (the same 240 paragraphs in all 12 languages), so the shots follow EuroEval's rule for
+# reading comprehension (tasks/tasks/euroeval_shots.py: one fixed set per language, seed 4242, contexts shorter than 512 characters, distinct contexts); the shot questions and every question on
+# a shot's paragraph are held out of scoring (at every K). 5 shots; `xquad:gen|0` still runs 0-shot on the same scored items.
+HELDOUT_SHOTS = 5
+
+
+def _source(language: Language):
+    return "google/xquad", _REVISION, f"xquad.{standardize_tag(language.value)}", "validation"
+
+
+def _held(language: Language):
+    repo, revision, subset, split = _source(language)
+    return heldout_contexts(repo, subset, revision, split, HELDOUT_SHOTS)
+
+
+def _shot_rows(language: Language) -> list[dict]:
+    return list(_held(language)[0])
+
+
+def _gen_prompt(language: Language):
+    return scored_only(get_qa_prompt_function(language, _adapter), lambda: _held(language)[1])
+
+
 TASKS_TABLE = [
     LightevalTaskConfig(
         name=f"xquad:{language.value}:gen",
-        prompt_function=get_qa_prompt_function(language, _adapter),
+        prompt_function=_gen_prompt(language),
         hf_repo="google/xquad",
         hf_revision=_REVISION,
         hf_subset=f"xquad.{standardize_tag(language.value)}",
         evaluation_splits=("validation",),
-        few_shots_split="validation",
+        few_shots_rows=partial(_shot_rows, language),
+        few_shots_select="sequential",  # the first K of the 5 shots drawn by EuroEval's rule, in their shuffled order
         generation_size=400,
         stop_sequence=["\n",],
         # 11-13: the official SQuAD arithmetic (equality / Counter F1, max over the golds) with the language's own normaliser;
@@ -94,8 +121,8 @@ TASKS_TABLE = [
             MultilingualSquadOfficialMetric(language, "f1"),
         ),
         # 1 (11-13 review fix): the normaliser removes the Unicode bidi marks (every language; xquad ara em +2.3 points). Prompts and
-        # generations are those of version 0.
-        version=1,
+        # generations are those of version 0. 2 (11-16): the questions on the 5 shot paragraphs of each language are not scored (EuroEval's few-shot rule, euroeval_shots.py); the 0-shot prompts are those of version 1.
+        version=2,
     )
     for language in _LANGUAGES
 ]

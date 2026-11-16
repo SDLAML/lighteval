@@ -78,7 +78,7 @@ def test_tasks_that_use_the_scorer_are_version_1_and_only_korean_f1_is_character
 
     for table in (xquad.TASKS_TABLE, multi_wiki_qa.TASKS_TABLE):
         gen = [c for c in table if c.name.endswith(":gen")]
-        assert gen and all(c.version == 1 for c in gen), "bidi marks removed (and kor character-level F1): task version 1"
+        assert gen and all(c.version == 2 for c in gen), "bidi marks removed (and kor character-level F1): version 1; few-shot from other contexts (titan_eval 11-16): version 2, the scorer is unchanged"
         assert all(c.version == 0 for c in table if c.name.endswith(":bpb")), "the BPB tasks do not use the normaliser"
         for c in gen:
             language = c.name.split(":")[1]

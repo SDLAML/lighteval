@@ -31,11 +31,14 @@ paper:
 https://arxiv.org/abs/2509.04111
 """
 
+from functools import partial
+
 from langcodes import standardize_tag
 
 from lighteval.metrics.dynamic_metrics import MultilingualSquadOfficialMetric
 from lighteval.metrics.metrics import Metrics
 from lighteval.tasks.lighteval_task import LightevalTaskConfig
+from lighteval.tasks.tasks.euroeval_shots import heldout_contexts, scored_only
 from lighteval.tasks.requests import Doc
 from lighteval.tasks.templates.qa import get_qa_prompt_function
 from lighteval.utils.language import Language
@@ -72,15 +75,35 @@ def _make_bpb_prompt(language: Language):
     return fn
 
 
+# Few-shot (owner 11-16, 2 shots as the MultiWikiQA paper, which evaluates with EuroEval: "decoder models were evaluated 2-shot"): the shots follow EuroEval's own selection
+# (tasks/tasks/euroeval_shots.py: one fixed set per language, seed 4242, contexts shorter than 512 characters, distinct contexts). The dataset has only the evaluated split (`train`), so the shot
+# questions and every question on a shot's article are held out of scoring (at every K). `multi_wiki_qa:gen|0` still runs 0-shot on the same scored items.
+HELDOUT_SHOTS = 2
+
+
+def _held(subset: str):
+    return heldout_contexts("alexandrainst/multi-wiki-qa", subset, _REVISION, "train", HELDOUT_SHOTS)
+
+
+def _shot_rows(subset: str) -> list[dict]:
+    return list(_held(subset)[0])
+
+
+def _gen_prompt(language: Language, subset: str):
+    return scored_only(get_qa_prompt_function(language, _make_qa_adapter()), lambda: _held(subset)[1])
+
+
 def _gen_config(name_lang: str, language: Language, hf_subset: str) -> LightevalTaskConfig:
     return LightevalTaskConfig(
         name=f"multi_wiki_qa:{name_lang}:gen",
-        prompt_function=get_qa_prompt_function(language, _make_qa_adapter()),
+        prompt_function=_gen_prompt(language, hf_subset),
         hf_repo="alexandrainst/multi-wiki-qa",
         hf_revision=_REVISION,
         hf_subset=hf_subset,
         evaluation_splits=["train"],
         hf_avail_splits=["train"],
+        few_shots_rows=partial(_shot_rows, hf_subset),
+        few_shots_select="sequential",  # the first K of the 2 shots drawn by EuroEval's rule, in their shuffled order
         generation_size=100,
         stop_sequence=["\n"],
         # 11-13: official SQuAD arithmetic with the language's own normaliser, names "em" / "f1" (as xquad.py)
@@ -90,7 +113,8 @@ def _gen_config(name_lang: str, language: Language, hf_subset: str) -> Lighteval
         ],
         # 1 (11-13 review fixes): the normaliser removes the Unicode bidi marks (every language); the F1 of Korean is over characters
         # (MultilingualSquadOfficialMetric / CHARACTER_LEVEL_F1_LANGUAGES). Prompts and generations are those of version 0.
-        version=1,
+        # 2 (11-16): the questions on the 2 shot articles of each language are not scored (EuroEval's few-shot rule, euroeval_shots.py); the 0-shot prompts are those of version 1.
+        version=2,
     )
 
 

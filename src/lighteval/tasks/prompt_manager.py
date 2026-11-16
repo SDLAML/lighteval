@@ -249,6 +249,11 @@ class FewShotSampler:
 
         self._init_fewshot_pool(num_fewshot=num_fewshot, variance_seed=variance_seed)
         samples = self._sample_from_pool(num_fewshot=num_fewshot, variance_seed=variance_seed, sampler=sampler)
+        # A task whose shots depend on the evaluated item's group (MMLU-Pro: the first K validation questions OF THE SAME CATEGORY) puts the group in
+        # `doc.specific["fewshot_group"]` of the evaluated doc and of every shot; only shots of that group are kept (in pool order). No group = as before.
+        group = formatted_doc.specific.get("fewshot_group") if formatted_doc is not None and isinstance(formatted_doc.specific, dict) else None
+        if group is not None:
+            samples = [s for s in samples if isinstance(s.specific, dict) and s.specific.get("fewshot_group") == group]
 
         # Source identity survives task metadata changes and different few-shot formatting.
         # Also reject matching content, including duplicates at different dataset positions.

@@ -171,6 +171,7 @@ def sample_to_fewshot(sample):
 
 _BBH_MCF_COMMON = {
     "hf_repo": "lukaemon/bbh",
+    "hf_revision": "982bb89fd79532a8ac676a61fc42eb1aeec63f99",       # titan_eval 11-16: pinned like bbh_cot_chat / bbh_base (the commit in configs/datasets.lock.yaml)
     "hf_avail_splits": ["test"],
     "evaluation_splits": ["test"],
     "few_shots_split": "test",
