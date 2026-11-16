@@ -281,9 +281,10 @@ class _DeterministicChecks(SampleLevelComputation):
     """The base IFEval / IFBench metric, made safe to run for hours on an offline node (chat_core_checks.txt, 11-13). Everything else is the inner metric (same keys, same values):
     1. `langdetect` is unseeded (the language checkers of ~95 IFEval prompts could flip between two runs on the same completions): seeded before every sample;
        IFEval's letter_frequency checker picks a RANDOM letter when the prompt's letter is not alphabetic ('#', '!': 2 prompts): `random` is seeded per sample and restored.
-    2. IFBench's checkers call nltk.download (once per process in Instruction.__init__, and for 'stopwords' on EVERY stop-word check); offline that is a network attempt per
-       call: when the package is already on disk (nltk_data) the download is skipped, and the spaCy model / punkt flag is set when present.
-    3. A checker that raises (IFBench: IndexError in format:quote_unquote / format:emoji, ZeroDivisionError in ratio:overlap on odd answers: 72 of 3,300 probes in the checks) would
+    2. (IFBench: the checkers are the official allenai/IFBench code at the pinned commit, tasks/ifbench/*; its only nltk.download calls are the one-time `download_nltk_resources()` at import,
+       which finds punkt / punkt_tab / stopwords / averaged_perceptron_tagger_eng in nltk_data and downloads nothing; the old per-call downloads of the previous snapshot are gone.)
+    3. A checker that raises (the old IFBench snapshot: IndexError / ZeroDivisionError on odd answers, 72 of 3,300 probes in the checks, 69 of 1,102 on 11-16; the official code at the pin: 1 of 1,102,
+       sentence:increment on blank lines, and none on the 4 x 300 stored answers) would
        stop the whole lighteval call, hours of generations included: the sample scores 0 on every instruction and `checker_error` = 1 (logged; the share is a metric)."""
 
     def __init__(self, inner):
@@ -295,7 +296,6 @@ class _DeterministicChecks(SampleLevelComputation):
         from langdetect import DetectorFactory
 
         DetectorFactory.seed = 0
-        _skip_downloads_when_present()
         state = random.getstate()
         random.seed(0)
         try:
@@ -310,37 +310,6 @@ class _DeterministicChecks(SampleLevelComputation):
             return {"prompt_level_strict_acc": 0, "inst_level_strict_acc": [False] * k, "prompt_level_loose_acc": 0, "inst_level_loose_acc": [False] * k, "checker_error": 1}
         finally:
             random.setstate(state)
-
-
-def _nltk_has(package: str) -> bool:
-    import os
-
-    import nltk.data
-
-    return any(os.path.exists(os.path.join(base, sub, name))
-               for base in nltk.data.path for sub in ("corpora", "tokenizers", "taggers", "chunkers", "misc", "stemmers") for name in (package, package + ".zip"))
-
-
-def _skip_downloads_when_present() -> None:
-    try:
-        import nltk
-        import spacy.util
-        from lighteval.tasks.tasks.ifbench import instructions as ifb
-
-        if not getattr(nltk.download, "_local_first", False):
-            real = nltk.download
-
-            def local_first(info_or_id=None, *args, **kwargs):
-                if isinstance(info_or_id, str) and _nltk_has(info_or_id):
-                    return True
-                return real(info_or_id, *args, **kwargs)
-
-            local_first._local_first = True
-            nltk.download = local_first
-        if not ifb.RESOURCES_DOWNLOADED and _nltk_has("punkt_tab") and _nltk_has("averaged_perceptron_tagger_eng") and spacy.util.is_package("en_core_web_sm"):
-            ifb.RESOURCES_DOWNLOADED = True
-    except Exception:       # something is missing: leave the upstream behaviour (download) alone
-        pass
 
 
 def _deterministic(metric):

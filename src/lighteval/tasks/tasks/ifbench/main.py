@@ -56,6 +56,8 @@ submetric_names = [
 ]
 
 
+# The checkers and evaluation_lib next to this file are the official allenai/IFBench code at a pinned commit (see the header of each file and tests/unit/tasks/test_ifbench_official.py);
+# this class only feeds them our docs: strict first, then loose, on the same InputExample, as the official run_eval.py does.
 class IFBench(SampleLevelComputation):
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> dict:
         response = model_response.final_text[0]

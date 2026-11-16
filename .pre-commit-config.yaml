@@ -15,6 +15,9 @@
 default_language_version:
   python: python3
 
+# allenai/IFBench files ported byte for byte (sha256-checked by tests/unit/tasks/test_ifbench_official.py)
+exclude: '^src/lighteval/tasks/tasks/ifbench/(instructions|instructions_util|instructions_registry|classic_instructions|evaluation_lib)\.py$'
+
 ci:
   autofix_prs: true
   autoupdate_commit_msg: '[pre-commit.ci] pre-commit suggestions'

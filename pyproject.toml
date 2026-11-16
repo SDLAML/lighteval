@@ -1,6 +1,14 @@
 # Code style
 [tool.ruff]
 line-length = 119
+# the allenai/IFBench files are ported byte for byte (tests/unit/tasks/test_ifbench_official.py compares their sha256): never reformatted or fixed here
+extend-exclude = [
+  "src/lighteval/tasks/tasks/ifbench/instructions.py",
+  "src/lighteval/tasks/tasks/ifbench/instructions_util.py",
+  "src/lighteval/tasks/tasks/ifbench/instructions_registry.py",
+  "src/lighteval/tasks/tasks/ifbench/classic_instructions.py",
+  "src/lighteval/tasks/tasks/ifbench/evaluation_lib.py",
+]
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
@@ -117,7 +125,7 @@ extended_tasks = [
   "langdetect", # ifeval
   "openai>1.87", # llm as a judge using openai models
   "tiktoken",
-  "emoji", "spacy", "syllapy",  # ifbench
+  "emoji", "spacy", "syllapy", "immutabledict", "absl-py",  # ifbench (the official allenai/IFBench checkers need immutabledict and absl-py; spacy is not used by them any more)
   "evaluate", # slr_bench
 ]
 s3 = ["s3fs"]
