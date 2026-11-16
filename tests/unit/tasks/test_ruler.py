@@ -253,12 +253,12 @@ def test_ruler_chat_tasks_share_data_budgets_and_scorer_with_the_base_tasks():
         for sub in subsets:
             base, chat = tasks[f"ruler_{length}:{sub}"], tasks[f"ruler_{length}_chat:{sub}"]
             assert chat.hf_repo == base.hf_repo, "the SAME prepared folder: nothing extra to prepare"
-            assert chat.generation_size == base.generation_size == ruler._gen_size(sub, length), "RULER's own answer size per subtask"
+            assert base.generation_size == ruler._gen_size(sub, length) and chat.generation_size == ruler._chat_gen_size(sub, length) >= base.generation_size, "own size (base); chat: max(own, NVIDIA tokens_to_generate), vt 100 (review 11-16 R1)"
             assert [m.metric_name for m in base.metrics] == ["ruler_match"] and [m.metric_name for m in chat.metrics] == [["ruler_match", "over_context"]], "the base scorer + the share not generated"
             assert base.prompt_function is ruler.ruler_prompt and chat.prompt_function is ruler.ruler_chat_prompt
             assert not chat.stop_sequence and not base.stop_sequence, "no stop sequence: RULER has none, a chat reply ends at the end of turn"
     assert tasks["ruler_4096_chat:niah_multivalue"].generation_size == 300 and tasks["ruler_8192_chat:niah_multivalue"].generation_size == 250
-    assert tasks["ruler_8192_chat:cwe"].generation_size == 100 and tasks["ruler_8192_chat:vt"].generation_size == 50
+    assert tasks["ruler_8192_chat:cwe"].generation_size == 120 and tasks["ruler_8192_chat:vt"].generation_size == 100 and tasks["ruler_8192:vt"].generation_size == 50
 
 
 def test_ruler_chat_scoring_is_ruler_match_on_the_reply_only():

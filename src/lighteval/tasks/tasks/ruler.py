@@ -1760,7 +1760,7 @@ def ruler_chat_prompt(line: dict, task_name: str = None) -> Doc:
         prefix = line.get("gen_prefix", "")
         prefix_tokens = len(_tokenizer(tok_path).encode("\n" + prefix, add_special_tokens=False)) if prefix else 0
         n_est = int(line["length"]) - gen - prefix_tokens + af.CHAT_TEMPLATE_TOKENS
-        fit = af.fit_answer(n_est, gen, gen)
+        fit = af.fit_answer(n_est, _chat_gen_size(subset, length), gen, margin=RULER_CHAT_MARGIN)       # budget = the chat size, floor = the subtask's own size
         spec = af.mark({"n_tokens": n_est}, fit)
         if fit["over_context"]:
             query = af.SKIP_USER
@@ -1807,6 +1807,26 @@ def _gen_size(subset: str, length: int) -> int:
     return 100 if subset == "cwe" else 50  # vt, fwe and qa: 50
 
 
+# Chat twin only (no answer prefix in the prompt, review 11-16 R1): the reply has to carry the words the base prompt's prefill supplies ("According to the chain(s) of variable assignment ..., 5 variables
+# are assigned the value X, they are:" = 33 tokens + 5 names = 53 tokens, vt; "The special magic uuid for K mentioned in the provided text is" + uuid = 47 tokens with the Qwen3.5 tokenizer, niah_single_3),
+# so the chat budget is max(the generator's own size, NVIDIA's tokens_to_generate of scripts/data/synthetic/constants.py: niah 128, cwe 120) and 100 for vt. The own size stays the FLOOR of the answer-budget rule
+# (an item is given at least that, or is not run) and the size the generator reserved (`length` in the prepared rows).
+def _chat_gen_size(subset: str, length: int) -> int:
+    own = _gen_size(subset, length)
+    if subset == "vt":
+        return max(own, 100)
+    if subset == "cwe":
+        return max(own, 120)
+    if subset.startswith("niah"):
+        return max(own, 128)
+    return own
+
+
+# The OLMES-style rule (owner-approved 11-16, answer_fit.MARGIN = 64 as OLMES openai_mrcr.py:41-46). Review 11-16 R2: the prompt-size estimate here is an exact upper bound (3 tokens of
+# slack on 65 / 65 items), so margin 0 would zero no item of a 131,072-token model at 128k, while margin 64 zeroes 59 of 1,300 (CWE 43). Kept at the approved 64 until the owner decides.
+RULER_CHAT_MARGIN = 64
+
+
 def get_ruler_tasks(
     tokenizer_name: str,
     lengths: list[int] | None = None,
@@ -1832,7 +1852,8 @@ def get_ruler_tasks(
             gen_size = _gen_size(subset, length)
             # base (plain text, answer prefix in the prompt) and chat (titan_eval, owner 11-16: the same data through the chat template) share the prepared folder,
             # the answer budget and the scorer
-            for name, prompt_function, stop, metrics in ((f"ruler_{length}:{subset}", ruler_prompt, None, metric), (f"ruler_{length}_chat:{subset}", ruler_chat_prompt, [], [ruler_chat_metric])):
+            for name, prompt_function, stop, metrics, new_tokens in ((f"ruler_{length}:{subset}", ruler_prompt, None, metric, gen_size),
+                                                                     (f"ruler_{length}_chat:{subset}", ruler_chat_prompt, [], [ruler_chat_metric], _chat_gen_size(subset, length))):
                 tasks.append(
                     LightevalTaskConfig(
                         name=name,
@@ -1843,7 +1864,7 @@ def get_ruler_tasks(
                         evaluation_splits=["test"],
                         few_shots_split=None,
                         few_shots_select=None,
-                        generation_size=gen_size,
+                        generation_size=new_tokens,
                         metrics=metrics,
                         stop_sequence=stop,
                         version=0,
