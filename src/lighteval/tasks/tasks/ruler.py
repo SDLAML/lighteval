@@ -109,7 +109,11 @@ SUBSETS = [
     "qa_2",
 ]
 
-DEFAULT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
+# 262144 (owner 11-16: "ruler is ok to go 256k"): the tasks `ruler_262144:<subset>` / `ruler_262144_chat:<subset>` exist for the models with a >= 262,144-token context (Qwen3.5-35B-A3B, Nemotron-3.5 Lightning).
+# The generator is the same code as at every other length. Two limits of its sources bind there (the lm-evaluation-harness generator this one is ported from has the same two caps: cwe_utils.py `num_words > len(WORDS)`, qa_utils.py `num_docs > len(docs)`): CWE has 8,166 distinct words
+# (wonderwords nouns + adjectives + verbs; ~198k tokens with the Qwen3.5 tokenizer) and QA-1 has the 1,204 distinct SQuAD v2 dev paragraphs (~213k tokens): those two subtasks stop at the cap, shorter than the
+# nominal length (the per-subtask token statistics are in manifest.json). NVIDIA's current main reaches further by a longer word list (CWE) and by repeating documents (QA).
+DEFAULT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
 
 # NUM_SAMPLES = 500
 NUM_SAMPLES = 100

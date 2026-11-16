@@ -261,6 +261,20 @@ def test_ruler_chat_tasks_share_data_budgets_and_scorer_with_the_base_tasks():
     assert tasks["ruler_8192_chat:cwe"].generation_size == 120 and tasks["ruler_8192_chat:vt"].generation_size == 100 and tasks["ruler_8192:vt"].generation_size == 50
 
 
+def test_ruler_registers_the_256k_length_with_the_sizes_of_the_other_lengths():
+    """Owner 11-16: RULER 256k (262,144 tokens, base and chat twin). The default table holds it; its sizes are the 128k ones (niah_multivalue 250 above 4k)."""
+    assert ruler.DEFAULT_LENGTHS[-1] == 262144 and ruler.DEFAULT_LENGTHS == sorted(set(ruler.DEFAULT_LENGTHS))
+    tasks = {t.name: t for t in ruler.get_ruler_tasks("dummy-tokenizer")}
+    assert len(tasks) == 2 * len(ruler.DEFAULT_LENGTHS) * len(ruler.SUBSETS)
+    for sub in ruler.SUBSETS:
+        base, chat = tasks[f"ruler_262144:{sub}"], tasks[f"ruler_262144_chat:{sub}"]
+        assert base.generation_size == ruler._gen_size(sub, 131072) == ruler._gen_size(sub, 262144)
+        assert chat.generation_size == ruler._chat_gen_size(sub, 131072) == ruler._chat_gen_size(sub, 262144)
+        assert chat.hf_repo == base.hf_repo and base.hf_repo.endswith(f"/262144/{sub}"), "the chat twin reads the base folder"
+    assert tasks["ruler_262144:niah_multivalue"].generation_size == 250
+    assert ruler.prepared_status("dummy-tokenizer", [262144], ["vt"])["missing"] == [(262144, "vt")], "262144 is a valid generated length (>= 2048)"
+
+
 def test_ruler_chat_scoring_is_ruler_match_on_the_reply_only():
     from lighteval.metrics.metrics_sample import RulerStringMatch
     from lighteval.models.model_output import ModelResponse
