@@ -150,7 +150,9 @@ TRANSLATION_LITERALS: dict[Language, TranslationLiterals] = {
         colon=":",
         indices=["أ", "ب", "ج", "د", "هـ", "و", "ز", "ح"],
     ),
-    Language.ARMENIAN: TranslationLiterals(language=Language.ARMENIAN),
+    # titan_eval (11-16): Armenian had no literals, so every mlmm_arc / mlmm_hellaswag Armenian item raised "Translation for 'answer' is needed" (the multilingual suite
+    # runs all languages since 11-16). Only the two words the multiple-choice template needs: harts' "question", pataskhan "answer" (standard Eastern Armenian).
+    Language.ARMENIAN: TranslationLiterals(language=Language.ARMENIAN, question_word="հարց", answer="պատասխան"),
     Language.ASSAMESE: TranslationLiterals(language=Language.ASSAMESE),
     Language.ASTURIAN: TranslationLiterals(language=Language.ASTURIAN),
     Language.AWADHI: TranslationLiterals(language=Language.AWADHI),
