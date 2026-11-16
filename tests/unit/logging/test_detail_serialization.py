@@ -1,6 +1,7 @@
 import json
 from dataclasses import asdict, replace
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from datasets import Dataset, DatasetDict
@@ -113,3 +114,30 @@ def test_saved_details_allow_missing_and_nested_source_identities(tracker, tmp_p
     assert saved_fewshot["source_id"] == {"split": "dev", "row_index": 3}
     assert saved_fewshot["fewshot_samples"][0]["source_id"] == {"split": "train", "row_index": 4}
     assert (doc.source_id, fewshot.source_id, nested.source_id) == (None, ("dev", 3), ("train", 4))
+
+
+def test_saved_details_use_large_strings_and_skip_fingerprinting(tracker, tmp_path, monkeypatch):
+    # Dataset.from_list fingerprints the whole Arrow table by pickling it, which overflows int32 string offsets once a
+    # details column holds more than 2 GB of text. The save path must not hash the table, and its strings must be 64-bit.
+    def no_table_fingerprint(*args, **kwargs):
+        raise AssertionError("details tables must not be fingerprinted by hashing the Arrow data")
+
+    monkeypatch.setattr("datasets.arrow_dataset.generate_fingerprint", no_table_fingerprint)
+    long_text = "long context " * 10_000  # stand-in for a long-context prompt
+    fewshot = Doc("Example?", ["Yes"], 0, source_id=("dev", 0))
+    doc = Doc(long_text, ["Yes"], 0, source_id=("test", 1), fewshot_samples=[fewshot])
+    tracker.details_logger.log("long|1", doc, ModelResponse(text=["Yes"], input_tokens=[1, 2]), {"accuracy": 1.0})
+
+    tracker.save()
+    monkeypatch.undo()
+
+    detail_file = next((tmp_path / "details").rglob("*.parquet"))
+    table = pq.read_table(detail_file)
+    doc_type = table.schema.field("doc").type
+    assert doc_type.field("query").type == pa.large_string()
+    assert doc_type.field("fewshot_samples").type.value_type.field("query").type == pa.large_string()
+    # The file reads back with the same content, and as plain Python strings.
+    saved_doc = table.to_pylist()[0]["doc"]
+    assert saved_doc["query"] == long_text
+    assert saved_doc["fewshot_samples"][0]["query"] == "Example?"
+    assert Dataset.from_parquet(str(detail_file))[0]["doc"]["query"] == long_text

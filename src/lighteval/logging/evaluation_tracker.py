@@ -25,12 +25,14 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from enum import Enum
 from io import BytesIO
 from pathlib import Path
 
+import pyarrow as pa
 import torch
 from datasets import Dataset, load_dataset
 from datasets.utils.metadata import MetadataConfigs
@@ -106,6 +108,38 @@ def _detail_dict_factory(fields):
         # Arrow lists cannot contain both a split name (str) and a row index (int).
         result["source_id"] = {"split": source_id[0], "row_index": source_id[1]}
     return result
+
+
+def _widen_string_offsets(arrow_type: pa.DataType) -> pa.DataType:
+    """Use 64-bit offsets for every string inside an Arrow type (lists and structs are walked recursively).
+
+    A details column can hold more than 2 GB of text (long-context prompts), which overflows the int32 offsets of
+    `string`. Parquet stores both as the same BYTE_ARRAY, so the saved files do not change.
+    """
+    if pa.types.is_string(arrow_type):
+        return pa.large_string()
+    if pa.types.is_list(arrow_type):
+        value_field = arrow_type.value_field
+        return pa.list_(pa.field(value_field.name, _widen_string_offsets(value_field.type), value_field.nullable))
+    if pa.types.is_struct(arrow_type):
+        return pa.struct([pa.field(f.name, _widen_string_offsets(f.type), f.nullable, f.metadata) for f in arrow_type])
+    return arrow_type
+
+
+def _build_details_dataset(task_details: list) -> Dataset:
+    """Turn one task's details into a Dataset without hashing the Arrow table.
+
+    `Dataset.from_list` fingerprints the whole table by pickling it, which fails with "offset overflow" once a string
+    column exceeds 2 GB. Here the table is built with pyarrow, its string columns are widened to 64-bit offsets, and
+    the Dataset gets an explicit fingerprint so no hashing happens.
+    """
+    table = pa.Table.from_pylist([asdict(detail, dict_factory=_detail_dict_factory) for detail in task_details])
+    table = table.cast(
+        pa.schema([pa.field(f.name, _widen_string_offsets(f.type), f.nullable, f.metadata) for f in table.schema])
+    )
+    # We don't keep 'id' around if it's there; sort column names to make it easier later
+    column_names = sorted(name for name in table.column_names if name != "id")
+    return Dataset(table.select(column_names), fingerprint=uuid.uuid4().hex)
 
 
 class EvaluationTracker:
@@ -276,19 +310,8 @@ class EvaluationTracker:
         # Create the details datasets for later upload
         details_datasets: dict[str, Dataset] = {}
         for task_name, task_details in self.details_logger.details.items():
-            # Convert source identities recursively without changing the live documents.
-            dataset = Dataset.from_list(
-                [asdict(detail, dict_factory=_detail_dict_factory) for detail in task_details]
-            )
-
-            # We don't keep 'id' around if it's there
-            column_names = dataset.column_names
-            if "id" in dataset.column_names:
-                column_names = [t for t in dataset.column_names if t != "id"]
-
-            # Sort column names to make it easier later
-            dataset = dataset.select_columns(sorted(column_names))
-            details_datasets[task_name] = dataset
+            # Source identities are converted recursively without changing the live documents.
+            details_datasets[task_name] = _build_details_dataset(task_details)
 
         # We save results at every case
         self.save_results(date_id, results_dict)
