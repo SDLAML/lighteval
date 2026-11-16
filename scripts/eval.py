@@ -29,6 +29,7 @@ from lighteval.pipeline import ParallelismManager, Pipeline, PipelineParameters
 
 ######## GENERAL CONFIGURATION  ########
 
+OUT_DIR_PREFIX = "results"
 SUBDIR_PREFIX = ""
 RESULTS_DIR_NAME = None  # Override the task name in the results path (e.g. "global_mmlu_multilingual")
 ENFORCE_EAGER_MODELS = ['Trinity', 'granite', 'LFM2'] # models for which we want to enforce eager mode in vLLM (e.g. due to OOMs in non-eager mode)
@@ -209,7 +210,7 @@ def eval_one(model_name: str, tasks: str):
             print(f"{'='*100}\n")
         
         task_dir = RESULTS_DIR_NAME if RESULTS_DIR_NAME else _safe_name(task)
-        out_dir = Path("results") / _safe_name(model_name) / task_dir / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
+        out_dir = Path(OUT_DIR_PREFIX) / _safe_name(model_name) / task_dir / f'{SUBDIR_PREFIX}{_get_git_commit_short()}'
         out_dir.mkdir(parents=True, exist_ok=True)
         eval_tracker = EvaluationTracker(
             output_dir=str(out_dir), 
