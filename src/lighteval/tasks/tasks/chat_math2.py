@@ -174,7 +174,9 @@ def mmlu_prox_chat_prompt(line, task_name: str = None):
         task_name=task_name,
         query=mc_query(line["question"], options),
         choices=list(ascii_uppercase[: len(options)]),
-        gold_index=int(line["answer_index"]),
+        # Gold = the LETTER column `answer`, as mmlu_pro_chat (A3) and TIGER-Lab's official script do: `answer_index` disagrees with `answer` in exactly one row per language
+        # (question_id 3787, the MMLU-Pro defect: `answer` "C" = N-H, `answer_index` 1 = P-Cl, which is wrong), i.e. 28 of 329,252 items scored against a wrong gold.
+        gold_index=ascii_uppercase.index(line["answer"]) if line.get("answer") in tuple(ascii_uppercase[:10]) else int(line["answer_index"]),
         specific={"question_id": line["question_id"], "category": line.get("category"), "src": line.get("src")},
     )
 

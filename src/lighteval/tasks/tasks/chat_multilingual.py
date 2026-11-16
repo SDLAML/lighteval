@@ -121,8 +121,8 @@ def _build_tasks():
                 generation_size=BUDGET,
                 stop_sequence=[],
                 hf_filter=subset_filter(f"{SEED}:mmmlu:{locale}", _mmmlu_key, ["test"]),      # None = the full test split
-                metrics=[chat_choice_metric(1)],
-                version=1,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response)
+                metrics=[chat_choice_metric(1, localized=True)],      # the reader of the official MMMLU eval: localised "Answer" words too (simple-evals mmlu_eval.py)
+                version=2,  # 0 -> 1 (owner 11-16, A2): the shared letter reader normalises markup first (chat_metrics.normalize_response); 1 -> 2: localised answer words (review E)
             )
         )
     for language, code in _LANGUAGES.items():

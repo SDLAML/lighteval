@@ -126,14 +126,28 @@ def normalize_response(response: str) -> str:
     )
 
 
-def anchored_letter(pred: str, n_options: int) -> str | None:
+# The localised "Answer" words of OpenAI simple-evals `common.MULTILINGUAL_ANSWER_REGEXES` (the reader of the official MMMLU eval, `mmlu_eval.py`), with their option letters (Arabic / Bengali / fullwidth
+# letters are mapped to A-D as `normalize_extracted_answer` does). Opt-in (`localized=True`, the MMMLU task only): the English prompt asks for "Answer: X" but a weak model answers in the language
+# of the question ("Antwort: B", "答案：C", "Réponse : D"): 1.7 % of the stored Qwen3.5-2B no-think MMMLU samples (+0.2 pt of accuracy).
+_LOCAL_WORDS = [
+    "উত্তর", "उत्तर", "উত্তরঃ", "Antwort", "답변", "정답", "답", "答案", "答", "答复", "答曰", "الإجابة", "الجواب", "إجابة", "الإجابة النهائية", "الإجابة الصحيحة", "الإجابة الصحيحة هي",
+    "الإجابة هي", "الجواب النهائي", "Respuesta", "Risposta", "答え", "回答", "解答", "Jawaban", "Réponse", "Resposta", "Jibu", "Idahun", "Ìdáhùn", "Idáhùn", "Àmọ̀nà", "Àdáhùn", "Ànúgọ", "Àṣàyàn",
+]
+_ANSWER_LOCAL = re.compile(
+    r"(?i:" + "|".join(re.escape(w) for w in sorted(_LOCAL_WORDS, key=len, reverse=True)) + r")[ \t]*[:\uff1a]?[ \t]*(?:\*\*)?[ \t]*[\(\[]?[ \t]*([A-D\u0623\u0628\u062c\u062f\u0985\u09ac\u09a1\u09a2\uff21-\uff24])(?![A-Za-z0-9])"
+)
+_LOCAL_LETTER = {"\u0623": "A", "\u0628": "B", "\u062c": "C", "\u062f": "D", "\u0985": "A", "\u09ac": "B", "\u09a1": "C", "\u09a2": "D", "\uff21": "A", "\uff22": "B", "\uff23": "C", "\uff24": "D"}
+
+
+def anchored_letter(pred: str, n_options: int, localized: bool = False) -> str | None:
     """The letter of the LAST anchored answer in `pred` ("Answer: X" and its variants, see _ANSWER), None when there is none, when it is a hedge (a second letter
     follows it, see _HEDGE) or when it is not one of the n options. The text is first normalised as simple-evals does (`normalize_response`: bold markers, `$`, `\\(`,
     `\\boxed`, `\\text`, `{` removed), so "**Answer:** **B**" and "Answer: \\(\\boxed{I}\\)" are read; the last-match and the hedge rule are applied to the normalised text."""
     pred = normalize_response(pred)
-    last = None
-    for m in _ANSWER.finditer(pred):
-        last = None if _HEDGE.match(pred, m.end()) else m.group(1)
+    found = [(m.start(), None if _HEDGE.match(pred, m.end()) else m.group(1)) for m in _ANSWER.finditer(pred)]
+    if localized:       # `Answer:` and the localised words are one family: the LAST anchor of either kind is the answer
+        found += [(m.start(), None if _HEDGE.match(pred, m.end()) else _LOCAL_LETTER.get(m.group(1), m.group(1))) for m in _ANSWER_LOCAL.finditer(pred)]
+    last = max(found, key=lambda t: t[0])[1] if found else None
     if last is None or ascii_uppercase.index(last) >= n_options:
         return None
     return last
@@ -168,12 +182,12 @@ def _math_scores(extractor: MultilingualExtractiveMatchMetric) -> Callable[[Doc,
     return score
 
 
-def _choice_scores(unanchored: MultilingualExtractiveMatchMetric) -> Callable[[Doc, str], dict[str, float]]:
+def _choice_scores(unanchored: MultilingualExtractiveMatchMetric, localized: bool = False) -> Callable[[Doc, str], dict[str, float]]:
     def score(doc: Doc, pred: str) -> dict[str, float]:
         if not pred or not pred.strip():
             return {"acc": 0.0, "acc_unanchored": 0.0}
         gold = doc.choices[doc.gold_index if isinstance(doc.gold_index, int) else doc.gold_index[0]]
-        a = 1.0 if anchored_letter(pred, len(doc.choices)) == gold else 0.0
+        a = 1.0 if anchored_letter(pred, len(doc.choices), localized) == gold else 0.0
         u = 1.0 if a == 1.0 else float(unanchored.compute(doc, ModelResponse(text=[pred])))     # an anchored hit is also an any-letter hit
         return {"acc": a, "acc_unanchored": u}
 
@@ -226,6 +240,6 @@ def chat_math_metric(n: int) -> SampleLevelMetricGrouping:
     return _grouping(n, _math_scores(_math_extractor()), ("avg@n", "avg@n_lenient"))
 
 
-def chat_choice_metric(n: int) -> SampleLevelMetricGrouping:
-    """acc (anchored letter), acc_unanchored (any letter: diagnostic), pass@k over the anchored scores. n = default samples."""
-    return _grouping(n, _choice_scores(_letters_extractor()), ("acc", "acc_unanchored"))
+def chat_choice_metric(n: int, localized: bool = False) -> SampleLevelMetricGrouping:
+    """acc (anchored letter), acc_unanchored (any letter: diagnostic), pass@k over the anchored scores. n = default samples. `localized`: also read the localised answer words (MMMLU)."""
+    return _grouping(n, _choice_scores(_letters_extractor(), localized), ("acc", "acc_unanchored"))
