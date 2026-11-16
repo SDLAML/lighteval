@@ -46,7 +46,8 @@ try:
 except AttributeError:
     print("You likely won't be able to run codegen metrics on your system.")
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# (idle-time fix) NOT set at import: the task registry imports this module for every run, and a process-wide "false" made every later tokenizer call single threaded
+# (the 7,600-prompt GSM-Infinite batch took 32 min instead of ~3). It is set in evaluate_generations() below, right before the scoring processes are forked.
 
 import_string = "from string import *\nfrom re import *\nfrom datetime import *\nfrom collections import *\nfrom heapq import *\nfrom bisect import *\nfrom copy import *\nfrom math import *\nfrom random import *\nfrom statistics import *\nfrom itertools import *\nfrom functools import *\nfrom operator import *\nfrom io import *\nfrom sys import *\nfrom json import *\nfrom builtins import *\nfrom typing import *\nimport string\nimport re\nimport datetime\nimport collections\nimport heapq\nimport bisect\nimport copy\nimport math\nimport random\nimport statistics\nimport itertools\nimport functools\nimport operator\nimport io\nimport sys\nimport json\nsys.setrecursionlimit(50000)\n"
 
@@ -568,6 +569,8 @@ def evaluate_generations(
         [-2] = compile error, [-1] = runtime error [False] = failed test case [True] = passed test case
     """
     # generations are code generations in the same order of the dataset
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"      # as upstream, but only here, right before the scoring processes are forked (see the comment at the top of the file)
 
     inputs = [
         [(generations_list[index], samples_list[index], timeout), index] for index in range(len(generations_list))

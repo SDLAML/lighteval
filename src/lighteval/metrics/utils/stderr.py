@@ -49,28 +49,55 @@ def mean_stderr(arr):
     return _stddev(arr) / math.sqrt(len(arr))
 
 
+SERIAL_MAX_SECONDS = 30.0      # a draw loop estimated above this is handed to a (bounded) process pool, as before
+POOL_MAX_PROCESSES = 32        # the old pool had mp.cpu_count() (288 on a JUPITER node) processes, each a fork of the whole (tens of GB) lighteval process
+
+
 class _bootstrap_internal:
     def __init__(self, number_draws: int, metric: Optional[Callable] = None):
         self.number_draws = number_draws
         self.metric = metric
 
     def __call__(self, cur_experiment):
-        # Creates number_draws samplings (with replacement) of the population by iterating on a given seed
+        # Creates number_draws samplings (with replacement) of the population by iterating on a given seed.
+        # (idle-time fix) The draws still come from ONE random.Random(seed) stream, consumed in the same order, and the metric of a draw does not depend on the other draws, so the numbers are
+        # bit-identical to the old version, which started mp.Pool(mp.cpu_count()) for EVERY stderr (288 forks of a ~50 GB process: 27 s each, 46 stderrs = 21 min for one GSM-Infinite group).
+        # Light metrics (a mean of a few thousand floats: 0.2 ms a draw) run in this process; a metric slow enough to need workers (an estimate from the first draws) uses a bounded pool.
+        import time
+
         population, seed = cur_experiment
         rnd = random.Random()
         rnd.seed(seed)
-        samplings = []
-        import multiprocessing as mp
 
-        with mp.Pool(mp.cpu_count()) as pool:
-            samplings = pool.starmap(
-                self.metric,
-                tqdm(
-                    [(rnd.choices(population, k=len(population)),) for _ in range(self.number_draws)],
-                    total=self.number_draws,
-                    desc="Sampling bootstrap iterations",
-                    disable=bool(LIGHTEVAL_DISABLE_TQDM),
-                ),
+        def draw():
+            return rnd.choices(population, k=len(population))
+
+        probe = min(5, self.number_draws)
+        t0 = time.perf_counter()
+        samplings = [self.metric(draw()) for _ in range(probe)]
+        per_draw = (time.perf_counter() - t0) / max(probe, 1)
+        rest = self.number_draws - probe
+        if rest > 0 and per_draw * rest > SERIAL_MAX_SECONDS:
+            import multiprocessing as mp
+
+            with mp.Pool(min(mp.cpu_count(), POOL_MAX_PROCESSES)) as pool:
+                samplings.extend(
+                    pool.starmap(
+                        self.metric,
+                        tqdm(
+                            [(draw(),) for _ in range(rest)],
+                            total=rest,
+                            desc="Sampling bootstrap iterations",
+                            disable=bool(LIGHTEVAL_DISABLE_TQDM),
+                        ),
+                    )
+                )
+        else:
+            samplings.extend(
+                self.metric(draw())
+                for _ in tqdm(
+                    range(rest), total=rest, desc="Sampling bootstrap iterations", disable=bool(LIGHTEVAL_DISABLE_TQDM)
+                )
             )
         return samplings
 
