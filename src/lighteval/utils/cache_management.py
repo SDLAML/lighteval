@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 DISABLE_CACHING = os.getenv("LIGHTEVAL_DISABLE_PREDICTION_CACHE", "0").lower() in ("1", "true", "yes")
 
+
 @dataclass
 class TaskID:
     """A unique ID for a grouping of task samples. It relies on the task name,
@@ -84,18 +85,24 @@ class SampleCache:
         self.model_config = model_config
         self.model_hash = self.get_model_hash(model_config)
 
-        self.cache_dir = (
-            Path(os.path.expanduser(self.model_config.cache_dir))
-            / str(self.model_config.model_name).lstrip("/")      # an absolute model path must not escape cache_dir
-            / self.model_hash
-        )
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        model_name = Path(self.model_config.model_name)
+        if model_name.is_absolute() or ".." in model_name.parts:
+            # Keep local paths inside cache_dir; the config hash includes their full path (so two folders with the same basename still get separate caches).
+            # Merge of opt_moe c1c97cf (basename form, also covers "..") with titan_eval 9a03f57 (`str(model_name).lstrip("/")`: an absolute model path must not escape
+            # cache_dir; it wrote the cache into the model folder): both keep the cache under cache_dir; the basename form is kept because it handles ".." too and its tests
+            # (tests/unit/utils/test_caching.py) assert that layout. No titan_eval cache existed in the old layout.
+            model_name = Path(model_name.name if model_name.name not in ("", "..") else "local_model")
+        self.cache_dir = Path(os.path.expanduser(self.model_config.cache_dir)) / model_name / self.model_hash
 
         self.registry = None
 
-        self.existing_indices = self._load_cached_indices()
+        self.existing_indices = {}
         # Caching the task_hashes to avoid grabbing the registry all the time
         self._task_hashes = {}
+
+        if not DISABLE_CACHING:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.existing_indices = self._load_cached_indices()
 
     def _init_registry(self, registry: Registry):
         self.registry = registry

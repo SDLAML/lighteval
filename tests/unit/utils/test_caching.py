@@ -23,16 +23,110 @@
 import tempfile
 import unittest
 from dataclasses import asdict
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 import torch
 
-from lighteval.models.abstract_model import LightevalModel
+from lighteval.models.abstract_model import LightevalModel, ModelConfig
 from lighteval.models.model_output import ModelResponse
 from lighteval.tasks.requests import Doc, SamplingMethod
+from lighteval.utils import cache_management
 from lighteval.utils.cache_management import SampleCache
 from lighteval.utils.imports import Extra, is_package_available
+
+
+class TestSampleCacheFilesystem:
+    @pytest.fixture(autouse=True)
+    def enable_prediction_cache(self, monkeypatch):
+        monkeypatch.setattr(cache_management, "DISABLE_CACHING", False)
+
+    @pytest.mark.parametrize("path_kind", ["absolute", "parent", "nested_parent"])
+    def test_local_model_cache_stays_under_cache_root(self, tmp_path, path_kind):
+        cache_root = tmp_path / "cache"
+        checkpoint_dir = tmp_path / "checkpoints" / "model"
+        checkpoint_dir.mkdir(parents=True)
+        model_name = {
+            "absolute": str(checkpoint_dir),
+            "parent": "../checkpoints/model",
+            "nested_parent": "models/../../checkpoints/model",
+        }[path_kind]
+        config = ModelConfig(model_name=model_name, cache_dir=str(cache_root))
+
+        cache = SampleCache(config)
+
+        assert cache.cache_dir.is_dir()
+        assert cache.cache_dir.resolve().is_relative_to(cache_root.resolve())
+        assert list(checkpoint_dir.iterdir()) == []
+
+    def test_hub_model_cache_keeps_existing_layout(self, tmp_path):
+        config = ModelConfig(model_name="organization/model", cache_dir=str(tmp_path))
+
+        cache = SampleCache(config)
+
+        assert cache.cache_dir == tmp_path / "organization" / "model" / cache.model_hash
+        assert cache.cache_dir.is_dir()
+
+    def test_local_models_with_same_basename_have_separate_caches(self, tmp_path):
+        cache_root = tmp_path / "cache"
+        configs = [
+            ModelConfig(model_name=str(tmp_path / directory / "model"), cache_dir=str(cache_root))
+            for directory in ("first", "second")
+        ]
+
+        caches = [SampleCache(config) for config in configs]
+
+        assert caches[0].cache_dir != caches[1].cache_dir
+        assert all(cache.cache_dir.resolve().is_relative_to(cache_root.resolve()) for cache in caches)
+
+    def test_disabled_cache_skips_directory_creation_and_loading(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_management, "DISABLE_CACHING", True)
+        cache_root = tmp_path / "cache"
+        checkpoint_dir = tmp_path / "checkpoints" / "model"
+        checkpoint_dir.mkdir(parents=True)
+        config = ModelConfig(model_name=str(checkpoint_dir), cache_dir=str(cache_root))
+
+        with (
+            patch.object(cache_management.Path, "mkdir") as mkdir,
+            patch.object(SampleCache, "_load_cached_indices", return_value={}) as load_indices,
+        ):
+            cache = SampleCache(config)
+
+        mkdir.assert_not_called()
+        load_indices.assert_not_called()
+        assert cache.existing_indices == {}
+        assert not cache_root.exists()
+        assert list(checkpoint_dir.iterdir()) == []
+
+        # The pipeline still registers tasks on the cache object when caching is disabled.
+        registry = Mock()
+        cache._init_registry(registry)
+        assert cache.registry is registry
+
+    def test_enabled_cache_round_trip_for_local_model(self, tmp_path):
+        cache_root = tmp_path / "cache"
+        checkpoint_dir = tmp_path / "checkpoints" / "model"
+        checkpoint_dir.mkdir(parents=True)
+        config = ModelConfig(model_name=str(checkpoint_dir), cache_dir=str(cache_root))
+        model = SimpleNamespace(_cache=SampleCache(config))
+        docs = [Doc(id="sample", task_name="cache_test", query="2+2?", choices=["4"], gold_index=0)]
+        response = ModelResponse(text=["4"])
+        calls = []
+
+        @cache_management.cached(SamplingMethod.GENERATIVE)
+        def generate(model, docs):
+            calls.append(docs)
+            return [response for _ in docs]
+
+        assert generate(model, docs) == [response]
+
+        # A fresh cache must load the saved response and avoid generating it again.
+        model._cache = SampleCache(config)
+        assert generate(model, docs) == [response]
+        assert len(calls) == 1
+        assert list(cache_root.rglob("*.parquet"))
+        assert list(checkpoint_dir.iterdir()) == []
 
 
 class TestCaching(unittest.TestCase):

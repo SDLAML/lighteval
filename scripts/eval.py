@@ -42,7 +42,7 @@ OVERRIDE_CHAT_TEMPLATE = False # False for base, don't forget to change for inst
 SEED = 1234
 TEMPERATURE = 0
 TOP_P = None
-MAX_MODEL_LENGTH = 4096
+MAX_MODEL_LENGTH = 8192
 MAX_NEW_TOKENS = None
 MAX_SAMPLES = None
 BOOTSTRAP_ITERS = 0 # Set >0 to compute stderr via bootstrap.
@@ -56,6 +56,7 @@ SPACES_BETWEEN_SPECIAL_TOKENS = True # vllm default
 # MAX_MODEL_LENGTH = 65536 # 65536 // 32768
 # MAX_NEW_TOKENS = 32768 # 32768 // 16384
 # MAX_SAMPLES = None
+# BOOTSTRAP_ITERS = 0
 # SKIP_SPECIAL_TOKENS = False
 # SPACES_BETWEEN_SPECIAL_TOKENS = False
 
@@ -63,26 +64,35 @@ SPACES_BETWEEN_SPECIAL_TOKENS = True # vllm default
 ######## MODEL NAMES  ########
 
 MODEL_NAMES = [
-                "allenai/OLMoE-1B-7B-0125", 
-                "HuggingFaceTB/SmolLM3-3B-Base",
-                ##
-                "Qwen/Qwen3-8B-Base",
-                "XiaomiMiMo/MiMo-7B-Base",
-                "swiss-ai/Apertus-8B-2509",
-                "marin-community/marin-8b-base", 
-                "EssentialAI/rnj-1",
-                "utter-project/EuroLLM-9B", 
-            ]
+                f"{BASE_MODEL_PATH}/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Base-BF16",
+                f"{BASE_MODEL_PATH}/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16",
+                f"{BASE_MODEL_PATH}/gemma-4-26B-A4B",
+                f"{BASE_MODEL_PATH}/Qwen3.5-35B-A3B-Base",
+                f"{BASE_MODEL_PATH}/Trinity-Mini-Base",
+                f"{BASE_MODEL_PATH}/granite-4.0-h-small-base",
+                f"{BASE_MODEL_PATH}/LFM2.5-24B-A2B-Base",
+                f"{BASE_MODEL_PATH}/Mellum2-12B-A2.5B-Base",
+]
+
+
+######################
+### Base Suite
+######################
 
 TASKS = [
-            # "hellaswag|5", "siqa|5", "commonsenseqa|5", "openbookqa|5", 
-            # "squad_v2|5", "drop|5", 
-            # "triviaqa|5", "wikifact|5", "truthfulqa:mc|0", "popqa|5",
-            # "mmlu|5", "sciq:mc|5",
-            # "arc:easy:mcf|5", "arc:challenge:mcf|5", 
-            # "gsm8k|0", "gsm_plus|0", "math_500|0", "math|0",
-            # "agieval_eng_em|0",
+            ### General QA
+            "hellaswag:mcf_em|5", "siqa:mcf_em|5", "commonsenseqa:mcf_em|5", "openbookqa:mcf_em|5", 
+            "winogrande:mcf_em|5", "piqa:mcf_em|5", "jeopardy_mc:mcf|5", 
+            "squad_v2:gen|5", "drop:gen|5", "triviaqa:gen|5", "wikifact:gen|5", 
+            "truthfulqa:gen|5", "popqa:gen|5", "natural_questions:gen|5", "coqa:gen|5",
+            ### Scientific QA
+            "mmlu:mcf_em|5", "sciq:mcf_em|5", "arc:easy:mcf_em|5", "arc:challenge:mcf_em|5",
+            "agieval_eng:mcf_em|5", "supergpqa:mcf_em|5", "rbench:en:mcf_em|5",
+            "mmlu_cf:mcf_em|5", "bigbench_hard:mcf_em|5", "qasc:mcf_em|5", "med_mcqa:mcf_em|5",
+            ### Math
+            "gsm8k|0", "gsm_plus|0", "math_500|0", "math:gen|0",
 ]
+
 
 # TASKS += [
 #             f"global_mmlu_all_{lang}_mcf|5" for lang in [

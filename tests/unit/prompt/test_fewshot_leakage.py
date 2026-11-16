@@ -24,7 +24,8 @@ FORMATTING_CASES = [
     }),
     ("gsm8k", "gsm8k_prompt", {"question": "One plus one?", "answer": "One plus one is two. #### 2"}),
     ("gsm_symbolic", "gsm_symbolic_prompt", {"question": "One plus one?", "answer": "One plus one is two. #### 2"}),
-    ("bigbench_hard", "bbh_cot_prompt", {"input": "Question?", "target": "Answer"}),
+    ("bigbench_hard", "bbh_mcf_prompt", {"input": "Question?\nOptions:\n(A) First\n(B) Second", "target": "(B)"}),
+    ("bigbench_hard", "bbh_chat_prompt", {"input": "Question?\nOptions:\n(A) First\n(B) Second", "target": "(B)"}),
 ]
 
 

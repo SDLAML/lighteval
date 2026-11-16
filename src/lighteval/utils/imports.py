@@ -63,7 +63,8 @@ def is_package_available(package: str | Requirement | Extra):
         if not package.specifier:
             return True
 
-        return installed in package.specifier
+        # Check installed development builds against the version bounds too.
+        return package.specifier.contains(installed, prereleases=True)
 
 
 @lru_cache()
