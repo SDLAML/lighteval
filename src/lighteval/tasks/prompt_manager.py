@@ -20,7 +20,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import json
 import logging
+import os
 import random
 from collections import defaultdict
 from dataclasses import dataclass
@@ -33,6 +35,24 @@ from lighteval.utils.utils import as_list
 
 
 logger = logging.getLogger(__name__)
+
+# titan_eval (owner 11-17): a model-level setting for BASE (plain-text) prompts, set per lighteval call by titan_eval's adapter for the tasks a model file
+# names (configs/models/*.yaml `base_prompt:`). JSON {"instruction": str | null, "answer_prefix": str | null}:
+#   instruction   -> its own first part of the prompt (before the task's own instruction / the shots), as a plain-text system prompt;
+#   answer_prefix -> written between every shot's query and its gold (instead of the single space) and after the evaluated query.
+# Unset (every other run) = the prompt is unchanged. Qwen3.5-35B-A3B-Base uses it to switch its thinking off (its template's '<think>\n\n</think>\n\n').
+ENV_BASE_PROMPT = "TITAN_EVAL_BASE_PROMPT"
+
+
+def base_prompt_setting() -> tuple[str | None, str | None]:
+    raw = os.environ.get(ENV_BASE_PROMPT)
+    if not raw:
+        return None, None
+    d = json.loads(raw)
+    unknown = set(d) - {"instruction", "answer_prefix"}
+    if unknown:
+        raise ValueError(f"{ENV_BASE_PROMPT}: unknown keys {sorted(unknown)}")
+    return d.get("instruction"), d.get("answer_prefix")
 
 
 if TYPE_CHECKING:
@@ -173,6 +193,10 @@ class PromptManager:
             str: The formatted plain text prompt
         """
         parts = []
+        base_instruction, answer_prefix = base_prompt_setting()
+
+        if base_instruction is not None:
+            parts.append(base_instruction)
 
         # Add system prompt if available
         if self.system_prompt is not None:
@@ -182,13 +206,14 @@ class PromptManager:
             parts.append(doc.instruction)
 
         # Add few-shot examples
+        sep = " " if answer_prefix is None else answer_prefix
         for fewshot_sample in doc.fewshot_samples:
             query = self._extract_query(fewshot_sample.query, fewshot_sample.instruction)
-            parts.append(query + " " + fewshot_sample.get_golds()[0].strip())
+            parts.append(query + sep + fewshot_sample.get_golds()[0].strip())
 
         # Add main query
         query = self._extract_query(doc.query, doc.instruction)
-        parts.append(query)
+        parts.append(query + (answer_prefix or ""))
 
         return "\n\n".join(parts)
 
