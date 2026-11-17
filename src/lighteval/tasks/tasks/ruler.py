@@ -818,7 +818,8 @@ def _get_cwe_words() -> list[str]:
 # (common_words_extraction.py:80-83 loads it as `randle_words = list(json.load(f).values())`). Pinned like the SQuAD file: fetched on first use (login node) into $HF_HOME/lighteval/ruler_qa_cache, the sha256 is checked on
 # EVERY read (a changed or truncated file is an error, never other words). Only read when a CWE size asks for more words than the wonderwords list holds. RULER_ENGLISH_WORDS_FILE = a local copy (same sha256 required).
 RANDLE_WORDS_COMMIT = "db43f92ff634bbce1c33d1fb15858aec4bba509a"  # NVIDIA/RULER main, "Merge pull request #117 from damienen/fix/ruler-01"
-RANDLE_WORDS_URL = f"https://raw.githubusercontent.com/NVIDIA/RULER/{RANDLE_WORDS_COMMIT}/scripts/data/synthetic/json/english_words.json"
+# The file is stored with Git LFS: raw.githubusercontent.com returns only the 132-byte LFS pointer; GitHub serves the content at media.githubusercontent.com (sha256 checked as before).
+RANDLE_WORDS_URL = f"https://media.githubusercontent.com/media/NVIDIA/RULER/{RANDLE_WORDS_COMMIT}/scripts/data/synthetic/json/english_words.json"
 RANDLE_WORDS_SHA256 = "affcd6d45fdf3cc843d585c99c97ad615094e760e6c4756b654bab6c73bc2eca"
 RANDLE_WORDS_BYTES = 8564991
 RANDLE_WORDS_LICENSE = "Apache-2.0"  # NVIDIA/RULER LICENSE
