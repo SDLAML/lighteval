@@ -394,10 +394,11 @@ TASKS_TABLE = [
         few_shots_split=None,
         generation_size=1024,
         metrics=[
-            Metrics.expr_gold_metric,
+            Metrics.expr_gold_cut_metric,       # 1: scored on the answer cut at the first invented problem line, any language's question word (metrics/math_cut.py, owner 11-17)
             # MultilingualQuasiExactMatchMetric(language, "full"),
         ],
         stop_sequence=mgsm_stop_sequences(language),
+        version=1,
     )
     for language in _LANGUAGES
 ]

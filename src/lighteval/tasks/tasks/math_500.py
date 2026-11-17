@@ -74,10 +74,12 @@ math_500 = LightevalTaskConfig(
     generation_size=1024,
     metrics=[
         # Metrics.pass_at_k_math(sample_params={"k": 1, "n": 1}),
-        Metrics.expr_gold_metric,
-        Metrics.expr_gold_boxed_metric,  # titan_eval: strict boxed-only second number (owner 11-13)
+        Metrics.expr_gold_cut_metric,        # 3: scored on the answer cut at the first invented problem line (metrics/math_cut.py, owner 11-17)
+        Metrics.expr_gold_boxed_cut_metric,  # titan_eval: strict boxed-only second number (owner 11-13), on the same cut text
     ],
-    version=2,
+    # the base model goes on with a new "Problem:" (the label of this task's own prompt); the cut scorer cuts at the same place, the stop only saves generation time
+    stop_sequence=["\nProblem:"],
+    version=3,
     sample_fields=record_to_sample,
     solver=[prompt_template(MATH_QUERY_TEMPLATE), generate(cache=True)],
     scorer=model_graded_fact(),

@@ -102,10 +102,11 @@ gsm8k = LightevalTaskConfig(
     few_shots_select="random_sampling_from_train",
     generation_size=512,
     metrics=[
-        Metrics.expr_gold_metric,
+        Metrics.expr_gold_cut_metric,       # 2: scored on the answer cut at the first invented problem line (metrics/math_cut.py, owner 11-17)
     ],
-    stop_sequence=["Question:", "\n####", "####"],
-    version=1,                      # 1: gold = the final number only (was the whole solution)
+    # "\nProblem:" = the label of this task's own prompt (the model goes on with a new "Problem:"); the cut scorer cuts at the same place, the stop only saves generation time
+    stop_sequence=["Question:", "\n####", "####", "\nProblem:"],
+    version=2,                      # 1: gold = the final number only (was the whole solution); 2: invented-problem cut + the "\nProblem:" stop
 )
 
 TASKS_TABLE = [

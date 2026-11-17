@@ -99,9 +99,10 @@ TASKS_TABLE += [
         few_shots_split="train",
         few_shots_select="random_sampling_from_train",
         generation_size=1024,
-        metrics=[Metrics.expr_gold_metric, Metrics.expr_gold_boxed_metric],  # titan_eval: + strict boxed-only second number (owner 11-13)
+        # titan_eval: + strict boxed-only second number (owner 11-13); 1: both scored on the answer cut at the first invented problem line (metrics/math_cut.py, owner 11-17)
+        metrics=[Metrics.expr_gold_cut_metric, Metrics.expr_gold_boxed_cut_metric],
         stop_sequence=["Problem:"],
-        version=0,
+        version=1,
     )
     for subset in _MATH_SUBSETS
 ]

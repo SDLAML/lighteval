@@ -84,9 +84,10 @@ gsm_plus = LightevalTaskConfig(
     few_shots_split="testmini",
     few_shots_select="random_sampling",
     generation_size=512,
-    metrics=[Metrics.expr_gold_metric],
-    stop_sequence=["Question:", "\n####", "####"],
-    version=0,
+    metrics=[Metrics.expr_gold_cut_metric],     # 1: scored on the answer cut at the first invented problem line (metrics/math_cut.py, owner 11-17)
+    # "\nProblem:" = the label of this task's own prompt (the model goes on with a new "Problem:"); the cut scorer cuts at the same place, the stop only saves generation time
+    stop_sequence=["Question:", "\n####", "####", "\nProblem:"],
+    version=1,
 )
 
 TASKS_TABLE = [

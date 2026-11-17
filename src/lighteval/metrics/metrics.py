@@ -35,6 +35,7 @@ from lighteval.metrics.harness_compatibility.truthful_qa import (
     TruthfulqaGenMetrics,
     TruthfulqaMCMetrics,
 )
+from lighteval.metrics.math_cut import CutInventedProblem
 from lighteval.metrics.metrics_corpus import (
     CorpusLevelCOMETMetric,
     CorpusLevelF1Score,
@@ -447,6 +448,23 @@ class Metrics(Enum):
             ),
             aggregation_function=max,
         ),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    # titan_eval (owner 11-17, metrics/math_cut.py): expr_gold_metric / expr_gold_boxed_metric on the generation cut at the first INVENTED problem line, for the BASE math
+    # generation tasks only (gsm8k, gsm_plus, gsm_symbolic, math_500, math:gen, mgsm, fusion_aya_math). Same metric names (extractive_match / extractive_match_boxed) as the
+    # metrics they wrap, so headlines and dashboards keep their keys; expr_gold_metric / expr_gold_boxed_metric themselves are unchanged (other tasks use them).
+    expr_gold_cut_metric = SampleLevelMetric(
+        metric_name="extractive_match",
+        sample_level_fn=CutInventedProblem(deepcopy(expr_gold_metric.sample_level_fn)),
+        category=SamplingMethod.GENERATIVE,
+        corpus_level_fn=np.mean,
+        higher_is_better=True,
+    )
+    expr_gold_boxed_cut_metric = SampleLevelMetric(
+        metric_name="extractive_match_boxed",
+        sample_level_fn=CutInventedProblem(deepcopy(expr_gold_boxed_metric.sample_level_fn)),
         category=SamplingMethod.GENERATIVE,
         corpus_level_fn=np.mean,
         higher_is_better=True,
