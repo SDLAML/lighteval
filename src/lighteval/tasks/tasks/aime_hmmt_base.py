@@ -169,5 +169,7 @@ TASKS_TABLE = [
     _config("aime25_base", "yentinglin/aime_2025", "6f71d77b0b89b9dabe07ab466c51df33f514df7f", aime_gold, _aime25_specific),
     _config("aime26_base", "MathArena/aime_2026", "d61f486805306e6e6b5913504c07763a99e1b112", aime_gold, _matharena_specific,
             metric=pass_at_metric(AIME26_N, AIME26_KS), max_new_tokens=AIME26_MAX_NEW_TOKENS, version=AIME26_VERSION),
-    _config("hmmt_feb_2026_base", "MathArena/hmmt_feb_2026", "589a53fe152febc0f4f99f3e561007bf8da8e664", hmmt_gold, _matharena_specific),
+    # owner 11-18: same protocol as aime26_base (32 samples, pass@1/8/32, 32,768 tokens); out of the base suite, run by name
+    _config("hmmt_feb_2026_base", "MathArena/hmmt_feb_2026", "589a53fe152febc0f4f99f3e561007bf8da8e664", hmmt_gold, _matharena_specific,
+            metric=pass_at_metric(AIME26_N, AIME26_KS), max_new_tokens=AIME26_MAX_NEW_TOKENS, version=AIME26_VERSION),
 ]

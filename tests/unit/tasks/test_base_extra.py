@@ -383,7 +383,7 @@ def test_math_stop_strings_cut_a_new_problem_not_the_models_own_heading():
         "Solution: Problem: " + answer,  # mid-line
     )
     for config in aime_hmmt_base.TASKS_TABLE:
-        assert config.version == (2 if config.name == "aime26_base" else 1) and list(config.stop_sequence) == ["\nProblem:", "\nSolve the following math problem"], config.name
+        assert config.version == (2 if config.name in ("aime26_base", "hmmt_feb_2026_base") else 1) and list(config.stop_sequence) == ["\nProblem:", "\nSolve the following math problem"], config.name
         stops = list(config.stop_sequence)
         assert _cut_at_stop(heading, version_0) != heading  # what the old stops did
         assert _cut_at_stop(heading, stops) == heading, config.name
@@ -439,9 +439,14 @@ def test_registered_names_and_expansions():
     sampled = Registry(tasks="aime26_base|0").load_tasks()["aime26_base|0"]
     # owner 11-16: AIME 2026 = the base suite's hard-math probe, done properly: 32 samples, pass@1/8/32, the chat budget 32,768 (no 4k cap)
     assert max(sampled.num_samples) == 32 and sampled.generation_size == 32768
-    assert {c.name: c for c in aime_hmmt_base.TASKS_TABLE}["aime26_base"].metrics[0].metric_name == ["pass@1", "pass@8", "pass@32"]
+    configs = {c.name: c for c in aime_hmmt_base.TASKS_TABLE}
+    assert configs["aime26_base"].metrics[0].metric_name == ["pass@1", "pass@8", "pass@32"]
+    # owner 11-18: HMMT Feb 2026 base uses the AIME 2026 protocol (run by name, out of the base suite)
+    hmmt = Registry(tasks="hmmt_feb_2026_base|0").load_tasks()["hmmt_feb_2026_base|0"]
+    assert max(hmmt.num_samples) == 32 and hmmt.generation_size == 32768 and configs["hmmt_feb_2026_base"].version == 2
+    assert configs["hmmt_feb_2026_base"].metrics[0].metric_name == ["pass@1", "pass@8", "pass@32"]
     other = Registry(tasks="aime24_base|0").load_tasks()["aime24_base|0"]
-    assert max(other.num_samples) == 10 and other.generation_size == 4096, "AIME 24 / 25 / HMMT keep the old protocol (out of the base suite)"
+    assert max(other.num_samples) == 10 and other.generation_size == 4096, "AIME 24 / 25 keep the old protocol (out of the base suite)"
 
 
 if __name__ == "__main__":
