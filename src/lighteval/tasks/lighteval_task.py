@@ -1074,6 +1074,14 @@ class LightevalTask:
                 dataset = apply_dataset_filter(dataset, task.dataset_filter)
             return dataset  # type: ignore
 
+        if task.dataset_path == "beyondbench_local":      # the BeyondBench 0.2.1 easy items (owner 11-18), prepared + pinned by sha256 in tasks/tasks/beyondbench_items.py
+            from lighteval.tasks.tasks.beyondbench import load_beyondbench
+
+            dataset = load_beyondbench(task.dataset_config_name)
+            if task.dataset_filter is not None:
+                dataset = apply_dataset_filter(dataset, task.dataset_filter)
+            return dataset  # type: ignore
+
         if task.dataset_path == "rbridge_local":
             dataset = _load_rbridge_dataset(task.dataset_config_name)
             if task.dataset_filter is not None:
