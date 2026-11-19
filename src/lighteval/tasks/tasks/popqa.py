@@ -34,10 +34,10 @@ def _answers(line):
 def popqa_gen_prompt(line, task_name: str = None):
     """GenQA variant: generate answer, score F1/EM against all acceptable answers."""
     answers = _answers(line)
-    # query already ends with a space, so the gold continuation needs no extra prefix
+    # no trailing space: the prompt manager renders a shot as query + " " + gold (a trailing space gave "Answer:  gold" and a prompt ending in a space; 11-19, Gemma-4 answered nothing)
     return Doc(
         task_name=task_name,
-        query=f"Question: {line['question']}\nAnswer: ",
+        query=f"Question: {line['question']}\nAnswer:",
         choices=list(answers),
         gold_index=list(range(len(answers))),
     )
@@ -72,10 +72,10 @@ TASKS_TABLE = [
         few_shots_split="test",
         few_shots_select="random_sampling",
         generation_size=128,
-        # official SQuAD-style EM / F1 (article removal, Counter F1, max over aliases); version 2 (was qa_f1 / qa_em)
+        # official SQuAD-style EM / F1 (article removal, Counter F1, max over aliases); version 2 (was qa_f1 / qa_em); version 3: query without trailing space (11-19)
         metrics=[Metrics.squad_official_f1, Metrics.squad_official_em],
         stop_sequence=["\n"],
-        version=2,
+        version=3,
     ),
     LightevalTaskConfig(
         name="popqa:bpb",

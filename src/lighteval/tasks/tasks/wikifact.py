@@ -111,10 +111,10 @@ SUBSETS = [
 def wikifact_gen_prompt(line, task_name: str = None):
     """GenQA variant: generate the fact, score F1/EM against all references."""
     refs = line["references"]
-    # query already ends with a space, so references need no extra leading space
+    # no trailing space: the prompt manager renders a shot as query + " " + reference (a trailing space gave two spaces and a prompt ending in a space; 11-19, Gemma-4 answered nothing)
     return Doc(
         task_name=task_name,
-        query=f"{line['question']} ",
+        query=f"{line['question']}",
         choices=list(refs),
         gold_index=list(range(len(refs))),
     )
@@ -151,10 +151,10 @@ def _gen_config(subset: str) -> LightevalTaskConfig:
         # num_fewshot (not num_fewshot+1), so 5-shot doesn't overflow those tiny pools.
         few_shots_select="random_sampling_from_train",
         generation_size=200,
-        # official SQuAD-style EM / F1 (article removal, Counter F1, max over references); version 2 (was qa_f1 / qa_em)
+        # official SQuAD-style EM / F1 (article removal, Counter F1, max over references); version 2 (was qa_f1 / qa_em); version 3: query without trailing space (11-19)
         metrics=[Metrics.squad_official_f1, Metrics.squad_official_em],
         stop_sequence=["\n"],
-        version=2,
+        version=3,
     )
 
 
