@@ -30,12 +30,6 @@ from lighteval.tasks.lighteval_task import LightevalTaskConfig
 from lighteval.tasks.requests import Doc
 
 
-# OLMES coqa (oe_eval/tasks/oe_eval_tasks/coqa.py, context_kwargs.description; coqa::olmes, 0-shot): written before every query.
-# Version 3 (11-19): missing before (versions 1-2), found by the eval audit (Nemotron-3.5 / Trinity answered past the line break more often without it).
-DESCRIPTION = ("Below is a passage followed by a conversation so far, where each turn in the conversation contains a question and an answer. "
-               "Please answer the final question by referring to the passage and the previous questions.")
-
-
 def _build_query(story: str, questions: list, answers: list, turn_idx: int) -> str:
     """Build OLMES-style multi-turn query for a given turn."""
     query = f"Passage: {story}"
@@ -74,8 +68,7 @@ def coqa_gen_prompt(line, task_name: str = None):
                 golds.append(other_answers[turn_idx])
         docs.append(Doc(
             task_name=task_name,
-            query=DESCRIPTION + "\n\n" + _build_query(line["story"], questions, answers, turn_idx),
-            instruction=DESCRIPTION,             # the prompt manager writes it once (OLMES: description + query); a base_prompt instruction goes before it
+            query=_build_query(line["story"], questions, answers, turn_idx),
             choices=[f"{' ' if is_few_shots else ''}{gold}" for gold in golds],
             gold_index=list(range(len(golds))),
         ))
@@ -142,8 +135,8 @@ TASKS_TABLE = [
         generation_size=50,
         stop_sequence=["\n\n"],
         # official SQuAD-style EM / F1 (CoQA's evaluate-v1.0 uses the same normaliser), max over the 4 human answers
-        # of the turn; version 2 (was qa_f1 / qa_em against the first annotator's answer only); version 3: + the OLMES description
+        # of the turn; version 2 (was qa_f1 / qa_em against the first annotator's answer only)
         metrics=[Metrics.squad_official_f1, Metrics.squad_official_em],
-        version=3,
+        version=2,
     ),
 ]
