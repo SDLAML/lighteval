@@ -247,7 +247,7 @@ def test_tasks_table():
 def test_prompt_function_and_metric(rows):
     line = next(r for r in rows if r["task"] == "sum" and r["list_size"] == 8 and r["index"] == 0)
     doc = beyondbench.beyondbench_prompt(line, "beyondbench_easy_base:sum|0")
-    assert doc.query == GOLDEN[("sum", 8, 0)][0] and doc.choices == ["-190"] and doc.gold_index == 0 and doc.specific["task"] == "sum" and doc.specific["data_point"] == json.loads(line["data_point"])
+    assert doc.query == GOLDEN[("sum", 8, 0)][0] + beyondbench.CUE and doc.query.endswith("\n\nSolution:") and doc.choices == ["-190"] and doc.gold_index == 0 and doc.specific["task"] == "sum" and doc.specific["data_point"] == json.loads(line["data_point"])
     from lighteval.models.model_output import ModelResponse
     fn = beyondbench.beyondbench_metric.sample_level_fn
     ok = fn.compute(doc, ModelResponse(text=["so \\boxed{-190}"]))

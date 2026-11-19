@@ -45,12 +45,16 @@ def load_beyondbench(subset: str):
     return DatasetDict({"train": Dataset.from_list(bb.load_items(subset))})
 
 
+CUE = "\n\nSolution:"   # base-model cue after the official prompt, as our base gsm8k / MATH prompts end ("...\n\nSolution:"); the chat runs start the assistant turn here
+
+
 def beyondbench_prompt(line, task_name: str = None) -> Doc:
-    """The official prompt, unchanged, as the whole query (0-shot, no instruction line, no answer prefix: the base prompt of the owner's `--no-chat-template` run). The gold (JSON text) is the
-    only choice; the scorer does not read it (the official evaluate_response recomputes the gold from the data point, which `specific` carries)."""
+    """The official prompt + CUE (version 1, owner 11-19). Version 0 was the bare official prompt (the owner's `--no-chat-template` run): plain base models ended it with their
+    end-of-text token (l49 step-12000 91% empty answers, Trinity-Mini-Base 96%). With the cue (check job 3008036): l49 1.5 -> 24.8, Trinity 0.2 -> 50.4, empty 0%; Qwen3.5-35B-A3B-Base
+    91.1 -> 90.1. The gold (JSON text) is the only choice; the scorer does not read it (the official evaluate_response recomputes the gold from the data point, which `specific` carries)."""
     return Doc(
         task_name=task_name,
-        query=line["prompt"],
+        query=line["prompt"] + CUE,
         choices=[line["gold"]],
         gold_index=0,
         specific={"item": line["id"], "task": line["task"], "group": line["group"], "list_size": line["list_size"], "index": line["index"], "data_point": json.loads(line["data_point"])},
@@ -114,7 +118,7 @@ TASKS_TABLE = [
         generation_size=bb.MAX_NEW_TOKENS,          # the owner's --max-tokens 4096; greedy comes from the run's gen defaults (temperature 0, top_p 1)
         metrics=[beyondbench_metric],
         stop_sequence=[],                           # none: the official run has none (the model ends with its EOS or at the cap)
-        version=0,
+        version=1,                                  # 1: + CUE (11-19); 0: the bare official prompt
     )
     for task in bb.TASKS
 ]
