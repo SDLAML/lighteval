@@ -102,7 +102,7 @@ TASKS_TABLE += [
         # titan_eval: + strict boxed-only second number (owner 11-13); 1: both scored on the answer cut at the first invented problem line (metrics/math_cut.py, owner 11-17)
         metrics=[Metrics.expr_gold_cut_metric, Metrics.expr_gold_boxed_cut_metric],
         stop_sequence=["Problem:"],
-        version=1,
+        version=2,   # +1: native digits + lone-variable rule, 11-19
     )
     for subset in _MATH_SUBSETS
 ]

@@ -203,6 +203,7 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
         extraction_mode: Literal["first_match", "any_match"] = "any_match",
         precision: int = 6,
         timeout_seconds: int = 5,
+        skip_lone_variable: bool = False,
     ):
         """Creates a language-aware extractive match metric that extracts answers from the model's output.
 
@@ -234,6 +235,9 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
                 Number of decimal places to use when comparing numerical values. Defaults to 6.
             timeout_seconds: int
                 Timeout for the extraction (each attempt) and comparison. Defaults to 5.
+            skip_lone_variable: bool
+                titan_eval 11-19: for the PREDICTIONS, a bare LaTeX variable ("$x$") followed on its line by a number or another expression is not an answer
+                candidate (extractive_match_utils.is_lone_variable_before_answer). Defaults to False; the base math scorers (math_cut.CutInventedProblem) set it.
 
         """
         self.language = language
@@ -244,6 +248,7 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
         self.extraction_mode = extraction_mode
         self.precision = precision
         self.timeout_seconds = timeout_seconds
+        self.skip_lone_variable = skip_lone_variable
 
     @timeout(2)
     def add_to_specifics_with_timeout(
@@ -266,7 +271,8 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
 
         extracted_predictions = [
             extract_target_from_pred(
-                pred, pred_extraction_regexes, self.fallback_mode, self.extraction_mode, self.timeout_seconds
+                pred, pred_extraction_regexes, self.fallback_mode, self.extraction_mode, self.timeout_seconds,
+                skip_lone_variable=self.skip_lone_variable,
             )
             for pred in predictions
         ]

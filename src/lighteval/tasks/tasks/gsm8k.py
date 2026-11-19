@@ -106,7 +106,7 @@ gsm8k = LightevalTaskConfig(
     ],
     # "\nProblem:" = the label of this task's own prompt (the model goes on with a new "Problem:"); the cut scorer cuts at the same place, the stop only saves generation time
     stop_sequence=["Question:", "\n####", "####", "\nProblem:"],
-    version=2,                      # 1: gold = the final number only (was the whole solution); 2: invented-problem cut + the "\nProblem:" stop
+    version=3,                      # 1: gold = the final number only (was the whole solution); 2: invented-problem cut + the "\nProblem:" stop; 3: +1 native digits + lone-variable rule, 11-19
 )
 
 TASKS_TABLE = [

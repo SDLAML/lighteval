@@ -46,10 +46,10 @@ def test_the_base_math_tasks_use_the_cut_metrics():
 
 
 def test_versions_are_bumped():
-    assert gsm8k.gsm8k.version == 2 and gsm_plus.gsm_plus.version == 1 and math_500.math_500.version == 3
-    assert _by_name(gsm_symbolic.TASKS_TABLE)["gsm_symbolic:main"].version == 2
-    assert all(c.version == 1 for c in math.TASKS_TABLE if c.name.endswith(":gen"))
-    assert all(c.version == 1 for c in mgsm.TASKS_TABLE) and all(c.version == 2 for c in fusion_aya_math.TASKS_TABLE)
+    assert gsm8k.gsm8k.version == 3 and gsm_plus.gsm_plus.version == 2 and math_500.math_500.version == 4   # 11-19: +1 each (native digits + lone-variable rule)
+    assert _by_name(gsm_symbolic.TASKS_TABLE)["gsm_symbolic:main"].version == 3 and _by_name(gsm_symbolic.TASKS_TABLE)["gsm_symbolic:p1"].version == 1
+    assert all(c.version == 2 for c in math.TASKS_TABLE if c.name.endswith(":gen")) and all(c.version == 1 for c in math.TASKS_TABLE if c.name.endswith(":bpb"))
+    assert all(c.version == 2 for c in mgsm.TASKS_TABLE) and all(c.version == 3 for c in fusion_aya_math.TASKS_TABLE)
 
 
 def test_stop_strings():

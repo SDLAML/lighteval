@@ -398,7 +398,7 @@ TASKS_TABLE = [
             # MultilingualQuasiExactMatchMetric(language, "full"),
         ],
         stop_sequence=mgsm_stop_sequences(language),
-        version=1,
+        version=2,   # +1: native digits + lone-variable rule, 11-19
     )
     for language in _LANGUAGES
 ]

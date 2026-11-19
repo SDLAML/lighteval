@@ -52,7 +52,7 @@ def test_stop_strings_are_line_anchored_and_the_colon_less_aliases_only_whole_li
             assert _cut_at_stop("So the answer is 7." + tail, stops).rstrip("\n") == "So the answer is 7.", (language, tail)
     assert _cut_at_stop(own[Language.ENGLISH][0], old[Language.ENGLISH]) != own[Language.ENGLISH][0]  # the old stops cut it
     assert _cut_at_stop(own[Language.GERMAN][0], old[Language.GERMAN]) != own[Language.GERMAN][0]
-    assert all(c.version == 2 for c in fam.TASKS_TABLE) and len(fam.TASKS_TABLE) == 4   # 2: scored on the cut text (math_cut.py); 1 = these stops + gold fix
+    assert all(c.version == 3 for c in fam.TASKS_TABLE) and len(fam.TASKS_TABLE) == 4   # 3: native digits + lone-variable rule (11-19); 2: scored on the cut text (math_cut.py); 1 = these stops + gold fix
 
 
 def test_gold_is_written_as_latex_only_for_bare_lists_and_tuples():

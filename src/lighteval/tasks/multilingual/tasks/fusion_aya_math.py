@@ -198,7 +198,7 @@ TASKS_TABLE = [
             Metrics.expr_gold_cut_metric,       # 2: scored on the answer cut at the first invented problem line, any language's question word (metrics/math_cut.py, owner 11-17)
         ],
         stop_sequence=fusion_aya_stop_sequences(language),
-        version=2,  # 1: stops at the start of a line only; list / tuple golds written as $...$ (0: cut "Understanding the Problem"; lists never matched); 2: invented-problem cut
+        version=3,  # 1: stops at the start of a line only; list / tuple golds written as $...$ (0: cut "Understanding the Problem"; lists never matched); 2: invented-problem cut; 3: +1 native digits + lone-variable rule, 11-19
     )
     for language in _LANGUAGES
 ]

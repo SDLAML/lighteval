@@ -79,7 +79,7 @@ math_500 = LightevalTaskConfig(
     ],
     # the base model goes on with a new "Problem:" (the label of this task's own prompt); the cut scorer cuts at the same place, the stop only saves generation time
     stop_sequence=["\nProblem:"],
-    version=3,
+    version=4,   # +1: native digits + lone-variable rule, 11-19
     sample_fields=record_to_sample,
     solver=[prompt_template(MATH_QUERY_TEMPLATE), generate(cache=True)],
     scorer=model_graded_fact(),

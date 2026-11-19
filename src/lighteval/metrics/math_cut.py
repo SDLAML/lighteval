@@ -15,11 +15,15 @@ empty string, which scores 0 (no answer left).
 `Metrics.expr_gold_boxed_cut_metric` are `expr_gold_metric` / `expr_gold_boxed_metric` through it, under the SAME metric names (`extractive_match`, `extractive_match_boxed`), used by the base math tasks only (gsm8k,
 gsm_plus, gsm_symbolic, math_500, math:gen, mgsm, fusion_aya_math); `Metrics.expr_gold_metric` itself is unchanged (other tasks use it).
 
+11-19 (extraction audit of the base math tasks, same wrapper): (a) native digits are read as ASCII digits (`ascii_digits`), (b) a bare LaTeX variable followed on its line by a number / expression is not an answer candidate
+(`skip_lone_variable`, extractive_match_utils.is_lone_variable_before_answer). Both only add credit that the answer text already shows; every other rule of the scorer is unchanged.
+
 The label list is built from the sources on FIRST USE and cached: the two task modules (mgsm, fusion_aya_math) import `Metrics`, so this module cannot import them at its own import time
 (a circular import); by the first scored item every module is loaded."""
 
 import functools
 import re
+import unicodedata
 from dataclasses import replace
 
 from lighteval.metrics.metrics_sample import SampleLevelComputation
@@ -87,21 +91,38 @@ def cut_invented_problem(text: str) -> str:
     return text if position is None else text[:position]
 
 
+# titan_eval 11-19: the number extractors read ASCII digits only (a sympy-eval safety rule of extractive_match_utils), so an answer written in the digits of its language
+# ("উত্তর: ২৫", "उत्तर: २५", "الجواب: ٢٥", Burmese, Khmer, fullwidth "２５") never was a number and scored 0 (MGSM, 40 languages: Qwen3.5 117 items, gemma 78, Nemotron 17). The golds are ASCII.
+_ARABIC_SEPARATORS = {0x066B: ".", 0x066C: ","}      # ARABIC DECIMAL SEPARATOR, ARABIC THOUSANDS SEPARATOR
+
+
+def ascii_digits(text: str) -> str:
+    """`text` with every non-ASCII decimal digit (Unicode category Nd: Bengali, Devanagari, Arabic-Indic, Persian, Khmer, Burmese, Thai, fullwidth ...) replaced by its ASCII digit, and the Arabic decimal /
+    thousands separator by "." / ",". Superscripts, fractions and other numerals (category No / Nl) are left alone; an ASCII text is returned as it is."""
+    if text.isascii():
+        return text
+    return "".join(str(unicodedata.decimal(c)) if (not c.isascii() and unicodedata.category(c) == "Nd")
+                   else _ARABIC_SEPARATORS.get(ord(c), c) for c in text)
+
+
 class CutInventedProblem(SampleLevelComputation):
-    """`metric` (a sample-level extractive-match computation) on the generation cut at the first invented problem. The cut text goes into `text` (and `text_post_processed` when set), so
-    the wrapped metric reads exactly what it would read from a generation that stopped there; `doc.specific` gets the extraction of the cut text."""
+    """`metric` (a sample-level extractive-match computation) on the generation cut at the first invented problem, with native digits read as ASCII digits (`ascii_digits`). The cut text goes into `text` (and
+    `text_post_processed` when set), so the wrapped metric reads exactly what it would read from a generation that stopped there; `doc.specific` gets the extraction of the cut text.
+    The wrapped scorer is a private copy (metrics.py passes a deepcopy) and gets `skip_lone_variable = True` (11-19: a bare LaTeX variable followed by a number on its line is not an answer, see
+    extractive_match_utils.is_lone_variable_before_answer): the rules the base math tasks share (cut, digits, lone variable) live in this one wrapper."""
 
     def __init__(self, metric: SampleLevelComputation):
         self.metric = metric
+        self.metric.skip_lone_variable = True
 
     def compute(self, doc: Doc, model_response: ModelResponse, **kwargs) -> float:
         cut = replace(
             model_response,
-            text=[cut_invented_problem(t) for t in model_response.text],
+            text=[ascii_digits(cut_invented_problem(t)) for t in model_response.text],
             text_post_processed=(
                 None
                 if model_response.text_post_processed is None
-                else [cut_invented_problem(t) for t in model_response.text_post_processed]
+                else [ascii_digits(cut_invented_problem(t)) for t in model_response.text_post_processed]
             ),
         )
         return self.metric.compute(doc, cut, **kwargs)

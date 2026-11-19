@@ -587,12 +587,37 @@ def _finditer_with_timeout(pattern: re.Pattern, pred: str, timeout_seconds: int)
         return []
 
 
+# titan_eval 11-19 (base math tasks only, `skip_lone_variable`): a bare single-letter LaTeX variable ("$x$", "$P$", "$x_1$") that a prose answer anchor picks up is not the answer when the
+# rest of ITS LINE still has a number or another LaTeX expression ("Final Answer:\nThe value of $x$ is 17." -> 17, "The coordinates of point $P$ are $(8, -2)$." -> (8,-2)). The
+# anchor patterns are DOTALL for LaTeX (they take the first `$...$` within 50 characters after "answer:") but not for numbers (their `.` stops at a newline), so after "Final Answer:\n"
+# a LaTeX variable always beat the number that stated the answer (stored gemma-4 answers: math_500 +6 of 500 items, math:gen +43 of 5000, no item lost). A boxed match is never skipped.
+_LONE_VARIABLE = re.compile(r"[A-Za-z](?:_(?:\{[A-Za-z0-9]{1,3}\}|[A-Za-z0-9]))?'*")
+_MORE_ANSWER_ON_LINE = re.compile(r"[0-9]|\$|\\\(|\\\[")
+
+
+def is_lone_variable_before_answer(match: re.Match, target_type: ExtractionTarget, pred: str) -> bool:
+    """True when `match` is a LaTeX match whose only expression is a bare variable and the rest of the line after the match has a digit or another LaTeX expression (see the comment above)."""
+    if not isinstance(target_type, LatexExtractionConfig):
+        return False
+    groups = {name: val for name, val in match.groupdict().items() if val and "_latex" in name}
+    if len(groups) != 1:
+        return False
+    (name, val), = groups.items()
+    if name.endswith("latexBoxed") or match.groupdict().get("first_percent"):
+        return False
+    if not _LONE_VARIABLE.fullmatch(val.strip()):
+        return False
+    end = len(pred[:match.end()].rstrip())          # the LaTeX pattern's own `\s*` swallows the trailing white space, newlines included: the rest of the LINE starts after the closing delimiter
+    return bool(_MORE_ANSWER_ON_LINE.search(pred[end:].split("\n", 1)[0]))
+
+
 def extract_target_from_pred(
     pred: str,
     target_res: list[tuple[list[tuple[re.Pattern[str], int]], ExtractionTarget]],
     fallback_mode: Literal["no_fallback", "first_match"] = "no_fallback",
     extraction_mode: Literal["first_match", "any_match"] = "any_match",
     timeout_seconds: int = 5,
+    skip_lone_variable: bool = False,
 ):
     """Extracts targets from a prediction string using regex patterns.
     Returns first sucesffuly extracted match.
@@ -607,6 +632,8 @@ def extract_target_from_pred(
             - "first_match": Only tries to extract the first match
             - "any_match": Tries to extract any match
         timeout_seconds (int, optional): Maximum time in seconds to spend parsing each expression. Defaults to 5.
+        skip_lone_variable (bool, optional): titan_eval 11-19: a LaTeX match that is only a bare variable while the rest of its line has a number or another expression is not a
+            candidate (`is_lone_variable_before_answer`). Defaults to False (every other task); the base math tasks set it for their predictions.
 
     Returns:
         list: List of extracted predictions, with first fallbac string appended if fallback_mode is "first_match"
@@ -636,6 +663,8 @@ def extract_target_from_pred(
 
         # Try to extract from each match, starting from rightmost
         for match, _, _, target_type in matches_with_pos:
+            if skip_lone_variable and is_lone_variable_before_answer(match, target_type, pred):
+                continue
             extracted_match, str_fallback = extract_match(match, target_type, timeout_seconds)
             match_found = True
 

@@ -82,7 +82,7 @@ TASKS_TABLE = [
         # main only (the subset titan_eval runs and the invented-problem analysis covered, owner 11-17): scored on the answer cut at the first invented problem line (metrics/math_cut.py); p1 / p2 unchanged
         metrics=[Metrics.expr_gold_cut_metric if subset == "main" else Metrics.expr_gold_metric],
         stop_sequence=["Problem:", "\n####", "####"],
-        version=2 if subset == "main" else 1,   # 1: gold = the final number only (was the whole solution); 2 (main): invented-problem cut
+        version=3 if subset == "main" else 1,   # 1: gold = the final number only (was the whole solution); 2 (main): invented-problem cut; 3 (main): +1 native digits + lone-variable rule, 11-19
     )
     for subset in _SUBSETS
 ]
